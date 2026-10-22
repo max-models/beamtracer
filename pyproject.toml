@@ -3,7 +3,7 @@ build-backend = "setuptools.build_meta"
 requires = [ "setuptools", "wheel" ]
 
 [project]
-name = "template-python"
+name = "beamtracer"
 version = "0.1.0"
 description = "Template python repository."
 readme = "README.md"
@@ -32,7 +32,7 @@ optional-dependencies.dev = [
   "pyproject-fmt",
   "pyright",
   "ruff",
-  "template-python[docs,test]",
+  "beamtracer[docs,test]",
 ]
 optional-dependencies.docs = [
   "griffe",
@@ -42,8 +42,8 @@ optional-dependencies.docs = [
   "nbformat>=5.11.1",
 ]
 optional-dependencies.test = [ "pytest", "pytest-cov" ]
-urls.Source = "https://github.com/max-models/template-python"
-scripts.template-python = "app.main:main"
+urls.Source = "https://github.com/max-models/beamtracer"
+scripts.beamtracer = "beamtracer.main:main"
 
 [tool.setuptools]
 package-data."*" = [ "py.typed" ]
@@ -74,7 +74,7 @@ ini_options.addopts = "-ra"
 
 [tool.coverage]
 run.omit = [ "*/tests/*" ]
-run.source = [ "app" ]
+run.source = [ "beamtracer" ]
 report.show_missing = true
 
 # PRs to devel test against the devel branches of the max-models packages (pinned in

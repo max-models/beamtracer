@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import scope_profiler as sp
 
-from app.main import main
+from beamtracer.main import main
 
 
 @pytest.fixture(autouse=True)
@@ -30,6 +30,6 @@ def test_regions_are_off_by_default() -> None:
     assert _region_names() == {"user.run"}
 
 
-@pytest.mark.parametrize("tags", [["template_python"], ["*"]])
+@pytest.mark.parametrize("tags", [["beamtracer"], ["*"]])
 def test_enabling_the_tag_records_the_regions(tags: list[str]) -> None:
-    assert _region_names(enable_tags=tags) == {"template_python.main", "user.run"}
+    assert _region_names(enable_tags=tags) == {"beamtracer.main", "user.run"}

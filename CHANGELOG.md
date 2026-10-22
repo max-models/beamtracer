@@ -8,9 +8,9 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - Opt-in scope-profiler regions, as in plasmacoll, wellbalanced and patchwork: `_profiling.py`
-  with the package's tag (`template_python`, renamed by `setup_project.sh`), registered on
+  with the package's tag (`beamtracer`, renamed by `setup_project.sh`), registered on
   import, and an example region on `main`. Off unless the application enables the tag (e.g.
-  `scope_profiler.setup(enable_tags=["template_python"])`). Adds the `scope-profiler>=0.7.5`
+  `scope_profiler.setup(enable_tags=["beamtracer"])`). Adds the `scope-profiler>=0.7.5`
   dependency.
 - `PyPI dependencies` workflow and `scripts/check_pypi_dependencies.py`: on every pull request to
   `main`, fail if a dependency is a direct reference (`name @ git+https://...`), is not on PyPI, or

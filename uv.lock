@@ -3419,7 +3419,7 @@ wheels = [
 ]
 
 [[package]]
-name = "template-python"
+name = "beamtracer"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
@@ -3476,7 +3476,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'test'" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "scope-profiler", git = "https://github.com/max-models/scope-profiler?branch=devel" },
-    { name = "template-python", extras = ["docs", "test"], marker = "extra == 'dev'" },
+    { name = "beamtracer", extras = ["docs", "test"], marker = "extra == 'dev'" },
 ]
 provides-extras = ["dev", "docs", "test"]
 
