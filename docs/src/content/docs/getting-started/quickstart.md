@@ -1,34 +1,52 @@
 ---
 title: Quickstart
-description: Run the command line entry point of beamtracer.
+description: Solve a self-consistent beam with beamtracer.
 ---
 
 First, ensure that `beamtracer` is [installed](/beamtracer/getting-started/installation/).
 
-## Basic usage
+## A planar diode
 
-After installation, you can run the application with:
-
-```bash
-beamtracer
-```
-
-which calls `beamtracer.main.main` and prints a greeting.
-
-## Use the package from Python
+A proton beam from `x = 0` (at 0 V) to an electrode at `x = 10 mm` (at -1 kV), with its
+space charge, solved by the Vlasov iteration:
 
 ```python
-from beamtracer.main import main
+from beamtracer import (
+    BeamOptics,
+    BeamOpticsConfig,
+    BeamSpecies,
+    FieldBCs,
+    FieldBoundaryCondition,
+    GridParams,
+)
 
-main()
+neumann = FieldBoundaryCondition.neumann(0.0)
+config = BeamOpticsConfig(
+    grid=GridParams(num_gridpoints=(41, 21), upper_bound=(10e-3, 5e-3)),
+    bcs_field=FieldBCs(
+        x_lower=FieldBoundaryCondition.dirichlet(0.0),
+        x_upper=FieldBoundaryCondition.dirichlet(-1000.0),
+        y_lower=neumann,
+        y_upper=neumann,
+    ),
+    beams=[
+        BeamSpecies("H+", 10.0, (0.0, 0.0), (0.0, 5e-3), energy=0.01, num_particles=40)
+    ],
+    diagnostic_planes=[9.9e-3],
+)
+model = BeamOptics(config).run()
+print(model.stats)
+print(model.beam_moments(9.9e-3))
 ```
 
-See the [API reference](/beamtracer/api/beamtracer/) for every module and function.
+See the [beam optics guide](/beamtracer/guides/beam-optics/) for the model and the
+[API reference](/beamtracer/api/beamtracer/) for every module and function.
 
 ## Profiling
 
 beamtracer's coarse operations are [scope-profiler](https://github.com/max-models/scope-profiler)
-regions (`beamtracer.main` here), tagged with the opt-in tag `beamtracer`: they are
+regions (`beamtracer.run`, `beamtracer.vlasov_iterate`, `beamtracer.field_solve`,
+`beamtracer.trace`, `beamtracer.deposit`), tagged with the opt-in tag `beamtracer`: they are
 off by default and cost a fraction of a microsecond per call. A code that profiles itself with
 scope-profiler turns them on with the tag:
 

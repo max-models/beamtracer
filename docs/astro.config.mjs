@@ -6,10 +6,11 @@ import { defineDocs } from '@max-models/starlight-theme';
 export default defineDocs({
 	repo: 'beamtracer',
 	title: 'beamtracer',
-	description: 'Template repository for Python projects.',
+	description: 'Steady ion beams in a self-consistent field: extraction, acceleration and charge changes.',
 	pythonPackage: 'beamtracer',
 	nav: [
 		{ label: 'Getting started', link: '/getting-started/installation/' },
+		{ label: 'Guides', link: '/guides/beam-optics/' },
 		{ label: 'Tutorials', link: '/tutorials/' },
 		{ label: 'Full examples', link: '/full-examples/' },
 		{ label: 'Development', link: '/development/docs/' },
@@ -22,6 +23,10 @@ export default defineDocs({
 				{ label: 'Installation', slug: 'getting-started/installation' },
 				{ label: 'Quickstart', slug: 'getting-started/quickstart' },
 			],
+		},
+		{
+			label: 'Guides',
+			items: [{ label: 'Beam optics', slug: 'guides/beam-optics' }],
 		},
 		{
 			label: 'Tutorials',
