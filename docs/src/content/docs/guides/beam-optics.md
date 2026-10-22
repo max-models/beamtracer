@@ -80,6 +80,54 @@ A configuration is written to and read from its configuration-file form with
 `config.to_dict()` and `BeamOpticsConfig.from_dict(...)`; quantities with units
 (`{"value": 2, "unit": "mm"}`) are converted to SI.
 
+## Electrodes of several shapes
+
+An electrode is one entry of `objects`: one name and one potential. `ObjectParams.union`
+makes one electrode of several shapes (`ShapeParams`, the simgeometry shapes of
+`ObjectParams`) at one potential, built as simgeometry's Boolean union (`|`) of the shapes.
+The field solve, the hits on electrodes and the per-electrode diagnostics such as
+`model.surface_fields()` see it as one electrode. A tube with half-round ends:
+
+```python
+from beamtracer import ObjectParams, ShapeParams
+
+tube = ObjectParams.union(
+    [
+        ShapeParams("rectangle", midpoint=(40e-3, 6e-3), side_lengths=(6e-3, 2e-3)),
+        ShapeParams("circle", midpoint=(37e-3, 6e-3), radius=1e-3),
+        ShapeParams("circle", midpoint=(43e-3, 6e-3), radius=1e-3),
+    ],
+    bc_value=15e3,
+)
+config = config.replace(objects={"middle": tube})
+```
+
+In the configuration-file form the shapes are listed under `shapes`, each without a `bc`:
+
+```python
+{
+    "type": "union",
+    "shapes": [
+        {
+            "type": "rectangle",
+            "midpoint": {"values": [40, 6], "unit": "mm"},
+            "side_lengths": {"values": [6, 2], "unit": "mm"},
+        },
+        {
+            "type": "circle",
+            "midpoint": {"values": [37, 6], "unit": "mm"},
+            "radius": {"value": 1, "unit": "mm"},
+        },
+        {
+            "type": "circle",
+            "midpoint": {"values": [43, 6], "unit": "mm"},
+            "radius": {"value": 1, "unit": "mm"},
+        },
+    ],
+    "bc": {"type": "dirichlet", "potential": {"value": 15, "unit": "kV"}},
+}
+```
+
 ## A neutralizer
 
 `beamtracer.neutralizer.NeutralizerChannel` traces the beam through a channel whose gas and

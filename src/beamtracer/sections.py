@@ -9,8 +9,10 @@ configuration file is converted with astropy.
 from __future__ import annotations
 
 import numbers
+import operator
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import reduce
 from typing import Any, Literal, TypeAlias
 
 import astropy.units as u
@@ -328,7 +330,7 @@ def _plain(value: Any) -> Any:
     return [_plain(item) for item in value]
 
 
-#: The geometry entries each object type takes (simgeometry's constructor arguments).
+#: The geometry entries each shape type takes (simgeometry's constructor arguments).
 _OBJECT_ARGUMENTS = {
     "line": ("midpoint", "side_lengths"),
     "rectangle": ("midpoint", "side_lengths"),
@@ -338,18 +340,20 @@ _OBJECT_ARGUMENTS = {
     "aperture2d": ("axis", "position", "vertices"),
 }
 
+#: The geometry entries of a shape, in the order of :class:`ShapeParams`.
+_GEOMETRY = ("vertices", "midpoint", "side_lengths", "radius", "axis", "position")
+
 
 @dataclass
-class ObjectParams:
-    """An electrode: a simgeometry object held at a potential (``bc_type="dirichlet"``).
+class ShapeParams:
+    """One simgeometry shape of an electrode, without a potential.
 
     ``type`` is one of :data:`OBJECT_TYPES`; the geometry entries are those of the
-    simgeometry class (lengths in metres).
+    simgeometry class (lengths in metres). An electrode of several shapes,
+    :meth:`ObjectParams.union`, lists them.
     """
 
     type: str
-    bc_type: str
-    bc_value: float | None = None
     vertices: Any = None
     midpoint: Any = None
     side_lengths: Any = None
@@ -361,10 +365,14 @@ class ObjectParams:
         """Check the type."""
         if self.type not in OBJECT_TYPES:
             raise ValueError(
-                f"object type must be one of {OBJECT_TYPES}, got {self.type!r}"
+                f"shape type must be one of {OBJECT_TYPES}, got {self.type!r}"
             )
 
-    def build(self) -> Any:
+    def arguments(self) -> dict[str, Any]:
+        """Return the simgeometry constructor arguments of the shape."""
+        return {name: getattr(self, name) for name in _OBJECT_ARGUMENTS[self.type]}
+
+    def build(self, bc: Any = None) -> Any:
         """Return the simgeometry object (with ``contains_points``)."""
         from simgeometry.objects import (
             Aperture2D,
@@ -383,14 +391,7 @@ class ObjectParams:
             "circle": Circle,
             "aperture2d": Aperture2D,
         }
-        arguments = {name: getattr(self, name) for name in _OBJECT_ARGUMENTS[self.type]}
-        return classes[self.type](**arguments, bc=self.bc_value)
-
-    def get_filtered_obj_params(self) -> dict[str, Any]:
-        """Return the simgeometry constructor arguments of the object, with ``bc``."""
-        arguments = {name: getattr(self, name) for name in _OBJECT_ARGUMENTS[self.type]}
-        arguments["bc"] = self.bc_value
-        return arguments
+        return classes[self.type](**self.arguments(), bc=bc)
 
     def to_dict(self) -> ConfigDict:
         """Return the configuration-file form (lengths in metres)."""
@@ -405,6 +406,124 @@ class ObjectParams:
             value = getattr(self, key)
             if value is not None:
                 params[key] = {"value": float(value), "unit": "m"}
+        return params
+
+    @classmethod
+    def from_dict(cls, params: Mapping[str, Any]) -> ShapeParams:
+        """Create the shape from its configuration-file entry (``bc`` is ignored)."""
+
+        def entry(name: str) -> Any:
+            if name not in params:
+                return None
+            item = params[name]
+            value = item["values"] if "values" in item else item["value"]
+            return to_si(value, item["unit"])
+
+        return cls(
+            type=params["type"],
+            vertices=entry("vertices"),
+            midpoint=entry("midpoint"),
+            side_lengths=entry("side_lengths"),
+            radius=entry("radius"),
+            axis=params.get("axis"),
+            position=entry("position"),
+        )
+
+
+@dataclass
+class ObjectParams:
+    """An electrode: a simgeometry object held at a potential (``bc_type="dirichlet"``).
+
+    ``type`` is one of :data:`OBJECT_TYPES`; the geometry entries are those of the
+    simgeometry class (lengths in metres). ``type="union"`` is an electrode of several
+    shapes at one potential, the :class:`ShapeParams` (or their configuration-file
+    entries) in ``shapes``, e.g. a tube with rounded ends from a rectangle and two
+    circles; see :meth:`union`. It is one electrode for the field, the hits and the
+    diagnostics.
+    """
+
+    type: str
+    bc_type: str
+    bc_value: float | None = None
+    vertices: Any = None
+    midpoint: Any = None
+    side_lengths: Any = None
+    radius: float | None = None
+    axis: str | None = None
+    position: float | None = None
+    shapes: list[ShapeParams] | None = None
+
+    def __post_init__(self) -> None:
+        """Check the type and read the shapes of a union."""
+        if self.type == "union":
+            if not self.shapes:
+                raise ValueError("a union needs at least one shape")
+            given = {name for name in _GEOMETRY if getattr(self, name) is not None}
+            if given:
+                raise ValueError(
+                    f"the geometry of a union is in its shapes, got {sorted(given)}"
+                )
+            self.shapes = [
+                shape
+                if isinstance(shape, ShapeParams)
+                else ShapeParams.from_dict(shape)
+                for shape in self.shapes
+            ]
+            return
+        if self.type not in OBJECT_TYPES:
+            raise ValueError(
+                f"object type must be one of {OBJECT_TYPES} or 'union', "
+                f"got {self.type!r}"
+            )
+        if self.shapes is not None:
+            raise ValueError(f"only a union has shapes, not a {self.type!r}")
+
+    @classmethod
+    def union(
+        cls,
+        shapes: list[ShapeParams],
+        bc_value: float,
+        bc_type: str = "dirichlet",
+    ) -> ObjectParams:
+        """Return one electrode made of ``shapes``, all at ``bc_value``."""
+        return cls(type="union", bc_type=bc_type, bc_value=bc_value, shapes=shapes)
+
+    @property
+    def shape_list(self) -> list[ShapeParams]:
+        """Return the shapes of the electrode: those of a union, else its own."""
+        if self.shapes is not None:
+            return list(self.shapes)
+        geometry = {name: getattr(self, name) for name in _GEOMETRY}
+        return [ShapeParams(self.type, **geometry)]
+
+    def build(self) -> Any:
+        """Return the simgeometry object (with ``contains_points``).
+
+        A union is simgeometry's Boolean union (``|``) of its shapes.
+        """
+        objects = [shape.build(bc=self.bc_value) for shape in self.shape_list]
+        return reduce(operator.or_, objects)
+
+    def get_filtered_obj_params(self) -> dict[str, Any]:
+        """Return the simgeometry constructor arguments of the object, with ``bc``.
+
+        A union has none: build it with :meth:`build`.
+        """
+        if self.type == "union":
+            raise ValueError("a union has no constructor arguments; use build()")
+        arguments = self.shape_list[0].arguments()
+        arguments["bc"] = self.bc_value
+        return arguments
+
+    def to_dict(self) -> ConfigDict:
+        """Return the configuration-file form (lengths in metres)."""
+        if self.shapes is not None:
+            params: ConfigDict = {
+                "type": self.type,
+                "shapes": [shape.to_dict() for shape in self.shapes],
+            }
+        else:
+            params = self.shape_list[0].to_dict()
         if self.bc_type == "neumann":
             bc = {"normal_derivative": {"value": self.bc_value, "unit": "V/m"}}
         else:
@@ -414,28 +533,22 @@ class ObjectParams:
 
     @classmethod
     def from_dict(cls, params: Mapping[str, Any]) -> ObjectParams:
-        """Create the object from its configuration-file entry."""
+        """Create the object from its configuration-file entry.
 
-        def entry(name: str) -> Any:
-            if name not in params:
-                return None
-            item = params[name]
-            value = item["values"] if "values" in item else item["value"]
-            return to_si(value, item["unit"])
-
+        A ``"union"`` lists the entries of its shapes (without ``bc``) in ``shapes``.
+        """
         bc_type = params["bc"]["type"]
         key = "normal_derivative" if bc_type == "neumann" else "potential"
         if key not in params["bc"]:
             raise ValueError(f"an object with a {bc_type!r} condition needs bc.{key}")
         value = params["bc"][key]
-        return cls(
-            type=params["type"],
-            bc_type=bc_type,
-            bc_value=to_si(value["value"], value["unit"]),
-            vertices=entry("vertices"),
-            midpoint=entry("midpoint"),
-            side_lengths=entry("side_lengths"),
-            radius=entry("radius"),
-            axis=params.get("axis"),
-            position=entry("position"),
-        )
+        bc_value = to_si(value["value"], value["unit"])
+        if params["type"] == "union":
+            return cls.union(
+                [ShapeParams.from_dict(shape) for shape in params["shapes"]],
+                bc_value,
+                bc_type,
+            )
+        shape = ShapeParams.from_dict(params)
+        geometry = {name: getattr(shape, name) for name in _GEOMETRY}
+        return cls(type=shape.type, bc_type=bc_type, bc_value=bc_value, **geometry)

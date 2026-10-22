@@ -37,6 +37,10 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   that focus on the target; the tutorial "Optimising an einzel lens".
 - `BeamOptics.surface_fields()` and `beamtracer.solver.surface_field`: the largest field
   on each electrode's surface, from the solved potential next to it.
+- Electrodes of several shapes at one potential: `ObjectParams.union(shapes, bc_value)` of
+  `ShapeParams` (configuration-file form `type: union` with a `shapes` list), simgeometry's
+  Boolean union of the shapes. The field, the hits and `surface_fields()` treat it as one
+  electrode.
 
 ### Changed
 

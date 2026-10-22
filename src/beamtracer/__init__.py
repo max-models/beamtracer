@@ -31,6 +31,7 @@ from beamtracer.sections import (
     FieldBoundaryCondition,
     GridParams,
     ObjectParams,
+    ShapeParams,
     SymbolicSpaceFunction,
 )
 
@@ -56,6 +57,7 @@ __all__ = [
     "NodeField",
     "ObjectParams",
     "ParticleBeam",
+    "ShapeParams",
     "Solenoid",
     "SpaceChargeCompensation",
     "SymbolicSpaceFunction",
