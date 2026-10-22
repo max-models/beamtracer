@@ -11,7 +11,8 @@ a JSON-lines file that a later search resumes from (:class:`Record`,
 :func:`load_record`). Failed and unconverged evaluations are penalised and never win.
 
 :mod:`beamtracer.optimization.einzel` is a first problem: an einzel lens solved with
-:class:`~beamtracer.BeamOptics`.
+:class:`~beamtracer.BeamOptics`; :mod:`beamtracer.optimization.beamlet` the second, the
+extraction of a negative-ion beamlet from a plasma with the same searches.
 
 A minimal search::
 
