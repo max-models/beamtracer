@@ -17,11 +17,19 @@ env:
 
 jobs:
   pytest:
+    name: pytest (Python ${{ matrix.python-version }}, ${{ matrix.backend }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
+        # fake-cupy runs the CuPy code paths (the kernels' CUDA dispatch) on cunumpy's
+        # host-memory stand-in for CuPy
+        backend: [numpy, fake-cupy]
+
+    env:
+      CUNUMPY_FAKE_CUPY: ${{ matrix.backend == 'fake-cupy' && '1' || '' }}
+      CUNUMPY_BACKEND: ${{ matrix.backend == 'fake-cupy' && 'cupy' || 'numpy' }}
 
     steps:
       - name: Checkout code
@@ -36,15 +44,18 @@ jobs:
       - name: Install project
         run: uv sync --extra test
 
+      - name: Check the backend
+        run: uv run python -c "import cunumpy as xp; print(xp.get_backend()); assert xp.get_backend() == '${{ env.CUNUMPY_BACKEND }}'"
+
       - name: Run tests with coverage
-        run: uv run pytest --cov --cov-report=xml --cov-report=term .
+        run: uv run pytest -p no:cacheprovider --cov --cov-report=xml --cov-report=term .
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.xml
-          flags: python-${{ matrix.python-version }}
+          flags: python-${{ matrix.python-version }}-${{ matrix.backend }}
           fail_ci_if_error: false
 
   # PyPI rejects a release whose metadata has a direct reference (name @ git+...), so a pull

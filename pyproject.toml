@@ -5,9 +5,9 @@ requires = [ "setuptools", "wheel" ]
 [project]
 name = "beamtracer"
 version = "0.1.0"
-description = "Template python repository."
+description = "Steady ion beams in a self-consistent field: extraction, acceleration and charge changes."
 readme = "README.md"
-keywords = [ "python" ]
+keywords = [ "ion optics", "beam extraction", "space charge", "negative ions", "neutral beam injection" ]
 license = { file = "LICENSE.txt" }
 authors = [ { name = "Max" } ]
 requires-python = ">=3.10"
@@ -23,8 +23,28 @@ classifiers = [
 # PyPI rejects direct references (name @ git+...), so only version ranges go here; the
 # max-models packages come from their devel branches through [tool.uv.sources]
 dependencies = [
+  # units of configuration files (imported only for a {value, unit} entry)
+  "astropy",
+  "cunumpy>=0.7.0",
+  # MPI only under an MPI launcher; a serial stand-in for mpi4py otherwise
+  "maybempi>=0.1",
   "numpy",
+  # the charge-state transitions of a fast beam (ChargeChanging)
+  "plasmacoll>=0.3.0",
+  "scipy",
   "scope-profiler>=0.7.5",
+  # the electrodes
+  "simgeometry>=0.1.1",
+  # boundary values given as expressions of x, y
+  "sympy",
+  # NodeField.evaluate
+  "xarray",
+]
+optional-dependencies.neutralizer = [ "wellbalanced>=0.1.0" ]
+optional-dependencies.examples = [
+  "matplotlib",
+  "plasma-plots>=0.2.3",
+  "plotly",
 ]
 optional-dependencies.dev = [
   "jupyterlab",
@@ -32,7 +52,7 @@ optional-dependencies.dev = [
   "pyproject-fmt",
   "pyright",
   "ruff",
-  "beamtracer[docs,test]",
+  "beamtracer[docs,examples,test]",
 ]
 optional-dependencies.docs = [
   "griffe",
@@ -41,12 +61,13 @@ optional-dependencies.docs = [
   "nbclient>=0.11",
   "nbformat>=5.11.1",
 ]
-optional-dependencies.test = [ "pytest", "pytest-cov" ]
+optional-dependencies.test = [ "beamtracer[neutralizer]", "pytest", "pytest-cov", "pyccel>2.0" ]
 urls.Source = "https://github.com/max-models/beamtracer"
-scripts.beamtracer = "beamtracer.main:main"
 
 [tool.setuptools]
 package-data."*" = [ "py.typed" ]
+# CUDA versions of the kernels (beamtracer.kernels.catalog)
+package-data.beamtracer = [ "kernels/*/*_cuda.cu" ]
 packages.find.where = [ "src" ]
 
 [tool.ruff]
@@ -63,7 +84,9 @@ lint.pydocstyle.convention = "google"
 
 [tool.pyright]
 include = [ "src" ]
-exclude = [ "**/tests" ]
+# the Pyccel kernels annotate in Pyccel's array dialect ("float[:]"), not Python typing;
+# the examples are plotting scripts
+exclude = [ "**/tests", "**/*_pyccel.py", "src/beamtracer/examples" ]
 pythonVersion = "3.10"
 typeCheckingMode = "standard"
 
@@ -81,5 +104,10 @@ report.show_missing = true
 # uv.lock); PRs to main and the release use PyPI only (CI sets UV_NO_SOURCES).
 [tool.uv.sources]
 # one entry per max-models package in [project], spelled exactly like this in every repo:
-# cunumpy = { git = "https://github.com/max-models/cunumpy", branch = "devel" }
+cunumpy = { git = "https://github.com/max-models/cunumpy", branch = "devel" }
+maybempi = { git = "https://github.com/max-models/maybempi", branch = "devel" }
+plasma-plots = { git = "https://github.com/max-models/plasma-plots", branch = "devel" }
+plasmacoll = { git = "https://github.com/max-models/plasmacoll", branch = "devel" }
 scope-profiler = { git = "https://github.com/max-models/scope-profiler", branch = "devel" }
+simgeometry = { git = "https://github.com/max-models/simgeometry", branch = "devel" }
+wellbalanced = { git = "https://github.com/max-models/wellbalanced", branch = "devel" }
