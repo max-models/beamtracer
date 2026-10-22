@@ -23,6 +23,20 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   trace and the deposit, off unless the `beamtracer` tag is enabled (e.g.
   `scope_profiler.setup(enable_tags=["beamtracer"])`).
 - The tests run on NumPy and on cunumpy's fake CuPy backend.
+- `beamtracer.optimization`, design optimisation that knows nothing about the model: a
+  `Design` of named `Parameter`s builds a configuration with a user function, a `Problem`
+  evaluates it with another into an `Evaluation` (objectives, constraints `<= 0`, a
+  converged flag, wall time, diagnostics); `optimize` (SciPy's differential evolution,
+  constraints by Lampinen's feasibility rules) and `scan` evaluate in a process pool and
+  record every evaluation in a JSON-lines file that a later search resumes from
+  (`Record`, `load_record` as an xarray Dataset). Exceptions and unconverged runs are
+  penalised evaluations that never win.
+- `beamtracer.optimization.einzel.EinzelLens`, the first problem: three rounded tubes in
+  `(x, r)` geometry, the rms spot of a proton beam at a target plane, with the lost
+  current and the surface field as constraints, and the thin-lens and paraxial voltages
+  that focus on the target; the tutorial "Optimising an einzel lens".
+- `BeamOptics.surface_fields()` and `beamtracer.solver.surface_field`: the largest field
+  on each electrode's surface, from the solved potential next to it.
 
 ### Changed
 

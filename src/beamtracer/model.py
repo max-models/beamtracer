@@ -44,6 +44,7 @@ from beamtracer.solver import (
     beam_with_energy,
     plane_moments,
     solenoid_on_axis,
+    surface_field,
     vlasov_iterate,
 )
 
@@ -339,6 +340,21 @@ class BeamOptics:
         ``y`` is ``r`` in cylindrical geometry.
         """
         return self.state.electric(x, y)
+
+    def surface_fields(self) -> dict[str, float]:
+        """Return the largest ``|E|`` [V/m] on the surface of every electrode, by name.
+
+        From the solved potential at the free nodes next to each electrode (see
+        :func:`~beamtracer.solver.surface_field`); for voltage holding, e.g. a limit of
+        some kV/mm. The field at a sharp corner is singular and grows as the mesh is
+        refined: round the edges whose field matters.
+        """
+        magnitude, electrode = surface_field(self.mesh, self.state.electric)
+        fields = {}
+        for number, name in enumerate(self.config.objects):
+            mine = electrode == number
+            fields[name] = float(np.max(magnitude[mine])) if mine.any() else 0.0
+        return fields
 
     def _field(self, name: str, data: np.ndarray) -> NodeField:
         key = (name, self._state is not None)

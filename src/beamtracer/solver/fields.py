@@ -208,3 +208,49 @@ def solenoid_on_axis(
         return a / np.hypot(a, radius) - b / np.hypot(b, radius)
 
     return peak * shape(z) / shape(np.asarray(centre))
+
+
+def _node_component(
+    low: np.ndarray, high: np.ndarray, solid_low: np.ndarray, solid_high: np.ndarray
+) -> np.ndarray:
+    """Return a field component at the nodes from its edges below and above them.
+
+    The edge to a solid neighbour is the field at the surface; with solid neighbours on
+    both sides the larger one counts, and without any the mean of the two edges.
+    """
+    mean = 0.5 * (low + high)
+    larger = np.where(np.abs(low) >= np.abs(high), low, high)
+    return np.where(
+        solid_low & solid_high,
+        larger,
+        np.where(solid_low, low, np.where(solid_high, high, mean)),
+    )
+
+
+def surface_field(
+    mesh: IonOpticsMesh, field: StaggeredElectricField
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``|E|`` [V/m] at the free nodes next to an electrode, and that electrode.
+
+    Both arrays have the mesh shape. At a free node with an electrode neighbour along an
+    axis, that component of the field is the one on the edge to the neighbour, taken over
+    the bracketed distance to the surface (the field at the surface); otherwise it is the
+    mean of the node's two edges. ``|E|`` is ``NaN`` and the electrode index ``-1`` away
+    from the electrodes. At a sharp corner of an electrode the field is singular and this
+    value grows as the mesh is refined, so round the edges of electrodes whose surface
+    field matters.
+    """
+    # the electrode index of the neighbour at -x, +x, -y, +y (-1: none)
+    neighbours = [
+        mesh._neighbour_solid(axis, step)
+        for axis, step in ((0, -1), (0, 1), (1, -1), (1, 1))
+    ]
+    solid = [n >= 0 for n in neighbours]
+    ex = _node_component(field.fx[:-1], field.fx[1:], solid[0], solid[1])
+    ey = _node_component(field.fy[:, :-1], field.fy[:, 1:], solid[2], solid[3])
+    near = mesh.near_solid
+    magnitude = np.where(near, np.hypot(ex, ey), np.nan)
+    electrode = np.full(mesh.shape, -1, dtype=np.int32)
+    for neighbour in neighbours:
+        electrode = np.where(electrode < 0, neighbour, electrode)
+    return magnitude, np.where(near, electrode, -1).astype(np.int32)

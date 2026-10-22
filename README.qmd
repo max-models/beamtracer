@@ -22,7 +22,10 @@ Vlasov iteration (solve the field, trace the beam, deposit its space charge, rep
 `beamtracer.neutralizer` couples the traced beam to a global model of a beam-driven plasma
 neutralizer ([wellbalanced](https://github.com/max-models/wellbalanced)). The field gather
 and the charge deposit are Pyccel, NumPy, CUDA and Metal kernels through
-[cunumpy](https://github.com/max-models/cunumpy).
+[cunumpy](https://github.com/max-models/cunumpy). `beamtracer.optimization` searches over
+the parameters of a design (SciPy's differential evolution, or a scan) in parallel
+processes, with constraints, penalised failures and a resumable record of every
+evaluation; its first problem is an einzel lens (`beamtracer.optimization.einzel`).
 
 Documentation: <https://max-models.github.io/beamtracer/>
 
