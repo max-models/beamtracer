@@ -1,0 +1,24 @@
+name: PyPI dependencies
+
+# PyPI rejects an upload whose metadata has a direct reference ("name @ git+https://..."), and the
+# Release workflow only finds out after the merge to main. Check the dependencies on the pull
+# request instead.
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  pypi-dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+
+      - name: Check that every dependency can be installed from PyPI
+        run: uv run --no-project --with packaging python scripts/check_pypi_dependencies.py
