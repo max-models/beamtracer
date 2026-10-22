@@ -72,7 +72,9 @@ config = BeamOpticsConfig(
         y_lower=neumann,
         y_upper=neumann,
     ),
-    beams=[BeamSpecies("H+", 10.0, (0.0, 0.0), (0.0, 5e-3), energy=0.01, num_particles=40)],
+    beams=[
+        BeamSpecies("H+", 10.0, (0.0, 0.0), (0.0, 5e-3), energy=0.01, num_particles=40)
+    ],
     diagnostic_planes=[9.9e-3],
 )
 model = BeamOptics(config).run()
