@@ -24,8 +24,9 @@ through [cunumpy](https://github.com/max-models/cunumpy).
 `beamtracer.optimization` searches over the parameters of a design
 (SciPy’s differential evolution, or a scan) in parallel processes, with
 constraints, penalised failures and a resumable record of every
-evaluation; its first problem is an einzel lens
-(`beamtracer.optimization.einzel`).
+evaluation; its problems are an einzel lens
+(`beamtracer.optimization.einzel`) and a negative-ion beamlet
+(`beamtracer.optimization.beamlet`).
 
 Documentation: <https://max-models.github.io/beamtracer/>
 

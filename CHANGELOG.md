@@ -35,6 +35,18 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `(x, r)` geometry, the rms spot of a proton beam at a target plane, with the lost
   current and the surface field as constraints, and the thin-lens and paraxial voltages
   that focus on the target; the tutorial "Optimising an einzel lens".
+- `beamtracer.optimization.beamlet.NegativeIonBeamlet`, the second problem, with the same
+  `Problem`, `optimize` and `scan`: one round H- beamlet solved with `BeamOptics` and
+  `NegativeExtractionPlasma` (the beamlet of `negative_ion_extraction_optics`), its
+  parameters the extraction voltage, the EG aperture radius and the PG-EG gap; the rms
+  divergence of the H- behind the GG is the objective, the H- loss, the EG and GG surface
+  field and the 7 mrad divergence limit are constraints. A solve that does not converge
+  (a limit cycle where the beam grazes a grid or the meniscus edge) is a penalised
+  evaluation, with the spread of the potential, the divergence and the transmission over
+  its last iterations; `COARSE` is a 0.2 mm mesh with 100 trajectories per species. The
+  tutorial "Optimising a negative-ion beamlet".
+- `BeamOptics.run(callback=...)`: a function called after every Vlasov iteration with its
+  state.
 - `BeamOptics.surface_fields()` and `beamtracer.solver.surface_field`: the largest field
   on each electrode's surface, from the solved potential next to it.
 

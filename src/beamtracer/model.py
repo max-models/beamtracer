@@ -15,6 +15,7 @@ Run it with :meth:`BeamOptics.run`::
 from __future__ import annotations
 
 import pickle
+from collections.abc import Callable
 from pathlib import Path
 
 import cunumpy as xp
@@ -278,8 +279,15 @@ class BeamOptics:
     # -- running ----------------------------------------------------------------------------
 
     @sp.profile("beamtracer.run", tags=PROFILE_TAGS)
-    def run(self) -> BeamOptics:
-        """Run the Vlasov iteration to convergence (once); return the model."""
+    def run(
+        self, callback: Callable[[int, VlasovState], None] | None = None
+    ) -> BeamOptics:
+        """Run the Vlasov iteration to convergence (once); return the model.
+
+        ``callback(iteration, state)`` is called after every iteration with its
+        :class:`~beamtracer.solver.VlasovState` (with MPI, this rank's share of the
+        trajectories), e.g. to follow a beam moment from iteration to iteration.
+        """
         if self._is_finished:
             return self
         config = self.config
@@ -311,6 +319,7 @@ class BeamOptics:
             compensation=compensation,
             tolerance=config.tolerance,
             relaxation=config.relaxation,
+            callback=callback,
         )
         if self._parallel:
             self._gather_results()
