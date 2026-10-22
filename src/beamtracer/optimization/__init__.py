@@ -9,6 +9,10 @@ evaluation. :func:`optimize` minimizes with SciPy's differential evolution and
 :func:`scan` evaluates a grid, both in parallel processes, recording every evaluation in
 a JSON-lines file that a later search resumes from (:class:`Record`,
 :func:`load_record`). Failed and unconverged evaluations are penalised and never win.
+:func:`recheck` evaluates the few best designs of a search again with another
+evaluation, e.g. a finer mesh, or a PIC model of the source from user code (beamtracer
+does not import it): a function of the configuration that returns an
+:class:`Evaluation`.
 
 :mod:`beamtracer.optimization.einzel` is a first problem: an einzel lens solved with
 :class:`~beamtracer.BeamOptics`; :mod:`beamtracer.optimization.beamlet` the second, the
@@ -28,7 +32,7 @@ A minimal search::
 
 from beamtracer.optimization.design import Design, Evaluation, Parameter, Problem
 from beamtracer.optimization.record import Record, load_record, to_dataset
-from beamtracer.optimization.search import Result, optimize, scan
+from beamtracer.optimization.search import Result, optimize, recheck, scan
 
 __all__ = [
     "Design",
@@ -39,6 +43,7 @@ __all__ = [
     "Result",
     "load_record",
     "optimize",
+    "recheck",
     "scan",
     "to_dataset",
 ]

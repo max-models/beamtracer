@@ -23,6 +23,9 @@ The objective is the rms divergence of the H$^-$ behind the GG (``rms_angle`` of
 - ``loss``: the lost fraction of the emitted H$^-$ current minus ``max_loss``;
 - ``surface_field``: the largest field on the EG and GG surfaces over ``field_limit``,
   minus 1;
+- ``gap_field``: the larger mean field of the two gaps (the voltage across a gap over
+  its length) over ``gap_field_limit``, minus 1: voltage holding, with
+  ``surface_field``;
 - ``divergence_limit``: the divergence over ``divergence_limit`` (7 mrad), minus 1.
 
 The H$^-$ current density is an input of the steady model (``current_density``, about
@@ -35,9 +38,18 @@ the potential changes over the last iterations.
 
 :class:`NegativeIonBeamlet` holds the fixed settings and makes the
 :class:`~beamtracer.optimization.Design` and :class:`~beamtracer.optimization.Problem`
-of any of :data:`PARAMETERS`; :data:`COARSE` is the mesh and the number of trajectories
-of a search, compared with the example's in the tutorial "Optimising a negative-ion
-beamlet".
+of any of :data:`PARAMETERS`: a few of them, or the full design (:data:`FULL_DESIGN`,
+with the constraints :data:`FULL_CONSTRAINTS`). A design that cannot be built (an
+aperture that does not fit, a gap the mesh does not resolve) is a failed evaluation.
+:data:`COARSE` is the mesh and the number of trajectories of a search, compared with the
+example's in the tutorial "Optimising a negative-ion beamlet".
+
+A search on a coarse mesh is followed by a check of its best designs with a better
+model: :func:`~beamtracer.optimization.recheck` evaluates them again with another
+function of the same beamlet, e.g. :meth:`NegativeIonBeamlet.evaluate` of a beamlet on
+a finer mesh, or a PIC model of the source written in user code, which takes the
+:class:`NegativeIonBeamlet` of a design (its geometry and voltages) and returns an
+:class:`~beamtracer.optimization.Evaluation`; beamtracer does not import the PIC code.
 """
 
 from __future__ import annotations
@@ -66,8 +78,36 @@ from beamtracer.sections import (
 )
 from beamtracer.solver import STATUS_NAMES, BeamMoments, VlasovState, plane_moments
 
-#: The design parameters of the beamlet and their units.
-PARAMETERS = {"extraction_voltage": "V", "eg_radius": "m", "gap": "m"}
+#: The design parameters of the beamlet and their units: the voltage split (the EG
+#: voltage of the total on the GG), the aperture radii, the grid thicknesses and the gaps.
+PARAMETERS = {
+    "extraction_voltage": "V",
+    "eg_radius": "m",
+    "gap": "m",
+    "pg_radius": "m",
+    "gg_radius": "m",
+    "pg_thickness": "m",
+    "eg_thickness": "m",
+    "gg_thickness": "m",
+    "acceleration_gap": "m",
+}
+
+#: The bounds of the full design, all of :data:`PARAMETERS`; some corners do not fit in
+#: the domain radius (the half pitch of the beamlets) and are failed evaluations.
+FULL_DESIGN = {
+    "extraction_voltage": (3e3, 10e3),
+    "eg_radius": (2e-3, 3.5e-3),
+    "gap": (3e-3, 6e-3),
+    "pg_radius": (3e-3, 4.5e-3),
+    "gg_radius": (2.5e-3, 4e-3),
+    "pg_thickness": (0.5e-3, 1.5e-3),
+    "eg_thickness": (1e-3, 2.5e-3),
+    "gg_thickness": (1e-3, 2.5e-3),
+    "acceleration_gap": (5e-3, 10e-3),
+}
+
+#: The constraints of the full design: transmission and voltage holding.
+FULL_CONSTRAINTS = ("loss", "surface_field", "gap_field")
 
 #: The grids, in order along the beam; a rounded grid's edge circle is ``<name>.edge``.
 GRIDS = ("pg", "eg", "gg")
@@ -100,7 +140,8 @@ class NegativeIonBeamlet:
     change below ``tolerance`` [V], with ``relaxation`` of the charge density.
 
     The limits of the constraints: ``max_loss`` (fraction of the H- current),
-    ``field_limit`` [V/m] and ``divergence_limit`` [rad]. A frozen dataclass, so it
+    ``field_limit`` [V/m] (on the surfaces), ``gap_field_limit`` [V/m] (the mean
+    field of a gap) and ``divergence_limit`` [rad]. A frozen dataclass, so it
     pickles: its :meth:`config` and :meth:`evaluate` are the build and evaluation
     functions of its problems, also in a process pool.
     """
@@ -136,6 +177,7 @@ class NegativeIonBeamlet:
     relaxation: float = 0.5
     max_loss: float = 0.01
     field_limit: float = 5.0e6
+    gap_field_limit: float = 3.0e6
     divergence_limit: float = 7.0e-3
     save_trajectories: int = 0
 
@@ -236,6 +278,23 @@ class NegativeIonBeamlet:
                 )
         if self.cell > 0.5 * min(self.gap, self.acceleration_gap):
             raise ValueError("the mesh must resolve the gaps by at least two cells")
+        if self.cell > 0.5 * min(
+            self.pg_thickness, self.eg_thickness, self.gg_thickness
+        ):
+            raise ValueError("the mesh must resolve the grids by at least two cells")
+        if not 0.0 < self.extraction_voltage < self.grounded_grid_voltage:
+            raise ValueError(
+                "the extraction voltage must lie between 0 and the GG voltage"
+            )
+
+    @property
+    def gap_fields(self) -> dict[str, float]:
+        """Return the mean field [V/m] of the extraction and the acceleration gap."""
+        return {
+            "extraction": abs(self.extraction_voltage) / self.gap,
+            "acceleration": abs(self.grounded_grid_voltage - self.extraction_voltage)
+            / self.acceleration_gap,
+        }
 
     def _plate(
         self, name: str, span: tuple[float, float], aperture: float, voltage: float
@@ -407,17 +466,17 @@ class NegativeIonBeamlet:
     ) -> Evaluation:
         """Return the :class:`~beamtracer.optimization.Evaluation` of a solved beamlet.
 
-        The model must be that of this beamlet's :meth:`config`; ``iterates`` are the
-        H- moments of its iterations (see :meth:`solve`). The objective ``divergence``
-        is the rms angle [rad] of the H- at the exit plane; the constraints are
-        ``loss``, ``surface_field`` and ``divergence_limit`` (see the module
-        docstring). The diagnostics hold the transmission, the extracted current
-        density [A/m^2], the emittance [m rad], the mean energy [eV], the perveance
-        over its Child-Langmuir value, the surface field of each grid [V/m], where the
-        lost H- end (:meth:`h_minus_losses`), the electrons' transmission, the Vlasov
-        iterations, the largest potential change [V] of the last iteration and over
-        the last :data:`SPREAD_ITERATIONS`, and over those (with ``iterates``) the
-        spread of the divergence [rad] and of the transmission.
+        The model must be that of this beamlet's :meth:`config`; ``iterates`` are the H-
+        moments of its iterations (see :meth:`solve`). The objective ``divergence`` is
+        the rms angle [rad] of the H- at the exit plane; the constraints are ``loss``,
+        ``surface_field``, ``gap_field`` and ``divergence_limit`` (see the module
+        docstring). The diagnostics hold the transmission, the extracted current density
+        [A/m^2], the emittance [m rad], the mean energy [eV], the perveance over its
+        Child-Langmuir value, the surface field of each grid and the mean field of each
+        gap [V/m], where the lost H- end (:meth:`h_minus_losses`), the electrons'
+        transmission, the Vlasov iterations, the largest potential change [V] of the
+        last iteration and over the last :data:`SPREAD_ITERATIONS`, and over those (with
+        ``iterates``) the spread of the divergence [rad] and of the transmission.
         """
         h_minus = model.beam_moments(self.exit_plane, "H-")
         transmission = h_minus.current / self.emitted_current
@@ -437,6 +496,7 @@ class NegativeIonBeamlet:
             "perveance_ratio": self.current_density / self.child_langmuir,
             "field": field,
             **{f"field_{name}": value for name, value in grids.items()},
+            **{f"gap_field_{name}": v for name, v in self.gap_fields.items()},
             "iterations": stats["iterations"],
             "potential_change": changes[-1] if changes else math.nan,
             "potential_spread": max(changes[-SPREAD_ITERATIONS:])
@@ -461,6 +521,7 @@ class NegativeIonBeamlet:
             constraints={
                 "loss": lost - self.max_loss,
                 "surface_field": field / self.field_limit - 1.0,
+                "gap_field": max(self.gap_fields.values()) / self.gap_field_limit - 1.0,
                 "divergence_limit": divergence / self.divergence_limit - 1.0,
             },
             converged=bool(stats["converged"]),
@@ -490,8 +551,9 @@ class NegativeIonBeamlet:
     ) -> Problem:
         """Return the problem of minimizing the divergence over the parameters in ``bounds``.
 
-        ``constraints`` are some of ``"loss"``, ``"surface_field"`` and
-        ``"divergence_limit"``; the others are kept as diagnostics.
+        ``constraints`` are some of ``"loss"``, ``"surface_field"``, ``"gap_field"``
+        and ``"divergence_limit"``; the others are kept as diagnostics. The full
+        design is ``problem(FULL_DESIGN, FULL_CONSTRAINTS)``.
         """
         return Problem(
             self.design(bounds),

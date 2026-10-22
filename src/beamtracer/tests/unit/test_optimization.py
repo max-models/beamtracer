@@ -18,6 +18,7 @@ from beamtracer.optimization import (
     Record,
     load_record,
     optimize,
+    recheck,
     scan,
 )
 
@@ -59,6 +60,16 @@ def fragile(values: dict[str, float]) -> Evaluation:
     if x < -1.0:
         time.sleep(60.0)
     return Evaluation(objectives={"objective": x * x})
+
+
+def shifted(values: dict[str, float]) -> Evaluation:
+    """The check of a bowl: the same paraboloid, 0.5 higher, with a constraint x <= 1."""
+    CALLS.append(dict(values))
+    x, y = values["x"], values["y"]
+    return Evaluation(
+        objectives={"objective": (x - 1.0) ** 2 + (y + 2.0) ** 2 + 0.5},
+        constraints={"line": x - 1.0},
+    )
 
 
 def plane(values: dict[str, float]) -> dict[str, float]:
@@ -252,3 +263,58 @@ def test_a_crashed_worker_or_a_hang_is_a_failed_evaluation() -> None:
     assert grid.x == {"x": 0.5} or grid.x == {"x": -0.5}
     serial = scan(problem, {"x": [-1.5]}, timeout=0.5)
     assert "EvaluationTimeout" in str(serial.evaluations[0].failure)
+
+
+# -- checking the best designs again ------------------------------------------------------
+
+
+def test_recheck_evaluates_the_best_designs_again(tmp_path) -> None:
+    problem = Problem(_square(), bowl)
+    result = scan(problem, {"x": [-1.0, 0.0, 1.0, 2.0], "y": [-2.0, 0.0]})
+    CALLS.clear()
+    checked = recheck(result, shifted, top=3, record=tmp_path / "check.jsonl")
+    # the three best of the scan by their rank, in that order, each evaluated once
+    ranked = sorted(result.evaluations, key=lambda e: e.rank("objective"))
+    assert [e.parameters for e in checked.evaluations] == [
+        e.parameters for e in ranked[:3]
+    ]
+    assert CALLS == [e.parameters for e in ranked[:3]]
+    assert checked.evaluated == 3 and checked.reused == 0
+    assert [e.objectives["objective"] for e in checked.evaluations] == pytest.approx(
+        [e.objectives["objective"] + 0.5 for e in ranked[:3]]
+    )
+    # the check's problem is the search's with the new function
+    assert checked.problem.function is shifted
+    assert checked.problem.design is problem.design
+    assert checked.best is not None and checked.x == {"x": 1.0, "y": -2.0}
+
+    # a rerun takes them from the record
+    CALLS.clear()
+    again = recheck(result, shifted, top=3, record=tmp_path / "check.jsonl")
+    assert again.evaluated == 0 and again.reused == 3 and not CALLS
+
+
+def test_recheck_with_its_own_problem_and_constraints() -> None:
+    problem = Problem(_square(), bowl)
+    result = scan(problem, {"x": [0.0, 1.0, 2.0], "y": [-2.0]}, workers=2)
+    check = Problem(_square(), shifted, constraints="line")
+    checked = recheck(result, check, top=3, workers=2)
+    assert len(checked.evaluations) == 3
+    # in the order of the scan's ranking (x = 0 and 2 tie); x = 2 violates the check's
+    # constraint
+    assert [e.parameters["x"] for e in checked.evaluations] == [1.0, 0.0, 2.0]
+    assert [e.feasible for e in checked.evaluations] == [True, True, False]
+    assert checked.x == {"x": 1.0, "y": -2.0}
+    with pytest.raises(ValueError, match="parameters"):
+        recheck(result, Problem(Design((Parameter("z", 0.0, 1.0),)), bowl))
+    with pytest.raises(ValueError, match="top"):
+        recheck(result, shifted, top=0)
+
+
+def test_recheck_skips_penalised_and_repeated_designs() -> None:
+    problem = Problem(Design((Parameter("x", -2.0, 2.0),)), treacherous)
+    # the unconverged x = 0 and x = 0.2 (objective -100) and the failed x = 2 rank last;
+    # x = 1 appears twice
+    result = scan(problem, {"x": [0.0, 1.0, 0.2, 2.0, 1.0, -1.5]})
+    checked = recheck(result, lambda values: Evaluation({"objective": 0.0}), top=5)
+    assert [e.parameters["x"] for e in checked.evaluations] == [1.0, -1.5]

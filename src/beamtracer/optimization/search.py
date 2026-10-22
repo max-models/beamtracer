@@ -1,4 +1,7 @@
-"""Searches over a design: SciPy's differential evolution, and brute-force scans.
+"""Searches over a design: SciPy's differential evolution, brute-force scans, and checks.
+
+:func:`recheck` evaluates the best designs of a search again with another evaluation:
+the second stage of a staged search, e.g. a finer mesh or a PIC model in user code.
 
 Both evaluate through the same machinery: the designs of a batch (a generation of the
 evolution, or a scan) that are already in the record are taken from it, the others are
@@ -22,7 +25,7 @@ import inspect
 import itertools
 import math
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -278,6 +281,66 @@ def scan(
     return Result(
         problem=problem,
         best=_best(problem, evaluations),
+        evaluations=evaluations,
+        evaluated=evaluator.evaluated,
+        reused=evaluator.reused,
+        record=evaluator.record.path,
+    )
+
+
+def recheck(
+    result: Result,
+    check: Problem | Callable[[Any], Evaluation],
+    *,
+    top: int = 3,
+    workers: int = 1,
+    record: str | Path | None = None,
+    mp_context: Any = None,
+    timeout: float | None = None,
+) -> Result:
+    """Evaluate the ``top`` best designs of a search again, with another evaluation.
+
+    The second stage of a staged search: a cheap model in the search, an expensive one
+    (a finer mesh, a time-dependent PIC run of the source, a code beamtracer does not
+    import) for the few best designs. The designs are the ``top`` best distinct ones of
+    ``result`` by :meth:`~beamtracer.optimization.Evaluation.rank`: feasible ones by the
+    objective, then infeasible ones by their constraint violation; failed and
+    unconverged ones are never checked.
+
+    ``check`` is a :class:`~beamtracer.optimization.Problem` over the same parameters,
+    with its own build, evaluation, objectives and constraints; or a function, which
+    then evaluates the configuration ``result.problem.design`` builds and must return
+    the objectives and constraints of ``result.problem``. The evaluations run like a
+    :func:`scan` (``workers``, ``mp_context``, ``timeout``), recorded in ``record``,
+    which a rerun resumes from. The returned :class:`Result` has the evaluations in the
+    order of the search's ranking, and its ``best`` is the best by the check.
+    """
+    if top < 1:
+        raise ValueError(f"top must be positive, got {top}")
+    if not isinstance(check, Problem):
+        check = replace(result.problem, function=check)
+    if set(check.design.names) != set(result.problem.design.names):
+        raise ValueError(
+            f"the check has the parameters {list(check.design.names)}, the search "
+            f"{list(result.problem.design.names)}"
+        )
+    objective = result.problem.objective
+    chosen: dict[str, np.ndarray] = {}
+    for evaluation in sorted(
+        (e for e in result.evaluations if e.ok), key=lambda e: e.rank(objective)
+    ):
+        x = check.design.vector(evaluation.parameters)
+        chosen.setdefault(check.design.key(x), x)
+        if len(chosen) == top:
+            break
+    recorded = Record(check.design, record)
+    pool = WorkerPool(check, workers, mp_context, timeout)
+    evaluator = _Evaluator(check, recorded, pool)
+    with pool:
+        evaluations = evaluator(np.array(list(chosen.values()))) if chosen else []
+    return Result(
+        problem=check,
+        best=_best(check, evaluations),
         evaluations=evaluations,
         evaluated=evaluator.evaluated,
         reused=evaluator.reused,

@@ -7,7 +7,13 @@ import math
 import pytest
 
 from beamtracer.optimization import scan
-from beamtracer.optimization.beamlet import GRIDS, PARAMETERS, NegativeIonBeamlet
+from beamtracer.optimization.beamlet import (
+    FULL_CONSTRAINTS,
+    FULL_DESIGN,
+    GRIDS,
+    PARAMETERS,
+    NegativeIonBeamlet,
+)
 
 #: A tiny beamlet: 0.5 mm cells, few trajectories (a solve takes about a second).
 TINY = NegativeIonBeamlet(cell=0.5e-3, num_particles=20, iterations=30)
@@ -95,3 +101,39 @@ def test_unconverged_points_are_penalised() -> None:
     assert converged.rank("divergence") < evaluation.rank("divergence")
     result = scan(problem, {"extraction_voltage": [8e3], "eg_radius": [3e-3]})
     assert result.best is not None and not result.best.ok
+
+
+def test_the_full_design() -> None:
+    problem = TINY.problem(FULL_DESIGN, FULL_CONSTRAINTS)
+    assert set(problem.design.names) == set(PARAMETERS)
+    assert problem.constraints == ("loss", "surface_field", "gap_field")
+    values = {
+        "extraction_voltage": 6e3,
+        "eg_radius": 3e-3,
+        "gap": 3e-3,
+        "pg_radius": 3.5e-3,
+        "gg_radius": 3e-3,
+        "pg_thickness": 1e-3,
+        "eg_thickness": 1.5e-3,
+        "gg_thickness": 1e-3,
+        "acceleration_gap": 7e-3,
+    }
+    beamlet = TINY.at(values)
+    assert beamlet.eg == pytest.approx((5e-3, 6.5e-3))
+    assert beamlet.gg == pytest.approx((13.5e-3, 14.5e-3))
+    assert beamlet.gap_fields == pytest.approx(
+        {"extraction": 6e3 / 3e-3, "acceleration": 14e3 / 7e-3}
+    )
+    config = TINY.config(values)
+    assert config.objects["gg.edge"].radius == pytest.approx(0.5e-3)
+    evaluation = problem.evaluate(values)
+    assert evaluation.failure is None
+    assert evaluation.constraints["gap_field"] == pytest.approx(
+        2e6 / TINY.gap_field_limit - 1.0
+    )
+    assert evaluation.diagnostics["gap_field_acceleration"] == pytest.approx(2e6)
+    # a corner of the bounds that does not fit in the domain radius fails, penalised
+    too_wide = problem.evaluate({**values, "pg_radius": 4.5e-3, "pg_thickness": 1.5e-3})
+    assert not too_wide.ok and "fit inside" in str(too_wide.failure)
+    with pytest.raises(ValueError, match="between 0 and the GG voltage"):
+        TINY.at({"extraction_voltage": 25e3})
