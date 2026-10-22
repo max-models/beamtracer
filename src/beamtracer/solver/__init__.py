@@ -14,6 +14,7 @@ from beamtracer.solver.fields import (
     AxisymmetricMagneticField,
     StaggeredElectricField,
     solenoid_on_axis,
+    surface_field,
 )
 from beamtracer.solver.mesh import Electrode, FaceCondition, IonOpticsMesh
 from beamtracer.solver.poisson import (
@@ -62,5 +63,6 @@ __all__ = [
     "mismatch",
     "plane_moments",
     "solenoid_on_axis",
+    "surface_field",
     "vlasov_iterate",
 ]
