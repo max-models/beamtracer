@@ -45,6 +45,15 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   evaluation, with the spread of the potential, the divergence and the transmission over
   its last iterations; `COARSE` is a 0.2 mm mesh with 100 trajectories per species. The
   tutorial "Optimising a negative-ion beamlet".
+- `beamtracer.optimization.recheck`: the best few designs of a search evaluated again with
+  another evaluation (a finer mesh, or a PIC model of the source from user code, which
+  beamtracer does not import), recorded and resumable.
+- The full beamlet design: `NegativeIonBeamlet` takes the PG and GG aperture radii, the
+  three grid thicknesses and the EG-GG gap as parameters too (`FULL_DESIGN`), with the
+  mean field of each gap as a voltage-holding constraint (`gap_field`, with
+  `FULL_CONSTRAINTS`) and validity checks (apertures inside the half pitch, gaps and grids
+  resolved by the mesh, the EG voltage between the PG's and the GG's); the tutorial checks
+  the best designs of both searches on the example's mesh.
 - `BeamOptics.run(callback=...)`: a function called after every Vlasov iteration with its
   state.
 - `BeamOptics.surface_fields()` and `beamtracer.solver.surface_field`: the largest field
