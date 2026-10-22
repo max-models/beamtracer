@@ -167,7 +167,7 @@ def optimize(
 
     The population of every generation is evaluated as one batch, in a pool of
     ``workers`` processes (``-1``: one per CPU) started with ``mp_context`` (see
-    :mod:`multiprocessing`), each evaluation stopped after ``timeout`` seconds, and
+    :mod:`multiprocessing`; default forkserver, or spawn where there is none), each evaluation stopped after ``timeout`` seconds, and
     recorded. With a ``record`` path an existing record is
     resumed: with the same ``seed`` and settings the evolution proposes the same
     designs again and takes the recorded ones from the file, so an interrupted or

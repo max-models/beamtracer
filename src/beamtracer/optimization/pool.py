@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import math
+import multiprocessing
 import os
 import signal
 import sys
@@ -28,6 +29,19 @@ from concurrent.futures.process import BrokenProcessPool
 from typing import Any
 
 from beamtracer.optimization.design import Evaluation, Problem
+
+
+def default_context() -> Any:
+    """The start method of the workers: forkserver where there is one, else spawn.
+
+    Not fork (the default on Linux before Python 3.14): a worker forked from a process that
+    already runs threads (BLAS, coverage, profilers) can inherit a lock another thread held,
+    and wait for it forever.
+    """
+    methods = multiprocessing.get_all_start_methods()
+    return multiprocessing.get_context(
+        "forkserver" if "forkserver" in methods else "spawn"
+    )
 
 
 class EvaluationTimeout(Exception):
@@ -97,7 +111,8 @@ class WorkerPool:
     """Evaluate designs of a problem serially (``workers=1``) or in worker processes.
 
     ``workers`` of ``-1`` is one per CPU; ``mp_context`` is the :mod:`multiprocessing`
-    context that starts them; ``timeout`` [s] bounds every evaluation.
+    context that starts them (default: :func:`default_context`); ``timeout`` [s] bounds
+    every evaluation.
     """
 
     def __init__(
@@ -114,7 +129,7 @@ class WorkerPool:
             raise ValueError(f"workers must be positive or -1, got {workers}")
         self.problem = problem
         self.workers = workers
-        self.mp_context = mp_context
+        self.mp_context = default_context() if mp_context is None else mp_context
         self.timeout = timeout
         self._executor: ProcessPoolExecutor | None = None
         if workers > 1:
