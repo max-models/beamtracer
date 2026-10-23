@@ -8,7 +8,8 @@ repos:
       - id: trailing-whitespace
       - id: check-added-large-files # Prevent giant files from being committed.
         args: [--maxkb=500]
-        exclude: ^(uv\.lock|docs/package-lock\.json)$ # generated lock files
+        # generated lock files, and the records of the examples (their cached evaluations)
+        exclude: ^(uv\.lock|docs/package-lock\.json|examples/data/.*\.jsonl)$
       - id: check-merge-conflict # Check for files that contain merge conflict strings.
   - repo: https://github.com/kynan/nbstripout
     rev: 0.9.0
