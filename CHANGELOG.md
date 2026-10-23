@@ -7,6 +7,17 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Trajectories that change state: `ChargeChangingParams(..., mode="analog")` puts every
+  trajectory in one state that changes at events sampled along its path (an optical depth used
+  up by the charge-changing rate of its state), with the force of its actual charge, so an H⁻
+  stripped inside an accelerator leaves as an atom of intermediate energy. Optional splitting
+  at the first events (`splitting`, `split_events`), random numbers from `seed` and the MPI
+  rank, sampled events in `ChargeTallies.events`. The mean over trajectories equals the
+  fractions mode. `NeutralizerChannel` takes the same `mode`.
+- Target densities along `x`: `densities` takes `{"x": [...], "density": [...]}`
+  (`AxialProfile`) as well as numbers, e.g. the gas between accelerator grids from
+  `conductance_profile` (free-molecular flow through the apertures) or a neutral-transport run.
+
 - The steady beam optics of picnic, moved from picnic at a3ac7eb (their history is picnic's):
   `BeamOptics` and `BeamOpticsConfig` (was `picnic.models.beam_optics` and
   `picnic.parameters.BeamOpticsConfig`), the solver `beamtracer.solver` (was

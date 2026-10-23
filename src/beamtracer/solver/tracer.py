@@ -229,8 +229,8 @@ class BeamTracer:
         """Set up the tracer; ``save_trajectories`` keeps every n-th trajectory (0: none).
 
         ``charge_changing`` lets every trajectory carry charge-state fractions that
-        change on the targets it crosses (see
-        :mod:`beamtracer.solver.charge_changing`).
+        change on the targets it crosses, or one state that changes at sampled
+        events (see :mod:`beamtracer.solver.charge_changing`).
         """
         if magnetic is not None and not mesh.cylindrical:
             raise ValueError("a magnetic field needs a cylindrical mesh")
@@ -246,6 +246,8 @@ class BeamTracer:
         self.charge_changing = charge_changing
         #: Sums the node charges over MPI ranks that each trace a share of the beam.
         self.reduce: Callable[[np.ndarray], np.ndarray] | None = None
+        #: The random stream of analog charge changes, e.g. the MPI rank.
+        self.stream = 0
         # Cells with an electrode node or a node next to one: only particles in these cells
         # are tested against the electrodes.
         touch = (mesh.solid >= 0) | mesh.near_solid
@@ -327,9 +329,24 @@ class BeamTracer:
         return density
 
     def _cross(
-        self, hits: PlaneHits, x, v, x_new, v_new, current, species, f=None, f_new=None
+        self,
+        hits: PlaneHits,
+        x,
+        v,
+        x_new,
+        v_new,
+        current,
+        species,
+        f=None,
+        f_new=None,
+        switch=None,
     ) -> None:
-        """Record the particles crossing the plane ``x = hits.position_x`` in this step."""
+        """Record the particles crossing the plane ``x = hits.position_x`` in this step.
+
+        The fractions are interpolated along the step, or with ``switch`` (the
+        share of the step where each trajectory changed state) taken before or
+        after it.
+        """
         xp = hits.position_x
         before = x[0] - xp
         after = x_new[0] - xp
@@ -344,7 +361,12 @@ class BeamTracer:
         fractions = None
         if f is not None:
             assert f_new is not None
-            fractions = f[:, crossed] + s * (f_new[:, crossed] - f[:, crossed])
+            if switch is None:
+                fractions = f[:, crossed] + s * (f_new[:, crossed] - f[:, crossed])
+            else:
+                fractions = np.where(
+                    s < switch[crossed], f[:, crossed], f_new[:, crossed]
+                )
         hits.append(
             point, velocity, current[crossed], species[crossed], direction, fractions
         )
@@ -413,9 +435,14 @@ class BeamTracer:
         # the space charge carries the particles' sign: currents are magnitudes
         signed_current = np.sign(particles.charge) * np.abs(current)
         changing = self.charge_changing
+        analog = changing is not None and changing.analog
         fractions = final_fractions = tallies = None
         # used only with charge changes
         state_charges = particle_rate = mass = np.zeros(0)
+        # used only with analog charge changes: every trajectory's state, the
+        # optical depth left to its next event and its number of events
+        state = depth = generation = np.zeros(0, dtype=np.int64)
+        rng = np.random.default_rng()
         if changing is not None:
             # every trajectory carries fractions; its current is e times its particle rate
             fractions = changing.initial_fractions(particles.charge)
@@ -424,6 +451,13 @@ class BeamTracer:
             particle_rate = np.abs(current) / constants.e
             mass = particles.mass.astype(float)
             tallies = ChargeTallies(changing.states)
+            if analog:
+                rng = np.random.default_rng(
+                    np.random.SeedSequence(changing.seed, spawn_key=(int(self.stream),))
+                )
+                state = changing.initial_states(particles.charge)
+                depth = rng.exponential(size=n)
+                generation = np.zeros(n, dtype=np.int64)
         species = particles.species
         saved_ids = (
             np.arange(0, n, self.save_trajectories)
@@ -442,6 +476,9 @@ class BeamTracer:
             index, x, v = index[~dead], x[:, ~dead], v[:, ~dead]
             if fractions is not None:
                 fractions = fractions[:, ~dead]
+            if analog:
+                state, depth = state[~dead], depth[~dead]
+                generation = generation[~dead]
 
         step = 0
         while index.size and step < self.max_steps:
@@ -459,6 +496,7 @@ class BeamTracer:
             # Space charge: I dt at the (Hermite) midpoint of the step.
             mid = 0.5 * (x + x_new) + dt * (v - v_new) / 8.0
             fractions_new = None
+            events = None
             if fractions is not None:
                 assert changing is not None and tallies is not None
                 # the path inside the mesh: a step that leaves it counts up to the face
@@ -468,9 +506,19 @@ class BeamTracer:
                     * (np.linalg.norm(v, axis=0) + np.linalg.norm(v_new, axis=0))
                     * self._inside(x, x_new)
                 )
-                fractions_new = changing.advance(fractions, path)
+                lines = changing.line_densities(mid[0], path)
+                if analog:
+                    events = changing.sample(rng, state, depth, generation, lines)
+                    tallies.add_events(events, particle_rate[index])
+                    # the states after the step, split trajectories by their share
+                    fractions_new = np.zeros_like(fractions)
+                    np.add.at(
+                        fractions_new, (events.state, events.parent), events.share
+                    )
+                else:
+                    fractions_new = changing.advance(fractions, lines)
                 middle = 0.5 * (fractions + fractions_new)
-                tallies.add(changing, middle, particle_rate[index], path)
+                tallies.add(changing, middle, particle_rate[index], path, lines)
                 deposited = particle_rate[index] * (state_charges @ middle) * dt
             else:
                 deposited = signed_current[index] * dt
@@ -479,8 +527,38 @@ class BeamTracer:
             for hits in planes:
                 self._cross(
                     hits, x, v, x_new, v_new, current[index], species[index],
-                    fractions, fractions_new,
+                    fractions, fractions_new, None if events is None else events.at,
                 )  # fmt: skip
+
+            if analog:
+                assert changing is not None and events is not None
+                assert final_fractions is not None
+                parent = events.parent
+                extra = index[parent[index.size :]]  # split off these trajectories
+                if extra.size:
+                    new = np.arange(status.size, status.size + extra.size)
+                    status = np.concatenate(
+                        [status, np.full(extra.size, MAX_STEPS, np.int8)]
+                    )
+                    electrode = np.concatenate(
+                        [electrode, np.full(extra.size, -1, np.int32)]
+                    )
+                    species = np.concatenate([species, species[extra]])
+                    qm = np.concatenate([qm, qm[extra]])
+                    mass = np.concatenate([mass, mass[extra]])
+                    current = np.concatenate([current, current[extra]])
+                    particle_rate = np.concatenate(
+                        [particle_rate, particle_rate[extra]]
+                    )
+                    final_fractions = np.concatenate(
+                        [final_fractions, final_fractions[:, extra]], axis=1
+                    )
+                    index = np.concatenate([index, new])
+                    x_new, v_new = x_new[:, parent], v_new[:, parent]
+                current[index] *= events.share
+                particle_rate[index] *= events.share
+                state, depth, generation = events.state, events.depth, events.generation
+                fractions_new = changing.one_hot(state)
 
             # Finished trajectories.
             px, py = self._project(x_new)
@@ -511,6 +589,9 @@ class BeamTracer:
                 index, x_new, v_new = index[keep], x_new[:, keep], v_new[:, keep]
                 if fractions_new is not None:
                     fractions_new = fractions_new[:, keep]
+                if analog:
+                    state, depth = state[keep], depth[keep]
+                    generation = generation[keep]
             x, v = x_new, v_new
             if fractions is not None:
                 fractions = fractions_new

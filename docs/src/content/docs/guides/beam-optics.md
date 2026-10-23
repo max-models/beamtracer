@@ -32,6 +32,9 @@ repeat). The geometry is planar (per unit depth) or cylindrically symmetric `(x,
   where the field is weak), the space charge that of every state with its sign. The tracer
   tallies the charge changes and target ionizations (`model.charge_tallies`), and
   `model.state_moments(x, "0")` gives the moments of one state at a plane.
+  With `mode="analog"` every trajectory is in one state instead and changes it at events
+  sampled along its path, with the force of its actual charge, so states part where the
+  field separates them (see [trajectories that change state](#trajectories-that-change-state)).
 - **Space charge**: deposited at the midpoint of every step with an area-weighted linear
   shape, and reduced by `compensation` regions.
 - **Diagnostics**: `diagnostic_planes` give the current, rms emittance and Twiss parameters of
@@ -128,6 +131,55 @@ In the configuration-file form the shapes are listed under `shapes`, each withou
 }
 ```
 
+## Trajectories that change state
+
+In the default `mode="fractions"` a trajectory carries the fractions of its particles in
+each state and feels the force of their mean charge. That is right where the field is weak,
+as in a neutralizer, but not where it separates the states: between the grids of an
+accelerator an H⁻ stripped by the residual gas continues as an atom with the energy it had
+gained there, in the direction it had there, while the ions go on being accelerated.
+
+`ChargeChangingParams(..., mode="analog")` follows that: every trajectory is in one state and
+carries an optical depth drawn from an exponential distribution, which the charge-changing
+rate of its state, $\sum_t n_t \sum_j \sigma_t(s \to j)$, uses up along its path. Where it runs
+out the trajectory changes to state $j$ with probability proportional to $n_t \sigma_t(s \to j)$
+and draws a new depth. Its force is that of its actual charge. The fractions at the planes are
+then 0 or 1, and everything else (`charge_tallies`, `state_moments`) works as in the fractions
+mode, whose result is the mean over the trajectories; `charge_tallies.events` counts the
+sampled events. With `splitting=k` a trajectory splits at each of its first `split_events`
+events into `k` trajectories of a `k`-th of its current, which draw their new states
+independently: more trajectories in the rarer states for the same number launched. The random
+numbers come from `seed` and the MPI rank, drawn afresh on every trace, so the Vlasov
+iteration still converges.
+
+The densities of the targets are numbers or profiles along $x$,
+`{"x": [...], "density": [...]}`, linear between the points: for the gas between the grids,
+sampled from a neutral-transport run (picnic's `NeutralParticleTransport`) or from the
+conductances of the apertures with
+`beamtracer.solver.charge_changing.conductance_profile(apertures, upstream, downstream)`
+(free-molecular flow through round apertures with Clausing's transmission probability, the
+gas uniform in the gaps).
+
+```python
+from beamtracer.solver.charge_changing import conductance_profile
+
+gas = conductance_profile(
+    [
+        (0.0, 0.001, 0.007),
+        (0.006, 0.011, 0.004),
+        (0.02, 0.03, 0.007),
+    ],  # x0, x1, radius (m)
+    upstream=1e20,  # m^-3, in the source
+    downstream=1e18,  # in the tank
+)
+charge_changing = ChargeChangingParams(
+    {"H2": {"-": {"0": 7e-21, "+": 3e-22}, "0": {"+": 2e-21}}},  # placeholders
+    {"H2": gas},
+    mode="analog",
+    splitting=4,
+)
+```
+
 ## A neutralizer
 
 `beamtracer.neutralizer.NeutralizerChannel` traces the beam through a channel whose gas and
@@ -135,7 +187,7 @@ plasma come from a global model ([wellbalanced](https://github.com/max-models/we
 the `neutralizer` extra); the plasma takes its beam sources from the traced paths, and the
 two are iterated to a fixed point. It gives what the global model alone cannot: the
 transmission of every charge state, the beam lost on the walls, the divergence of the
-neutrals.
+neutrals. `NeutralizerChannel(..., mode="analog")` traces it with one state per trajectory.
 
 ## Examples
 

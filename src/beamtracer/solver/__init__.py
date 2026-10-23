@@ -5,10 +5,17 @@
   positive-ion extraction, positive ions for negative-ion extraction),
 - :mod:`.fields`: the staggered electric field and axisymmetric magnetic fields,
 - :mod:`.tracer`: beams, trajectory tracing, space charge and diagnostic planes,
+- :mod:`.charge_changing`: charge changes of the beam on gas and plasma targets,
 - :mod:`.diagnostics`: emittance and Twiss parameters,
 - :mod:`.vlasov`: the Vlasov iteration that ties them together.
 """
 
+from beamtracer.solver.charge_changing import (
+    AxialProfile,
+    ChargeChanging,
+    ChargeTallies,
+    conductance_profile,
+)
 from beamtracer.solver.diagnostics import BeamMoments, mismatch, plane_moments
 from beamtracer.solver.fields import (
     AxisymmetricMagneticField,
@@ -41,12 +48,15 @@ from beamtracer.solver.vlasov import (
 
 __all__ = [
     "STATUS_NAMES",
+    "AxialProfile",
     "AxisymmetricMagneticField",
     "BeamMoments",
     "BeamParticles",
     "BeamTracer",
     "BoltzmannElectrons",
     "BoltzmannIons",
+    "ChargeChanging",
+    "ChargeTallies",
     "Compensation",
     "Electrode",
     "FaceCondition",
@@ -60,6 +70,7 @@ __all__ = [
     "VlasovState",
     "apply_compensation",
     "beam_with_energy",
+    "conductance_profile",
     "mismatch",
     "plane_moments",
     "solenoid_on_axis",

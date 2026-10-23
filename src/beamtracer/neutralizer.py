@@ -105,6 +105,12 @@ class NeutralizerChannel:
         tolerance: Convergence (largest change of a path fraction).
         max_iterations: Fixed-point iterations at most.
         step_fraction: Step of the tracer, a share of its estimate.
+        mode: ``"fractions"`` (every trajectory carries the fractions of its
+            states) or ``"analog"`` (one state per trajectory, changed at
+            sampled events); see :mod:`beamtracer.solver.charge_changing`.
+        splitting: In analog mode, the trajectories an event splits one into.
+        seed: In analog mode, the seed of the random numbers.
+        settings: Entries of the ``BeamOptics`` configuration to override.
     """
 
     neutralizer: Neutralizer
@@ -117,6 +123,9 @@ class NeutralizerChannel:
     tolerance: float = 1.0e-5
     max_iterations: int = 50
     step_fraction: float = 0.5
+    mode: str = "fractions"
+    splitting: int = 1
+    seed: int | None = 0
     settings: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -189,6 +198,9 @@ class NeutralizerChannel:
                 cross_sections,
                 densities,
                 ionization={"gas": dict(n.data.gas_ionization)},
+                mode=self.mode,
+                splitting=self.splitting,
+                seed=self.seed,
             ),
             "compensation": [SpaceChargeCompensation(0.0, n.length, self.compensation)],
             "iterations": 1 if self.compensation >= 1.0 else 10,

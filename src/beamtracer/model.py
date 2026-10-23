@@ -178,6 +178,7 @@ class BeamOptics:
                 else config.charge_changing.build()
             ),
         )
+        self.tracer.stream = self.rank  # every rank its own analog charge changes
         self.species_names = [beam.name for beam in config.beams]
         self.species_mass = np.array(
             [beam.mass * constants.atomic_mass for beam in config.beams]

@@ -8,6 +8,7 @@ masses in atomic mass units and energies and temperatures in eV.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, fields, replace
 from typing import Any, ClassVar
 
@@ -131,15 +132,25 @@ class NegativeExtractionPlasma:
             )
 
 
+def _entry(value: Any, name: str) -> Any:
+    """Return ``value[name]`` of a mapping, else the attribute ``name``."""
+    return value[name] if isinstance(value, Mapping) else getattr(value, name)
+
+
 @dataclass(frozen=True)
 class ChargeChangingParams:
-    """Charge changes of the beam on uniform targets (gas, plasma), e.g. in a neutralizer.
+    """Charge changes of the beam on targets (gas, plasma), e.g. in a neutralizer.
 
     ``cross_sections`` are ``{target: {from_state: {to_state: sigma}}}`` (m^2),
-    ``densities`` the target densities ``{target: n}`` (m^-3), ``charges`` the charge
-    of every state in e, ``ionization`` ``{target: {state: sigma}}`` cross sections
-    for ionizing the targets, tallied only. Every trajectory then carries the
-    fractions of its particles in each state; see
+    ``densities`` the target densities ``{target: n}`` (m^-3), uniform or a profile
+    along ``x`` ``{"x": [...], "density": [...]}`` (e.g. the gas between the grids
+    of an accelerator, :func:`~beamtracer.solver.charge_changing.conductance_profile`),
+    ``charges`` the charge of every state in e, ``ionization``
+    ``{target: {state: sigma}}`` cross sections for ionizing the targets, tallied
+    only. In ``mode="fractions"`` every trajectory carries the fractions of its
+    particles in each state; in ``mode="analog"`` it is in one state that changes
+    at sampled events, and an event splits it into ``splitting`` trajectories
+    for its first ``split_events`` events, with random numbers from ``seed``; see
     :mod:`beamtracer.solver.charge_changing`.
     """
 
@@ -147,6 +158,10 @@ class ChargeChangingParams:
     densities: dict
     charges: dict = None  # type: ignore[assignment]
     ionization: dict = None  # type: ignore[assignment]
+    mode: str = "fractions"
+    splitting: int = 1
+    split_events: int = 1
+    seed: int | None = 0
 
     def __post_init__(self) -> None:
         """Fill in the defaults and copy the mappings."""
@@ -166,7 +181,19 @@ class ChargeChangingParams:
             },
         )
         object.__setattr__(
-            self, "densities", {str(t): float(n) for t, n in self.densities.items()}
+            self,
+            "densities",
+            {
+                str(t): (
+                    {
+                        "x": [float(v) for v in _entry(n, "x")],
+                        "density": [float(v) for v in _entry(n, "density")],
+                    }
+                    if isinstance(n, Mapping) or hasattr(n, "density")
+                    else float(n)
+                )
+                for t, n in self.densities.items()
+            },
         )
         object.__setattr__(
             self,
@@ -181,7 +208,7 @@ class ChargeChangingParams:
         """The :class:`~beamtracer.solver.charge_changing.ChargeChanging` of these settings."""
         from plasmacoll import ChargeStateTransitions
 
-        from beamtracer.solver.charge_changing import ChargeChanging
+        from beamtracer.solver.charge_changing import AxialProfile, ChargeChanging
 
         transitions = ChargeStateTransitions(
             {
@@ -194,8 +221,19 @@ class ChargeChangingParams:
             },
             states=tuple(self.charges),
         )
+        densities = {
+            t: AxialProfile(n["x"], n["density"]) if isinstance(n, dict) else n
+            for t, n in self.densities.items()
+        }
         return ChargeChanging(
-            transitions, self.densities, self.charges, self.ionization
+            transitions,
+            densities,
+            self.charges,
+            self.ionization,
+            mode=self.mode,
+            splitting=self.splitting,
+            split_events=self.split_events,
+            seed=self.seed,
         )
 
 
