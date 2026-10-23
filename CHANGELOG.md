@@ -62,6 +62,10 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `ShapeParams` (configuration-file form `type: union` with a `shapes` list), simgeometry's
   Boolean union of the shapes. The field, the hits and `surface_fields()` treat it as one
   electrode.
+- The full example "Optimising an einzel lens: the map and the optimiser's path": a scan of
+  the spot over the voltage and the gap with the 5 MV/m surface-field limit, the path of
+  differential evolution over it, and the lens it finds; its evaluations come from a
+  committed record, so the docs build solves only the final lens.
 
 ### Changed
 
