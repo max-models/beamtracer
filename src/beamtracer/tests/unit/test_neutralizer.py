@@ -66,3 +66,23 @@ def test_the_beam_case_is_checked(parallel) -> None:
         NeutralizerChannel(neutralizer(), beam_width=0.06, cell=0.007).beam_config(
             1e19, 1e17
         )
+
+
+def test_analog_trajectories_reproduce_the_parallel_beam(parallel) -> None:
+    """One state per trajectory: the same neutral fraction, within the statistics."""
+    num = 1000
+    channel = NeutralizerChannel(
+        neutralizer(), beam_width=0.06, num_particles=num, mode="analog", seed=5
+    )
+    result = channel.solve()
+    _, reference = parallel
+    assert result.converged
+    assert result.transmission == pytest.approx(1.0, abs=1e-9)
+    fraction = reference.neutral_fraction
+    spread = np.sqrt(fraction * (1.0 - fraction) / num)
+    assert result.neutral_fraction == pytest.approx(fraction, abs=4.0 * spread)
+    assert result.path_fractions == pytest.approx(
+        reference.path_fractions, abs=4.0 * 0.5 / np.sqrt(num)
+    )
+    hits = result.model.plane(channel.exit_plane).fractions
+    assert set(np.unique(hits)) <= {0.0, 1.0}
