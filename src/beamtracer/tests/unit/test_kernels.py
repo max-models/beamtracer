@@ -13,8 +13,8 @@ import importlib
 import numpy as np
 import pytest
 from cunumpy.kernel_testing import emulate_cuda_kernel, emulation_compiler
+from cunumpy.kernels import metal_available
 
-from beamtracer.kernels._metal import metal_available
 from beamtracer.kernels.catalog import KERNEL_NAMES, KERNELS
 
 NAMES = ("staggered_field_2d", "deposit_trajectories_2d")

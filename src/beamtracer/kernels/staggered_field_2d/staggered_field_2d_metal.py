@@ -1,7 +1,7 @@
 """The Metal version (Apple-silicon GPU, float32) of the ``staggered_field_2d`` kernel.
 
 ``staggered_field_2d_pyccel.py`` next to this file is the CPU version with the same
-arguments. One thread per point; see :mod:`beamtracer.kernels._metal`. The cell
+arguments. One thread per point; see :mod:`beamtracer.kernels`. The cell
 coordinates ``(p - origin) / h`` are formed on the host in float64, then the GPU
 interpolates in float32.
 """
@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 from numpy import ndarray as Array
 
-from beamtracer.kernels._metal import make_kernel
+from beamtracer.kernels import KERNEL_PACKAGE
 
 _HEADER = """
 float beamtracer_clamped_bilinear(
@@ -37,7 +37,7 @@ _SOURCE = """
     ey[k] = beamtracer_clamped_bilinear(fy, fy_shape[1], sx, sy + 0.5f, nx - 2, ny - 1);
 """
 
-_KERNEL = make_kernel(
+_KERNEL = KERNEL_PACKAGE.metal_kernel(
     "beamtracer_staggered_field_2d",
     _SOURCE,
     inputs=["cell_x", "cell_y", "fx", "fy"],
