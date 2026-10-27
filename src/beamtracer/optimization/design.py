@@ -87,10 +87,6 @@ class Design:
         """Return the ``(lower, upper)`` bounds, in order."""
         return [(p.lower, p.upper) for p in self.parameters]
 
-    def __len__(self) -> int:
-        """Return the number of parameters."""
-        return len(self.parameters)
-
     def vector(self, values: Values) -> np.ndarray:
         """Return the values (a mapping by name, or a sequence in order) as an array."""
         if isinstance(values, Mapping):
@@ -128,6 +124,23 @@ class Design:
         """Return the configuration of the values (the values without ``build``)."""
         named = self.values(values)
         return named if self.build is None else self.build(named)
+
+    def __len__(self) -> int:
+        """Return the number of parameters."""
+        return len(self.parameters)
+
+
+def _plain(value: Any) -> Any:
+    """Return ``value`` with NumPy scalars and arrays as Python numbers and lists."""
+    if isinstance(value, Mapping):
+        return {str(k): _plain(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [_plain(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
 
 
 @dataclass(frozen=True)
@@ -227,19 +240,6 @@ class Evaluation:
             diagnostics=data.get("diagnostics", {}),
             parameters=data.get("parameters", {}),
         )
-
-
-def _plain(value: Any) -> Any:
-    """Return ``value`` with NumPy scalars and arrays as Python numbers and lists."""
-    if isinstance(value, Mapping):
-        return {str(k): _plain(v) for k, v in value.items()}
-    if isinstance(value, list | tuple):
-        return [_plain(v) for v in value]
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, np.generic):
-        return value.item()
-    return value
 
 
 @dataclass(frozen=True)

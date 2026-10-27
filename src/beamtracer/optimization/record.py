@@ -22,67 +22,6 @@ import numpy as np
 from beamtracer.optimization.design import Design, Evaluation
 
 
-class Record:
-    """The evaluations of a design, in memory and (with a ``path``) in a file.
-
-    An existing file at ``path`` is read first; its parameter names must be those of the
-    ``design``. New evaluations are appended to the file line by line as they arrive, so
-    an interrupted search loses nothing it finished.
-    """
-
-    def __init__(self, design: Design, path: str | Path | None = None) -> None:
-        """Read the evaluations already recorded at ``path``, if any."""
-        self.design = design
-        self.path = None if path is None else Path(path)
-        self._evaluations: list[Evaluation] = []
-        self._by_key: dict[str, Evaluation] = {}
-        if self.path is not None and self.path.exists():
-            for line_number, line in enumerate(self.path.read_text().splitlines(), 1):
-                if not line.strip():
-                    continue
-                data = json.loads(line)
-                names = tuple(data["parameters"])
-                if set(names) != set(design.names):
-                    raise ValueError(
-                        f"{self.path}:{line_number} has the parameters {list(names)}, "
-                        f"the design {list(design.names)}"
-                    )
-                self._add(Evaluation.from_dict(data))
-
-    def _add(self, evaluation: Evaluation) -> str:
-        key = self.design.key(evaluation.parameters)
-        self._evaluations.append(evaluation)
-        self._by_key.setdefault(key, evaluation)
-        return key
-
-    def __len__(self) -> int:
-        """Return the number of recorded evaluations."""
-        return len(self._evaluations)
-
-    def __iter__(self) -> Iterator[Evaluation]:
-        """Iterate over the evaluations in the order they were recorded."""
-        return iter(self._evaluations)
-
-    def get(self, key: str) -> Evaluation | None:
-        """Return the recorded evaluation of a design key, or ``None``."""
-        return self._by_key.get(key)
-
-    def append(self, evaluations: Iterable[Evaluation]) -> None:
-        """Record new evaluations (and append them to the file)."""
-        lines = []
-        for evaluation in evaluations:
-            key = self._add(evaluation)
-            lines.append(json.dumps({"key": key, **evaluation.to_dict()}))
-        if self.path is not None and lines:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a") as file:
-                file.write("\n".join(lines) + "\n")
-
-    def to_dataset(self) -> Any:
-        """Return the evaluations as an :class:`xarray.Dataset` (see :func:`to_dataset`)."""
-        return to_dataset(self._evaluations)
-
-
 def _column(values: list[Any]) -> np.ndarray:
     """Return a column of numbers as floats (NaN for missing), or as objects."""
     if all(v is None or isinstance(v, bool | int | float) for v in values):
@@ -148,6 +87,67 @@ def to_dataset(evaluations: Iterable[Evaluation]) -> Any:
         {"kind": "flag"},
     )
     return xr.Dataset(data, coords={"evaluation": np.arange(len(evaluations))})
+
+
+class Record:
+    """The evaluations of a design, in memory and (with a ``path``) in a file.
+
+    An existing file at ``path`` is read first; its parameter names must be those of the
+    ``design``. New evaluations are appended to the file line by line as they arrive, so
+    an interrupted search loses nothing it finished.
+    """
+
+    def _add(self, evaluation: Evaluation) -> str:
+        key = self.design.key(evaluation.parameters)
+        self._evaluations.append(evaluation)
+        self._by_key.setdefault(key, evaluation)
+        return key
+
+    def __init__(self, design: Design, path: str | Path | None = None) -> None:
+        """Read the evaluations already recorded at ``path``, if any."""
+        self.design = design
+        self.path = None if path is None else Path(path)
+        self._evaluations: list[Evaluation] = []
+        self._by_key: dict[str, Evaluation] = {}
+        if self.path is not None and self.path.exists():
+            for line_number, line in enumerate(self.path.read_text().splitlines(), 1):
+                if not line.strip():
+                    continue
+                data = json.loads(line)
+                names = tuple(data["parameters"])
+                if set(names) != set(design.names):
+                    raise ValueError(
+                        f"{self.path}:{line_number} has the parameters {list(names)}, "
+                        f"the design {list(design.names)}"
+                    )
+                self._add(Evaluation.from_dict(data))
+
+    def get(self, key: str) -> Evaluation | None:
+        """Return the recorded evaluation of a design key, or ``None``."""
+        return self._by_key.get(key)
+
+    def append(self, evaluations: Iterable[Evaluation]) -> None:
+        """Record new evaluations (and append them to the file)."""
+        lines = []
+        for evaluation in evaluations:
+            key = self._add(evaluation)
+            lines.append(json.dumps({"key": key, **evaluation.to_dict()}))
+        if self.path is not None and lines:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a") as file:
+                file.write("\n".join(lines) + "\n")
+
+    def to_dataset(self) -> Any:
+        """Return the evaluations as an :class:`xarray.Dataset` (see :func:`to_dataset`)."""
+        return to_dataset(self._evaluations)
+
+    def __iter__(self) -> Iterator[Evaluation]:
+        """Iterate over the evaluations in the order they were recorded."""
+        return iter(self._evaluations)
+
+    def __len__(self) -> int:
+        """Return the number of recorded evaluations."""
+        return len(self._evaluations)
 
 
 def load_record(path: str | Path) -> Any:

@@ -115,6 +115,14 @@ class WorkerPool:
     every evaluation.
     """
 
+    def _start(self) -> None:
+        self._executor = ProcessPoolExecutor(
+            max_workers=self.workers,
+            mp_context=self.mp_context,
+            initializer=_exit_with,
+            initargs=(os.getpid(),),
+        )
+
     def __init__(
         self,
         problem: Problem,
@@ -134,14 +142,6 @@ class WorkerPool:
         self._executor: ProcessPoolExecutor | None = None
         if workers > 1:
             self._start()
-
-    def _start(self) -> None:
-        self._executor = ProcessPoolExecutor(
-            max_workers=self.workers,
-            mp_context=self.mp_context,
-            initializer=_exit_with,
-            initargs=(os.getpid(),),
-        )
 
     def _restart(self) -> None:
         self.close(terminate=True)
