@@ -91,6 +91,13 @@ def is_installable(releases: Releases, requirement: Requirement) -> bool:
     return False
 
 
+def _version_key(text: str) -> Version:
+    try:
+        return Version(text)
+    except InvalidVersion:
+        return Version("0")
+
+
 def check(pyproject: dict, fetch: Fetch = fetch_releases) -> list[str]:
     """Return one message per dependency that PyPI would reject or that cannot be installed."""
     project = pyproject.get("project", {})
@@ -137,13 +144,6 @@ def check(pyproject: dict, fetch: Fetch = fetch_releases) -> list[str]:
                 f"(newest: {newest}); publish the dependency first, or loosen the range"
             )
     return problems
-
-
-def _version_key(text: str) -> Version:
-    try:
-        return Version(text)
-    except InvalidVersion:
-        return Version("0")
 
 
 def main(argv: list[str] | None = None) -> int:

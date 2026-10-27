@@ -96,16 +96,16 @@ class AxialProfile:
         object.__setattr__(self, "x", tuple(x.tolist()))
         object.__setattr__(self, "density", tuple(density.tolist()))
 
-    def __call__(self, x: np.ndarray) -> np.ndarray:
-        """Return the density at ``x``."""
-        return np.interp(x, self.x, self.density)
-
     def line_density(self, start: float, end: float) -> float:
         """Return ``int n dx`` (m^-2) from ``start`` to ``end``, exact for the linear profile."""
         nodes = np.array(self.x)
         inside = nodes[(nodes > start) & (nodes < end)]
         points = np.concatenate([[start], inside, [end]])
         return float(np.trapezoid(self(points), points))
+
+    def __call__(self, x: np.ndarray) -> np.ndarray:
+        """Return the density at ``x``."""
+        return np.interp(x, self.x, self.density)
 
 
 Density = float | AxialProfile

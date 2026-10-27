@@ -73,6 +73,20 @@ def resolution(workers: int = WORKERS) -> None:
         print(f"{name}: {time.perf_counter() - start:.0f} s")
 
 
+def report(name: str, result: Result, start: float) -> None:
+    """Print what a search found."""
+    best = result.best
+    found = (
+        f"best {result.x}, divergence {result.fun * 1e3:.1f} mrad"
+        if best is not None and best.feasible
+        else "nothing feasible"
+    )
+    print(
+        f"{name}: {result.evaluated} new evaluations in "
+        f"{time.perf_counter() - start:.0f} s, {found}"
+    )
+
+
 def search(workers: int = WORKERS, **settings: int) -> Result:
     """Run (or resume) the search over three parameters on the coarse mesh."""
     start = time.perf_counter()
@@ -122,20 +136,6 @@ def check(workers: int = WORKERS, **settings: int) -> None:
             record=HERE / f"beamlet_{name}_fine.jsonl",
         )
         report(f"{name} on the fine mesh", checked, start)
-
-
-def report(name: str, result: Result, start: float) -> None:
-    """Print what a search found."""
-    best = result.best
-    found = (
-        f"best {result.x}, divergence {result.fun * 1e3:.1f} mrad"
-        if best is not None and best.feasible
-        else "nothing feasible"
-    )
-    print(
-        f"{name}: {result.evaluated} new evaluations in "
-        f"{time.perf_counter() - start:.0f} s, {found}"
-    )
 
 
 if __name__ == "__main__":

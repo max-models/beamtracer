@@ -94,6 +94,26 @@ class _Evaluator:
         self.reused = 0
         self._latest: dict[str, Evaluation] = {}
 
+    def again(self, points: np.ndarray) -> list[Evaluation]:
+        """Return the evaluations of designs of the last batch, without counting them.
+
+        Differential evolution asks for the constraints of a generation first and then
+        for the objective of its feasible members; other designs are evaluated.
+        """
+        design = self.problem.design
+        points = np.atleast_2d(np.asarray(points, dtype=float))
+        keys = [design.key(x) for x in points]
+        if all(key in self._latest for key in keys):
+            return [self._latest[key] for key in keys]
+        return self(points)
+
+    def constraints(self, evaluation: Evaluation) -> list[float]:
+        """Return the values DE sees: the constraints, and 1 for a penalised point."""
+        if not evaluation.ok:
+            return [FAILED] * len(self.problem.constraints) + [1.0]
+        values = [evaluation.constraints[name] for name in self.problem.constraints]
+        return [FAILED if math.isnan(v) else v for v in values] + [0.0]
+
     def __call__(self, points: np.ndarray) -> list[Evaluation]:
         """Return the evaluations of the designs ``points`` ``(S, N)``."""
         design = self.problem.design
@@ -119,26 +139,6 @@ class _Evaluator:
         self.evaluations.extend(batch)
         self._latest = dict(zip(keys, batch, strict=True))
         return batch
-
-    def again(self, points: np.ndarray) -> list[Evaluation]:
-        """Return the evaluations of designs of the last batch, without counting them.
-
-        Differential evolution asks for the constraints of a generation first and then
-        for the objective of its feasible members; other designs are evaluated.
-        """
-        design = self.problem.design
-        points = np.atleast_2d(np.asarray(points, dtype=float))
-        keys = [design.key(x) for x in points]
-        if all(key in self._latest for key in keys):
-            return [self._latest[key] for key in keys]
-        return self(points)
-
-    def constraints(self, evaluation: Evaluation) -> list[float]:
-        """Return the values DE sees: the constraints, and 1 for a penalised point."""
-        if not evaluation.ok:
-            return [FAILED] * len(self.problem.constraints) + [1.0]
-        values = [evaluation.constraints[name] for name in self.problem.constraints]
-        return [FAILED if math.isnan(v) else v for v in values] + [0.0]
 
 
 def _best(problem: Problem, evaluations: Sequence[Evaluation]) -> Evaluation | None:
