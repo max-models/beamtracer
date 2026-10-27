@@ -80,6 +80,9 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The kernels are built with cunumpy's `KernelPackage`
+  (`beamtracer.kernels.KERNEL_PACKAGE`): `kernels/_build.py`, `kernels/_metal.py` and
+  `kernels/compile.py` are gone, and the build cache is still `BEAMTRACER_KERNEL_CACHE`.
 - The solver's `Particles` is `BeamParticles` (it clashed with picnic's marker containers).
 - The electrodes are evaluated on the host whatever cunumpy's active backend, as the rest of
   the mesh.

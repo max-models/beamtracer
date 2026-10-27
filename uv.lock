@@ -1083,7 +1083,7 @@ toml = [
 [[package]]
 name = "cunumpy"
 version = "0.7.1"
-source = { git = "https://github.com/max-models/cunumpy?branch=devel#5986211654bec895ee226a6d0fdc5c8b7d41a7fd" }
+source = { git = "https://github.com/max-models/cunumpy?branch=devel#92b38a5a0e00d7ccf03aa39849d6c7eaee946859" }
 dependencies = [
     { name = "array-api-compat" },
     { name = "maybempi" },

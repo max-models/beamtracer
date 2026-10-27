@@ -2,7 +2,7 @@
 
 Every kernel ``<name>`` lives in its own folder::
 
-    beamtracer/kernels/<name>/__init__.py        kernel = xp.kernels.Kernel.from_folder(...)
+    beamtracer/kernels/<name>/__init__.py        kernel = KERNEL_PACKAGE.from_folder(__name__)
     beamtracer/kernels/<name>/<name>_pyccel.py   def <name>(...)    CPU, compiled with Pyccel
     beamtracer/kernels/<name>/<name>_cuda.cu     __global__ void <name>(...)    GPU (NVRTC)
     beamtracer/kernels/<name>/<name>_numpy.py    def <name>(...)    CPU, without Pyccel
@@ -19,8 +19,7 @@ import importlib
 from collections.abc import Callable
 
 import cunumpy as xp
-
-from beamtracer.kernels._metal import metal_available
+from cunumpy.kernels import metal_available
 
 __all__ = ["KERNELS", "KERNEL_NAMES", "METAL_KERNEL_NAMES", "metal_kernel"]
 
