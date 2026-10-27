@@ -155,7 +155,6 @@ EXAMPLE = {
         "src/beamtracer/solver/*.py",
         "src/beamtracer/config.py",
         "src/beamtracer/sections.py",
-        "src/beamtracer/output.py",
     ],
     "figures": {
         "": "Potential with the converged proton trajectories and the electrodes.",

@@ -269,6 +269,7 @@ dependencies = [
     { name = "astropy", version = "8.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "cunumpy" },
     { name = "maybempi" },
+    { name = "mpifield" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -341,6 +342,7 @@ requires-dist = [
     { name = "matplotlib", marker = "extra == 'docs'", specifier = ">=3.10.9" },
     { name = "matplotlib", marker = "extra == 'examples'" },
     { name = "maybempi", git = "https://github.com/max-models/maybempi?branch=devel" },
+    { name = "mpifield", git = "https://github.com/max-models/mpifield?branch=devel" },
     { name = "nbclient", marker = "extra == 'docs'", specifier = ">=0.11" },
     { name = "nbformat", marker = "extra == 'docs'", specifier = ">=5.11.1" },
     { name = "numpy" },
@@ -2463,6 +2465,27 @@ dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "scope-profiler" },
+]
+
+[[package]]
+name = "mpifield"
+version = "0.1.0"
+source = { git = "https://github.com/max-models/mpifield?branch=devel#603d5f834a2ac0ed9c5a8723e2e94915d980bc5f" }
+dependencies = [
+    { name = "cunumpy" },
+    { name = "maybempi" },
+    { name = "mpiarray" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "pyccel" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "scope-profiler" },
+    { name = "simgeometry" },
+    { name = "xarray", version = "2025.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "xarray", version = "2026.9.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
 
 [[package]]

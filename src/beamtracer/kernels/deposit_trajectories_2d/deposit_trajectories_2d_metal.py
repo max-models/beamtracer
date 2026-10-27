@@ -2,8 +2,9 @@
 
 ``deposit_trajectories_2d_pyccel.py`` next to this file is the CPU version with the same
 arguments. One thread per charge; the coordinates relative to the origin are formed on
-the host in float64 (``r1``, ``r2`` of the cylindrical weights as well), see
-:mod:`beamtracer.kernels._metal_grid`.
+the host in float64 (``r1``, ``r2`` of the cylindrical weights as well). The kernel adds
+into a zeroed float32 ``delta`` with float atomics (the Apple GPU has no 64-bit ones),
+which the host adds to ``charge`` in float64.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from __future__ import annotations
 import numpy as np
 from numpy import ndarray as Array
 
-from beamtracer.kernels._metal_grid import make_scatter_kernel, scatter
+from beamtracer.kernels import KERNEL_PACKAGE
 
 _SOURCE = """
     uint k = thread_position_in_grid.x;
@@ -32,10 +33,12 @@ _SOURCE = """
     atomic_fetch_add_explicit(&delta[(i + 1) * ny + j + 1], t * u * value, memory_order_relaxed);
 """
 
-_KERNEL = make_scatter_kernel(
+_KERNEL = KERNEL_PACKAGE.metal_kernel(
     "beamtracer_deposit_trajectories_2d",
     _SOURCE,
-    inputs=["cell_x", "cell_y", "frac_x", "frac_y", "q", "shape"],
+    ["cell_x", "cell_y", "frac_x", "frac_y", "q", "shape"],
+    ["delta"],
+    atomic_outputs=True,
 )
 
 
@@ -70,14 +73,15 @@ def deposit_trajectories_2d(
     # cells far outside the mesh only need to stay outside it in float32
     cell_x = np.clip(cell_x, -2.0, charge.shape[0] + 1.0)
     cell_y = np.clip(cell_y, -2.0, charge.shape[1] + 1.0)
-    scatter(
-        _KERNEL,
+    delta = np.zeros(charge.shape, dtype=np.float64)
+    _KERNEL(
         cell_x,
         cell_y,
         frac_x,
         frac_y,
         q,
         [charge.shape[0], charge.shape[1]],
-        field=charge,
+        out=delta,
         n_threads=len(px),
     )
+    charge += delta
