@@ -80,6 +80,10 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `BeamOptics.potential_field` and `charge_density` are `mpifield.Field`s (new dependency
+  `mpifield`): `NodeField` and `beamtracer.output` are gone, the calls (`evaluate`,
+  `get_field_data`, `to_numpy`) stay. The Metal deposit no longer goes through
+  `kernels/_metal_grid.py`, a copy of mpifield's, which is removed.
 - The kernels are built with cunumpy's `KernelPackage`
   (`beamtracer.kernels.KERNEL_PACKAGE`): `kernels/_build.py`, `kernels/_metal.py` and
   `kernels/compile.py` are gone, and the build cache is still `BEAMTRACER_KERNEL_CACHE`.

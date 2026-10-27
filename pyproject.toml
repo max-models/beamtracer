@@ -28,6 +28,8 @@ dependencies = [
   "cunumpy>=0.7.0",
   # MPI only under an MPI launcher; a serial stand-in for mpi4py otherwise
   "maybempi>=0.1",
+  # the potential and charge density on the nodes (Field)
+  "mpifield>=0.1.0",
   "numpy",
   # the charge-state transitions of a fast beam (ChargeChanging)
   "plasmacoll>=0.3.0",
@@ -106,6 +108,7 @@ report.show_missing = true
 # one entry per max-models package in [project], spelled exactly like this in every repo:
 cunumpy = { git = "https://github.com/max-models/cunumpy", branch = "devel" }
 maybempi = { git = "https://github.com/max-models/maybempi", branch = "devel" }
+mpifield = { git = "https://github.com/max-models/mpifield", branch = "devel" }
 plasma-plots = { git = "https://github.com/max-models/plasma-plots", branch = "devel" }
 plasmacoll = { git = "https://github.com/max-models/plasmacoll", branch = "devel" }
 scope-profiler = { git = "https://github.com/max-models/scope-profiler", branch = "devel" }

@@ -25,7 +25,6 @@ from beamtracer.config import (
     SpaceChargeCompensation,
 )
 from beamtracer.model import BeamOptics
-from beamtracer.output import NodeField
 from beamtracer.sections import (
     FieldBCs,
     FieldBoundaryCondition,
@@ -54,7 +53,6 @@ __all__ = [
     "FieldBoundaryCondition",
     "GridParams",
     "NegativeExtractionPlasma",
-    "NodeField",
     "ObjectParams",
     "ParticleBeam",
     "ShapeParams",

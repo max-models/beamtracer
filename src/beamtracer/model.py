@@ -22,11 +22,11 @@ import cunumpy as xp
 import numpy as np
 import scope_profiler as sp
 from maybempi import MPI
+from mpifield import Field
 from scipy import constants
 
 from beamtracer._profiling import PROFILE_TAGS
 from beamtracer.config import BeamOpticsConfig, BeamSpecies, NegativeExtractionPlasma
-from beamtracer.output import NodeField
 from beamtracer.sections import ObjectParams
 from beamtracer.solver import (
     STATUS_NAMES,
@@ -185,7 +185,7 @@ class BeamOptics:
         )
         self._state: VlasovState | None = None
         self._is_finished = False
-        self._fields: dict[tuple[str, bool], NodeField] = {}
+        self._fields: dict[tuple[str, bool], Field] = {}
 
     def _particles(self) -> tuple[BeamParticles, float]:
         """Return this rank's share of the beams and the total ``sum J / v``."""
@@ -366,16 +366,18 @@ class BeamOptics:
             fields[name] = float(np.max(magnitude[mine])) if mine.any() else 0.0
         return fields
 
-    def _field(self, name: str, data: np.ndarray) -> NodeField:
+    def _field(self, name: str, data: np.ndarray) -> Field:
         key = (name, self._state is not None)
         if key not in self._fields:
             grid = self.config.grid
-            self._fields[key] = NodeField(data, grid.lower_bound, grid.upper_bound)
+            self._fields[key] = Field.from_array(
+                data, grid.lower_bound, grid.upper_bound
+            )
         return self._fields[key]
 
     @property
-    def potential_field(self) -> NodeField:
-        """Return the potential [V] as a :class:`~beamtracer.output.NodeField`.
+    def potential_field(self) -> Field:
+        """Return the potential [V] as a :class:`mpifield.Field` on the nodes.
 
         It is zero before the run.
         """
@@ -383,10 +385,10 @@ class BeamOptics:
         return self._field("potential", data)
 
     @property
-    def charge_density(self) -> NodeField:
+    def charge_density(self) -> Field:
         """Return the beam's (compensated) charge density [C/m^3].
 
-        A :class:`~beamtracer.output.NodeField`, zero before the run.
+        A :class:`mpifield.Field` on the nodes, zero before the run.
         """
         data = (
             np.zeros(self.mesh.shape)
