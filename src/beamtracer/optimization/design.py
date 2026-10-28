@@ -153,7 +153,9 @@ class Evaluation:
     model's own verdict, ``failure`` the message of an exception, ``wall_time`` [s] the
     time of the evaluation and ``diagnostics`` anything else worth keeping (numbers,
     strings or flags, recorded with the evaluation). ``parameters`` are filled in by
-    :meth:`Problem.evaluate`.
+    :meth:`Problem.evaluate`, ``generation`` by :func:`~beamtracer.optimization.optimize`:
+    the generation of the evolution that asked for the design (0 the initial
+    population; ``None`` outside a search).
     """
 
     objectives: Mapping[str, float]
@@ -163,6 +165,7 @@ class Evaluation:
     failure: str | None = None
     diagnostics: Mapping[str, Any] = field(default_factory=dict)
     parameters: Mapping[str, float] = field(default_factory=dict)
+    generation: int | None = None
 
     def __post_init__(self) -> None:
         """Store the values as floats."""
@@ -226,6 +229,7 @@ class Evaluation:
             "wall_time": self.wall_time,
             "failure": self.failure,
             "diagnostics": _plain(self.diagnostics),
+            "generation": self.generation,
         }
 
     @classmethod
@@ -239,6 +243,7 @@ class Evaluation:
             failure=data.get("failure"),
             diagnostics=data.get("diagnostics", {}),
             parameters=data.get("parameters", {}),
+            generation=data.get("generation"),
         )
 
 

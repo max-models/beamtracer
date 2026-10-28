@@ -1,8 +1,9 @@
 """The record of a search: every evaluation, one JSON line each, in the order evaluated.
 
 A line holds the design's key (see :meth:`~beamtracer.optimization.Design.key`), the
-parameters, objectives, constraints, flags, wall time and diagnostics of one
-:class:`~beamtracer.optimization.Evaluation`. Python's :mod:`json` writes a non-finite
+parameters, objectives, constraints, flags, wall time, diagnostics and generation of one
+:class:`~beamtracer.optimization.Evaluation` (records written before the generation was
+recorded read as ``None``). Python's :mod:`json` writes a non-finite
 value as ``NaN`` or ``Infinity``, which it also reads. A search given an existing record
 resumes from it: designs already recorded are taken from the record instead of being
 evaluated again. :func:`load_record` reads a record as an :class:`xarray.Dataset` for
@@ -37,7 +38,8 @@ def to_dataset(evaluations: Iterable[Evaluation]) -> Any:
     The parameters, objectives, constraints and scalar diagnostics are variables under
     their own names (a name used twice gets its kind as a prefix, e.g.
     ``diagnostic_spot``), each with a ``kind`` attribute; ``converged``, ``ok``,
-    ``feasible``, ``wall_time`` and ``failure`` (empty when none) are added. For a
+    ``feasible``, ``wall_time`` and ``failure`` (empty when none) are added, and
+    ``generation`` when an evaluation has one (``-1`` for those without). For a
     :class:`pandas.DataFrame` use the dataset's ``to_dataframe()``.
     """
     import xarray as xr
@@ -86,6 +88,13 @@ def to_dataset(evaluations: Iterable[Evaluation]) -> Any:
         np.array([e.failure or "" for e in evaluations], dtype=object),
         {"kind": "flag"},
     )
+    generations = [e.generation for e in evaluations]
+    if any(g is not None for g in generations):
+        data["generation"] = (
+            "evaluation",
+            np.array([-1 if g is None else g for g in generations], dtype=int),
+            {"kind": "search", "long_name": "generation that asked for the design"},
+        )
     return xr.Dataset(data, coords={"evaluation": np.arange(len(evaluations))})
 
 

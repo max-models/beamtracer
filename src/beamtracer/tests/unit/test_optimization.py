@@ -198,6 +198,88 @@ def test_a_resumed_run_continues_from_its_record(tmp_path) -> None:
     assert len(Record(problem.design, path)) == first.evaluated + longer.evaluated
 
 
+def test_the_generations_and_the_path() -> None:
+    problem = Problem(_square(), disc, constraints="line")
+    seen = []
+    result = optimize(
+        problem,
+        seed=1,
+        maxiter=10,
+        popsize=5,
+        tol=0.0,
+        callback=lambda x, convergence: seen.append(x),
+    )
+    assert result.scipy is not None and result.scipy.nit == 10
+    generations = [e.generation for e in result.evaluations]
+    assert generations == sorted(generations)
+    assert generations.count(0) == 10  # the initial population, 5 per parameter
+    assert set(generations) == set(range(11))
+    assert all(generations.count(g) <= 10 for g in range(1, 11))
+    # each design once; SciPy's checks of the best design are repeats
+    keys = [problem.design.key(e.parameters) for e in result.evaluations]
+    assert len(set(keys)) == len(keys) == result.evaluated
+    assert result.repeats >= 10
+    # the best after each generation, from the initial population on
+    assert len(result.path) == 11 and len(seen) == 10
+    assert result.path[-1] is result.best
+    assert all(e.generation <= g for g, e in enumerate(result.path))
+    ranks = [e.rank("objective") for e in result.path]
+    assert ranks == sorted(ranks, reverse=True)
+    assert [problem.design.values(x) for x in seen] == [
+        e.parameters for e in result.path[1:]
+    ]
+    data = result.to_dataset()
+    assert data.generation.values.tolist() == generations
+    path = result.path_to_dataset()
+    assert path.generation.values.tolist() == list(range(11))
+    assert path.found.values.tolist() == [e.generation for e in result.path]
+    assert path.objective.values.tolist() == [
+        e.objectives["objective"] for e in result.path
+    ]
+
+
+def test_a_callback_with_the_intermediate_result_can_stop_the_search() -> None:
+    def stop(intermediate_result):
+        return intermediate_result.nit == 3
+
+    result = optimize(Problem(_square(), bowl), seed=1, popsize=5, callback=stop)
+    assert result.scipy is not None and result.scipy.nit == 3
+    assert len(result.path) == 4
+    assert max(e.generation for e in result.evaluations) == 3
+
+
+def test_a_resumed_run_has_the_same_generations(tmp_path) -> None:
+    path = tmp_path / "bowl.jsonl"
+    problem = Problem(_square(), bowl)
+    settings = dict(seed=7, maxiter=4, popsize=5, tol=0.0, record=path)
+    first = optimize(problem, **settings)
+    lines = [json.loads(line) for line in path.read_text().splitlines()]
+    assert [line["generation"] for line in lines] == [
+        e.generation for e in first.evaluations
+    ]
+    assert load_record(path).generation.values.tolist() == [
+        e.generation for e in first.evaluations
+    ]
+    # a record written before the generations were recorded
+    for line in lines:
+        del line["generation"]
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines))
+    assert "generation" not in load_record(path)
+    again = optimize(problem, **settings)
+    assert again.evaluated == 0 and again.reused == len(first.evaluations)
+    assert again.evaluations == first.evaluations
+    assert again.path == first.path
+
+
+def test_a_scan_has_no_generations_and_counts_repeats() -> None:
+    problem = Problem(_square(), bowl)
+    grid = scan(problem, [[0.0, 0.0], [1.0, -2.0], [0.0, 0.0]])
+    assert grid.evaluated == 2 and grid.repeats == 1 and grid.reused == 0
+    assert [e.parameters["x"] for e in grid.evaluations] == [0.0, 1.0, 0.0]
+    assert grid.path == [] and "generation" not in grid.to_dataset()
+    assert grid.path_to_dataset().sizes["generation"] == 0
+
+
 def test_a_record_of_another_design_is_refused(tmp_path) -> None:
     path = tmp_path / "bowl.jsonl"
     scan(Problem(_square(), bowl), [[0.0, 0.0]], record=path)
@@ -214,6 +296,10 @@ def test_process_pool_workers(tmp_path) -> None:
     )
     assert pooled.x == serial.x
     assert pooled.evaluated == serial.evaluated
+    assert [e.generation for e in pooled.evaluations] == [
+        e.generation for e in serial.evaluations
+    ]
+    assert [e.parameters for e in pooled.path] == [e.parameters for e in serial.path]
     grid = scan(problem, {"x": [0.0, 1.0], "y": [0.0, 1.0, 2.0]}, workers=2)
     assert [e.parameters for e in grid.evaluations][:2] == [
         {"x": 0.0, "y": 0.0},

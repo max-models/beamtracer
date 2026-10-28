@@ -46,12 +46,16 @@ class Result:
 
     ``best`` is the best evaluation of this search (see
     :meth:`~beamtracer.optimization.Evaluation.rank`): feasible if any was, ``None``
-    without evaluations. ``evaluations`` are those the search asked for, in order,
-    including those taken from the record; ``evaluated`` counts the new ones and
-    ``reused`` those taken from the record (recorded by an earlier search, or earlier in
-    this one). ``scipy`` is the
-    :class:`~scipy.optimize.OptimizeResult` of differential evolution (``None`` for a
-    scan).
+    without evaluations. ``evaluations`` are the designs the search asked for: for
+    :func:`optimize` each design once, in the order first asked for, with its
+    ``generation``; for :func:`scan` and :func:`recheck` in the order of the grid or the
+    ranking. ``evaluated`` counts the new evaluations, ``reused`` those taken from a
+    record of an earlier search, and ``repeats`` the asks for a design this search had
+    already asked for (SciPy checks the best design between generations), which are
+    answered from memory and not listed again. ``path`` is the best evaluation after each
+    generation of :func:`optimize`, from the initial population (0) to the last (empty
+    for a scan). ``scipy`` is the :class:`~scipy.optimize.OptimizeResult` of
+    differential evolution (``None`` for a scan).
     """
 
     problem: Problem
@@ -59,6 +63,8 @@ class Result:
     evaluations: list[Evaluation] = field(default_factory=list)
     evaluated: int = 0
     reused: int = 0
+    repeats: int = 0
+    path: list[Evaluation] = field(default_factory=list)
     record: Path | None = None
     scipy: OptimizeResult | None = None
 
@@ -80,19 +86,39 @@ class Result:
         """Return this search's evaluations as an :class:`xarray.Dataset`."""
         return to_dataset(self.evaluations)
 
+    def path_to_dataset(self) -> Any:
+        """Return :attr:`path` as an :class:`xarray.Dataset` along ``generation``.
+
+        The variables are those of :func:`~beamtracer.optimization.to_dataset`, the
+        generation in which each best design was asked for renamed to ``found``.
+        """
+        data = to_dataset(self.path)
+        if "generation" in data:
+            data = data.rename(generation="found")
+        data = data.rename(evaluation="generation")
+        return data.assign_coords(generation=np.arange(len(self.path)))
+
 
 class _Evaluator:
-    """Evaluates batches of designs once each: from the record, serially or in a pool."""
+    """Evaluates batches of designs once each: from memory, the record, or the pool.
+
+    The designs are tagged with ``generation`` in the main process, whether they were
+    evaluated here or in a worker, or taken from the record.
+    """
 
     def __init__(self, problem: Problem, record: Record, pool: WorkerPool) -> None:
         self.problem = problem
         self.record = record
         self.pool = pool
-        #: Every design asked for, in order (repeats included).
+        #: The generation of the designs asked for now (``None`` outside a search).
+        self.generation: int | None = None
+        #: Every design asked for, once, in the order first asked for.
         self.evaluations: list[Evaluation] = []
         self.evaluated = 0
         self.reused = 0
-        self._latest: dict[str, Evaluation] = {}
+        self.repeats = 0
+        self.seen: dict[str, Evaluation] = {}
+        self._latest: list[str] = []
 
     def again(self, points: np.ndarray) -> list[Evaluation]:
         """Return the evaluations of designs of the last batch, without counting them.
@@ -103,8 +129,8 @@ class _Evaluator:
         design = self.problem.design
         points = np.atleast_2d(np.asarray(points, dtype=float))
         keys = [design.key(x) for x in points]
-        if all(key in self._latest for key in keys):
-            return [self._latest[key] for key in keys]
+        if set(keys) <= set(self._latest):
+            return [self.seen[key] for key in keys]
         return self(points)
 
     def constraints(self, evaluation: Evaluation) -> list[float]:
@@ -119,26 +145,33 @@ class _Evaluator:
         design = self.problem.design
         points = np.atleast_2d(np.asarray(points, dtype=float))
         keys = [design.key(x) for x in points]
-        results: dict[str, Evaluation] = {}
+        first: list[str] = []  # the designs new to this search, in order
+        found: dict[str, Evaluation] = {}
         todo: dict[str, np.ndarray] = {}
         for key, x in zip(keys, points, strict=True):
+            if key in self.seen or key in found or key in todo:
+                self.repeats += 1
+                continue
+            first.append(key)
             known = self.record.get(key)
             if known is not None:
-                results[key] = known
-                self.reused += 1
-            elif key in todo:  # a repeat within the batch: evaluated once
+                found[key] = replace(known, generation=self.generation)
                 self.reused += 1
             else:
                 todo[key] = x
         if todo:
-            new = self.pool.map([design.values(x) for x in todo.values()])
+            new = [
+                replace(e, generation=self.generation)
+                for e in self.pool.map([design.values(x) for x in todo.values()])
+            ]
             self.record.append(new)
             self.evaluated += len(new)
-            results.update(zip(todo, new, strict=True))
-        batch = [results[key] for key in keys]
-        self.evaluations.extend(batch)
-        self._latest = dict(zip(keys, batch, strict=True))
-        return batch
+            found.update(zip(todo, new, strict=True))
+        for key in first:
+            self.seen[key] = found[key]
+            self.evaluations.append(found[key])
+        self._latest = keys
+        return [self.seen[key] for key in keys]
 
 
 def _best(problem: Problem, evaluations: Sequence[Evaluation]) -> Evaluation | None:
@@ -178,9 +211,16 @@ def optimize(
     constraints are SciPy :class:`~scipy.optimize.NonlinearConstraint` (``<= 0``), with
     one more that is violated by failed and unconverged evaluations.
 
+    Every evaluation carries the ``generation`` that asked for it (0 the initial
+    population), and :attr:`Result.path` holds the best design after each generation;
+    a design asked for again (SciPy checks the best one between generations) is answered
+    from memory, counted in :attr:`Result.repeats` and not listed again.
+
     ``seed``, ``maxiter``, ``popsize``, ``tol``, ``atol``, ``mutation``,
     ``recombination``, ``init``, ``x0`` and ``callback`` are those of
-    :func:`scipy.optimize.differential_evolution`; further ``options`` are passed on,
+    :func:`scipy.optimize.differential_evolution` (``callback`` with either of SciPy's
+    signatures, ``callback(intermediate_result)`` or ``callback(x, convergence)``);
+    further ``options`` are passed on,
     except ``polish``, ``updating``, ``vectorized`` and ``constraints``: the evolution
     runs a generation at a time and does not polish its result (a gradient search on a
     model with discretisation noise rarely helps).
@@ -199,10 +239,32 @@ def optimize(
             [e.objectives[problem.objective] if e.ok else math.inf for e in evaluations]
         )
 
+    populations = itertools.count()
+
     def constraint(xt: np.ndarray) -> np.ndarray:
-        evaluations = evaluator(np.asarray(xt).T.reshape(-1, len(design)))
+        points = np.asarray(xt).T.reshape(-1, len(design))
+        # DE asks for the constraints of a whole population at once, the initial one
+        # (generation 0) and then one per generation, of at least 5 members; it asks
+        # for single designs to size the constraints and to check the best one
+        if len(points) > 1:
+            evaluator.generation = next(populations)
+        evaluations = evaluator(points)
         return np.array([evaluator.constraints(e) for e in evaluations]).T
 
+    path: list[Evaluation] = []
+
+    def track(intermediate_result: OptimizeResult) -> Any:
+        # SciPy passes the result only to a parameter of this name
+        path.append(evaluator.seen[design.key(intermediate_result.x)])
+        if callback is None:
+            return None
+        if "intermediate_result" in inspect.signature(callback).parameters:
+            return callback(intermediate_result=intermediate_result)
+        return callback(
+            intermediate_result.x, convergence=intermediate_result.convergence
+        )
+
+    evaluator.generation = 0
     count = len(problem.constraints) + 1
     settings: dict[str, Any] = {
         "maxiter": maxiter,
@@ -212,7 +274,7 @@ def optimize(
         "mutation": mutation,
         "recombination": recombination,
         "init": init,
-        "callback": callback,
+        "callback": track,
         "polish": False,
         "updating": "deferred",
         "vectorized": True,
@@ -232,12 +294,15 @@ def optimize(
     settings[seed_name] = seed
     with pool:
         scipy_result = differential_evolution(objective, design.bounds, **settings)
+    initial = _best(problem, [e for e in evaluator.evaluations if e.generation == 0])
     return Result(
         problem=problem,
         best=_best(problem, evaluator.evaluations),
         evaluations=evaluator.evaluations,
         evaluated=evaluator.evaluated,
         reused=evaluator.reused,
+        repeats=evaluator.repeats,
+        path=[] if initial is None else [initial, *path],
         record=evaluator.record.path,
         scipy=scipy_result,
     )
@@ -284,6 +349,7 @@ def scan(
         evaluations=evaluations,
         evaluated=evaluator.evaluated,
         reused=evaluator.reused,
+        repeats=evaluator.repeats,
         record=evaluator.record.path,
     )
 
@@ -344,5 +410,6 @@ def recheck(
         evaluations=evaluations,
         evaluated=evaluator.evaluated,
         reused=evaluator.reused,
+        repeats=evaluator.repeats,
         record=evaluator.record.path,
     )

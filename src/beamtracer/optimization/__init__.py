@@ -9,6 +9,8 @@ evaluation. :func:`optimize` minimizes with SciPy's differential evolution and
 :func:`scan` evaluates a grid, both in parallel processes, recording every evaluation in
 a JSON-lines file that a later search resumes from (:class:`Record`,
 :func:`load_record`). Failed and unconverged evaluations are penalised and never win.
+Each evaluation of :func:`optimize` carries the generation that asked for it, and its
+:class:`Result` has the path, the best design after each generation.
 :func:`recheck` evaluates the few best designs of a search again with another
 evaluation, e.g. a finer mesh, or a PIC model of the source from user code (beamtracer
 does not import it): a function of the configuration that returns an

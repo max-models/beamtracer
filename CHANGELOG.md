@@ -77,6 +77,15 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the spot over the voltage and the gap with the 5 MV/m surface-field limit, the path of
   differential evolution over it, and the lens it finds; its evaluations come from a
   committed record, so the docs build solves only the final lens.
+- The optimiser's path: every `Evaluation` of `optimize` carries the `generation` that
+  asked for it (0 the initial population; recorded in the record file and a `generation`
+  variable of `to_dataset`, `-1` for designs without one), and `Result.path` is the best
+  design after each generation (`Result.path_to_dataset()` along `generation`). A design
+  asked for again in the same search (SciPy checks the best one between generations) is
+  answered from memory, listed once in `Result.evaluations` and counted in
+  `Result.repeats`; `Result.reused` now counts only the designs taken from a record.
+  `optimize`'s `callback` takes either of SciPy's signatures. Records without generations
+  still resume.
 
 ### Changed
 
