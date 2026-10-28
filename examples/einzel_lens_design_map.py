@@ -84,15 +84,9 @@ def main() -> None:
     free = np.unravel_index(np.nanargmin(np.where(lost, np.nan, spot)), shape)
 
     # The search, and its path: the best design of the initial population and after
-    # each generation (what SciPy passes to the callback).
-    path = []
-
-    def track(intermediate_result):
-        path.append(problem.design.values(intermediate_result.x))
-
+    # each generation.
     search = optimize(
         problem,
-        callback=track,
         seed=SEED,
         popsize=POPSIZE,
         maxiter=MAXITER,
@@ -100,10 +94,7 @@ def main() -> None:
         workers=WORKERS,
         record=RECORD,
     )
-    first = search.evaluations[: POPSIZE * len(BOUNDS)]  # the initial population
-    start = min(first, key=lambda e: e.rank(problem.objective)).parameters
-    evaluated = {problem.design.key(e.parameters): e for e in search.evaluations}
-    path = [evaluated[problem.design.key(x)] for x in [start, *path]]
+    path = search.path
     generations = len(path)
     print(
         f"scan: {len(grid.evaluations)} designs, {grid.evaluated} solved; "
