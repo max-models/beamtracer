@@ -66,6 +66,9 @@ optional-dependencies.docs = [
 optional-dependencies.test = [ "beamtracer[neutralizer]", "pytest", "pytest-cov", "pyccel>2.0" ]
 urls.Source = "https://github.com/max-models/beamtracer"
 
+[project.entry-points."scope_profiler.opt_in_tags"]
+beamtracer = "beamtracer"
+
 [tool.setuptools]
 package-data."*" = [ "py.typed" ]
 # CUDA versions of the kernels (beamtracer.kernels.catalog)
