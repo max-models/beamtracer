@@ -1,7 +1,9 @@
-"""Optimising an einzel lens: the map and the optimiser's path.
+"""Einzel lens design map.
 
-The einzel lens of `beamtracer.optimization.einzel` (the tutorial "Optimising an einzel
-lens") with two parameters, the voltage of the middle tube and the gap between the tubes,
+Optimising an einzel lens: the map and the optimiser's path.
+
+The einzel lens of `beamtracer.optimization.einzel` (the tutorial "Einzel lens
+optimisation") with two parameters, the voltage of the middle tube and the gap between the tubes,
 and a limit of 5 MV/m on the field at the electrode surfaces. A scan over a grid of designs
 maps the objective, the rms spot of a 30 keV proton beam at the target plane, and
 differential evolution searches the same problem; its path, the best design of each
