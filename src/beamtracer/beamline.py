@@ -21,6 +21,11 @@ particle leaves the beam.
 fields to the walls: the residual-ion dump, whose plates deflect the ions left after the
 neutralizer out of the beam, and the stray field of the tokamak, which bends the ions
 reionized in the duct onto its walls.
+
+:class:`Calorimeter` records the power map of the beam on its tiles, and
+:func:`fit_footprint` and :func:`divergence_from_widths` infer the beam's width and
+divergence from such maps the way the experiments do, to set against the markers'
+own :attr:`Markers.rms_angle`.
 """
 
 from __future__ import annotations
@@ -39,6 +44,7 @@ from beamtracer.solver.tracer import PlaneHits
 
 __all__ = [
     "ApertureGrid",
+    "Calorimeter",
     "Duct",
     "DuctResult",
     "FieldRegion",
@@ -46,6 +52,8 @@ __all__ = [
     "RegionResult",
     "beamlet_markers",
     "box_field",
+    "divergence_from_widths",
+    "fit_footprint",
     "gaussian_beam",
     "profile_field",
 ]
@@ -108,7 +116,7 @@ class Markers:
 
     def footprint(
         self,
-        bins: int = 40,
+        bins: int | tuple[int, int] = 40,
         extent: tuple[float, float, float, float] | None = None,
     ) -> xr.DataArray:
         """The power density (W/m^2) of the markers over ``(y, z)``.
@@ -147,6 +155,15 @@ class Markers:
             coords={"x": ("x", 0.5 * (e[1:] + e[:-1]), {"units": "m"})},
             name="power_per_length",
             attrs={"units": "W/m", "long_name": "power per length"},
+        )
+
+    @property
+    def rms_angle(self) -> np.ndarray:
+        """``(2,)`` the power-weighted rms of the slopes ``v_y / v_x`` and ``v_z / v_x``."""
+        slope = self.velocity[1:] / self.velocity[0]
+        mean = np.average(slope, axis=1, weights=self.power)
+        return np.sqrt(
+            np.average((slope - mean[:, None]) ** 2, axis=1, weights=self.power)
         )
 
     def drift_to(self, x: float) -> Markers:
@@ -769,3 +786,85 @@ class FieldRegion:
             power=markers.total_power,
             trajectories=[np.array(p).T for p in paths],
         )
+
+
+@dataclass
+class Calorimeter:
+    """A flat calorimeter of ``tiles`` in the plane ``x = position``, facing the beam.
+
+    It is closed: every marker crossing its face lands on it. The markers move there on
+    straight lines (no field), and each tile takes the power of the markers landing on
+    it; the markers outside the face pass by.
+
+    Attributes:
+        position: The plane ``x`` of its face (m).
+        extent: ``(y_min, y_max, z_min, z_max)`` of the face (m).
+        tiles: The number of tiles ``(in y, in z)``.
+    """
+
+    position: float
+    extent: tuple[float, float, float, float]
+    tiles: tuple[int, int] = (40, 40)
+
+    def measure(self, markers: Markers) -> xr.DataArray:
+        """The power density (W/m^2) on each tile, over ``(y, z)`` at the tile centres."""
+        landed = markers.drift_to(self.position)
+        y0, y1, z0, z1 = self.extent
+        on = (
+            (landed.position[1] >= y0)
+            & (landed.position[1] <= y1)
+            & (landed.position[2] >= z0)
+            & (landed.position[2] <= z1)
+        )
+        power_map = landed.subset(on).footprint(bins=self.tiles, extent=self.extent)
+        return power_map.assign_attrs(position=self.position)
+
+
+def fit_footprint(power_map: xr.DataArray) -> dict[str, float]:
+    """Fit a 2D Gaussian (axes along ``y`` and ``z``) to a calorimeter map.
+
+    Returns its ``centre_y``, ``centre_z``, ``width_y``, ``width_z`` (the standard
+    deviations, m) and ``peak`` (W/m^2), as the experiments infer the beam's width.
+    """
+    from scipy.optimize import curve_fit
+
+    y = power_map.y.values
+    z = power_map.z.values
+    yy, zz = np.meshgrid(y, z, indexing="ij")
+    data = power_map.values.ravel()
+
+    def gaussian(points, peak, cy, cz, wy, wz):
+        py, pz = points
+        return peak * np.exp(-0.5 * ((py - cy) / wy) ** 2 - 0.5 * ((pz - cz) / wz) ** 2)
+
+    weights = power_map.values / power_map.values.sum()
+    cy, cz = float(np.sum(weights * yy)), float(np.sum(weights * zz))
+    wy = float(np.sqrt(np.sum(weights * (yy - cy) ** 2)))
+    wz = float(np.sqrt(np.sum(weights * (zz - cz) ** 2)))
+    guess = (float(power_map.max()), cy, cz, wy, wz)
+    values, _ = curve_fit(gaussian, (yy.ravel(), zz.ravel()), data, p0=guess)
+    peak, cy, cz, wy, wz = values
+    return {
+        "centre_y": float(cy),
+        "centre_z": float(cz),
+        "width_y": float(abs(wy)),
+        "width_z": float(abs(wz)),
+        "peak": float(peak),
+    }
+
+
+def divergence_from_widths(
+    distances: Sequence[float], widths: Sequence[float]
+) -> tuple[float, float]:
+    """The source width and the divergence from beam widths at several distances.
+
+    A least-squares fit of ``width^2 = w_0^2 + (L theta)^2`` to the ``widths`` (m) at the
+    ``distances`` ``L`` (m) from the source; returns ``(w_0, theta)`` (m, rad).
+    """
+    distance = np.asarray(distances, dtype=float)
+    width = np.asarray(widths, dtype=float)
+    if distance.size < 2:
+        raise ValueError("the divergence needs widths at two distances at least")
+    matrix = np.vstack([np.ones_like(distance), distance**2]).T
+    (w0_squared, theta_squared), *_ = np.linalg.lstsq(matrix, width**2, rcond=None)
+    return float(np.sqrt(max(w0_squared, 0.0))), float(np.sqrt(max(theta_squared, 0.0)))
