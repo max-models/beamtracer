@@ -7,6 +7,8 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The neutralizer example takes the plasma's rates from OpenCR (`wellbalanced.cr`); the `neutralizer`
+  extra installs `wellbalanced[cr]`.
 - Trajectories that change state: `ChargeChangingParams(..., mode="analog")` puts every
   trajectory in one state that changes at events sampled along its path (an optical depth used
   up by the charge-changing rate of its state), with the force of its actual charge, so an H⁻
