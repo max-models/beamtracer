@@ -62,6 +62,8 @@ optional-dependencies.docs = [
   "matplotlib>=3.10.9",
   "nbclient>=0.11",
   "nbformat>=5.11.1",
+  # the figures of the tutorials
+  "plasma-plots>=0.2.3",
 ]
 optional-dependencies.test = [ "beamtracer[neutralizer]", "pytest", "pytest-cov", "pyccel>2.0" ]
 urls.Source = "https://github.com/max-models/beamtracer"
