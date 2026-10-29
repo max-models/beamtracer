@@ -24,7 +24,10 @@ jobs:
   docs:
     uses: max-models/starlight-theme/.github/workflows/docs.yml@pre-notebooks-hook
     with:
-      pre-notebooks: uv run python docs/tools/compile_kernels.py
+      # one OpenMP thread for the notebooks (set for the later steps of the job)
+      pre-notebooks: |
+        echo "OMP_NUM_THREADS=1" >> "$GITHUB_ENV"
+        uv run python docs/tools/compile_kernels.py
       pre-build: uv run python docs/tools/examples.py
       smoke-paths: |
         getting-started/installation/index.html
