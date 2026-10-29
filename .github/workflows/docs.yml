@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   docs:
-    uses: max-models/starlight-theme/.github/workflows/docs.yml@pre-notebooks-hook
+    uses: max-models/starlight-theme/.github/workflows/docs.yml@v0
     with:
       # one OpenMP thread for the notebooks (set for the later steps of the job)
       pre-notebooks: |
