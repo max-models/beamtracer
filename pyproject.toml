@@ -42,7 +42,7 @@ dependencies = [
   # NodeField.evaluate
   "xarray",
 ]
-optional-dependencies.neutralizer = [ "wellbalanced>=0.1.0" ]
+optional-dependencies.neutralizer = [ "opencr", "wellbalanced[cr]>=0.1.0" ]
 optional-dependencies.examples = [
   "matplotlib",
   "plasma-plots>=0.2.3",
@@ -114,8 +114,9 @@ report.show_missing = true
 cunumpy = { git = "https://github.com/max-models/cunumpy", branch = "devel" }
 maybempi = { git = "https://github.com/max-models/maybempi", branch = "devel" }
 mpifield = { git = "https://github.com/max-models/mpifield", branch = "devel" }
+opencr = { git = "https://github.com/max-models/opencr", branch = "molecules-inference" }
 plasma-plots = { git = "https://github.com/max-models/plasma-plots", branch = "devel" }
-plasmacoll = { git = "https://github.com/max-models/plasmacoll", branch = "devel" }
+plasmacoll = { git = "https://github.com/max-models/plasmacoll", branch = "h2-highn" }
 scope-profiler = { git = "https://github.com/max-models/scope-profiler", branch = "devel" }
 simgeometry = { git = "https://github.com/max-models/simgeometry", branch = "devel" }
-wellbalanced = { git = "https://github.com/max-models/wellbalanced", branch = "devel" }
+wellbalanced = { git = "https://github.com/max-models/wellbalanced", branch = "opencr-rates" }
