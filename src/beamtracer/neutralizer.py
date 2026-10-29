@@ -157,7 +157,12 @@ class NeutralizerChannel:
         ):
             raise ValueError("cell must divide the channel's length and width")
         grounded = FieldBoundaryCondition.dirichlet(0.0)
-        targets = n.data.transitions.cross_sections
+        from wellbalanced.neutralizer import BeamCrossSections
+
+        data = (
+            n.data.at(beam.energy) if isinstance(n.data, BeamCrossSections) else n.data
+        )
+        targets = data.transitions.cross_sections
         cross_sections: dict[str, dict[str, dict[str, float]]] = {}
         for target, table in targets.items():
             rows: dict[str, dict[str, float]] = {}
