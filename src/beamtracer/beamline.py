@@ -13,10 +13,14 @@ On the way the duct gas reionizes the neutrals. A neutral leaves the neutral sta
 at the rate ``sum_t n_t(x) sigma_t`` per unit length, ``sigma_t`` the cross sections
 out of the neutral state on target ``t`` (:class:`plasmacoll.ChargeStateTransitions`);
 its free path is sampled from the exponential distribution of the line density along
-its path, ``int n_t ds = int n_t dx |v| / v_x``. A reionized neutral is deposited
-where it is born, as a bound on where its power goes; the stray field that bends it
-is not applied. The transitions back into the neutral state are not followed, as a
-reionized particle leaves the beam.
+its path, ``int n_t ds = int n_t dx |v| / v_x``. A reionized neutral stops where it is
+born; the transitions back into the neutral state are not followed, as a reionized
+particle leaves the beam.
+
+:class:`FieldRegion` pushes charged markers through static electric and magnetic
+fields to the walls: the residual-ion dump, whose plates deflect the ions left after the
+neutralizer out of the beam, and the stray field of the tokamak, which bends the ions
+reionized in the duct onto its walls.
 """
 
 from __future__ import annotations
@@ -38,9 +42,13 @@ __all__ = [
     "ApertureGrid",
     "Duct",
     "DuctResult",
+    "FieldRegion",
     "Markers",
+    "RegionResult",
     "beamlet_markers",
+    "box_field",
     "gaussian_beam",
+    "profile_field",
 ]
 
 #: A crossing this close to the end of a line counts as reaching the port.
@@ -547,4 +555,220 @@ class Duct:
             wall_normal=normal[:, walled],
             reionized=moved.subset(reionized),
             power=markers.total_power,
+        )
+
+
+def box_field(
+    vector: Sequence[float],
+    lower: Sequence[float] = (-np.inf, -np.inf, -np.inf),
+    upper: Sequence[float] = (np.inf, np.inf, np.inf),
+):
+    """A uniform field ``vector`` inside the box from ``lower`` to ``upper``, zero outside.
+
+    E.g. the field between two parallel plates (V/m), or a uniform stray field (T).
+    """
+    value = np.asarray(vector, dtype=float)[:, None]
+    lo = np.asarray(lower, dtype=float)[:, None]
+    hi = np.asarray(upper, dtype=float)[:, None]
+
+    def field(points: np.ndarray) -> np.ndarray:
+        inside = np.all((points >= lo) & (points <= hi), axis=0)
+        return value * inside
+
+    return field
+
+
+def profile_field(x: Sequence[float], values: Sequence[Sequence[float]]):
+    """A field along ``x``: ``values`` is ``(3, len(x))``, linear between, held beyond.
+
+    E.g. the stray field of the tokamak along the beamline (T).
+    """
+    nodes = np.asarray(x, dtype=float)
+    table = np.asarray(values, dtype=float).reshape(3, nodes.size)
+    if nodes.size < 2 or np.any(np.diff(nodes) <= 0.0):
+        raise ValueError("a profile needs at least two increasing x")
+
+    def field(points: np.ndarray) -> np.ndarray:
+        return np.vstack([np.interp(points[0], nodes, row) for row in table])
+
+    return field
+
+
+@dataclass
+class RegionResult:
+    """Where the markers crossing a :class:`FieldRegion` end.
+
+    Attributes:
+        exit: The markers reaching the exit plane, there.
+        wall: The markers stopped by a wall, at the point they hit it.
+        wall_index: ``(len(wall),)`` the index of the wall each one hit.
+        wall_normal: ``(3, len(wall))`` the wall's outward normal there.
+        lost: The markers still in the region after ``max_steps``.
+        power: The power entering, in W.
+        trajectories: The paths ``(3, steps)`` of the first ``save`` markers.
+    """
+
+    exit: Markers
+    wall: Markers
+    wall_index: np.ndarray
+    wall_normal: np.ndarray
+    lost: Markers
+    power: float
+    trajectories: list[np.ndarray]
+
+    def wall_power(self, walls: int) -> np.ndarray:
+        """The power (W) on each of the ``walls`` walls."""
+        return np.bincount(self.wall_index, weights=self.wall.power, minlength=walls)
+
+    def summary(self) -> xr.Dataset:
+        """The power balance as a dataset: in, exit, walls, lost (W)."""
+        return xr.Dataset(
+            {
+                "power_in": self.power,
+                "power_exit": self.exit.total_power,
+                "power_wall": self.wall.total_power,
+                "power_lost": self.lost.total_power,
+            }
+        )
+
+
+@dataclass
+class FieldRegion:
+    """Markers through static electric and magnetic fields, to the walls or an exit plane.
+
+    The residual-ion dump (plates biased to deflect the ions out of the beam) or a
+    stretch of the beamline in the stray field. Every marker moves by the Boris scheme
+    in steps of ``step`` (m) along its path, its charge set by its state; the neutrals
+    move on straight lines. Each step is tested against the walls as a straight segment
+    (:func:`simgeometry.crossings.crossings`), so ``step`` should be well below the
+    radius of curvature.
+
+    Attributes:
+        walls: The solid walls, simgeometry 3D shapes.
+        exit: The plane ``x = exit`` (m) where the region ends.
+        mass: The mass of the beam particles (kg).
+        electric: ``E(points)``, ``(3, N)`` in V/m at ``(3, N)`` points; none if absent.
+        magnetic: ``B(points)`` in T, the same way; :func:`box_field` and
+            :func:`profile_field` make simple ones.
+        charges: The charge of each state, in e.
+        step: The path length per step (m).
+        max_steps: The steps after which a marker counts as lost.
+        save: Keep the paths of the first ``save`` markers.
+        samples: The samples per step for the walls whose crossings are sampled.
+    """
+
+    walls: Sequence[Any]
+    exit: float
+    mass: float
+    electric: Any = None
+    magnetic: Any = None
+    charges: Mapping[str, float] | None = None
+    step: float = 5e-3
+    max_steps: int = 10_000
+    save: int = 0
+    samples: int = 16
+
+    def __post_init__(self) -> None:
+        """Fill in the charges."""
+        self.walls = list(self.walls)
+        self._charges = dict(self.charges or {"-": -1.0, "0": 0.0, "+": 1.0})
+        if self.step <= 0.0:
+            raise ValueError("step must be positive")
+
+    def _field(self, which: Any, points: np.ndarray) -> np.ndarray:
+        if which is None:
+            return np.zeros_like(points)
+        return np.asarray(which(points), dtype=float).reshape(points.shape)
+
+    def _boris(
+        self, x: np.ndarray, v: np.ndarray, qm: np.ndarray, dt: np.ndarray
+    ) -> np.ndarray:
+        """The velocity after ``dt`` in the fields at ``x`` (the Boris rotation)."""
+        half = 0.5 * qm * dt
+        e = self._field(self.electric, x)
+        b = self._field(self.magnetic, x)
+        minus = v + half * e
+        t = half * b
+        s = 2.0 * t / (1.0 + np.sum(t * t, axis=0))
+        prime = minus + np.cross(minus, t, axis=0)
+        return minus + np.cross(prime, s, axis=0) + half * e
+
+    def trace(self, markers: Markers) -> RegionResult:
+        """Push the ``markers`` until each hits a wall or crosses the exit plane."""
+        missing = set(markers.states) - set(self._charges)
+        if missing:
+            raise ValueError(f"no charge for the state(s) {sorted(missing)}")
+        num = len(markers)
+        charge = np.array([self._charges[s] for s in markers.states])[markers.state]
+        qm = charge * constants.e / self.mass
+        x = markers.position.copy()
+        v = markers.velocity.copy()
+        outcome = np.full(num, -2)  # -2 lost, -1 exit, k wall k
+        normal = np.full((3, num), np.nan)
+        paths = [[x[:, k].copy()] for k in range(min(self.save, num))]
+
+        active = np.arange(num)
+        for k, wall in enumerate(self.walls):
+            inside = xp.to_numpy(wall.contains_points(x)).astype(bool)
+            outcome[inside & (outcome == -2)] = k
+        active = active[outcome[active] == -2]
+        done = x[0] >= self.exit
+        outcome[active[done[active]]] = -1
+        active = active[~done[active]]
+
+        # the leapfrog starts from the velocity half a step back
+        if active.size:
+            xa, va = x[:, active], v[:, active]
+            dt = self.step / np.linalg.norm(va, axis=0)
+            v[:, active] = self._boris(xa, va, qm[active], -0.5 * dt)
+
+        for _ in range(self.max_steps):
+            if active.size == 0:
+                break
+            xa, va, q = x[:, active], v[:, active], qm[active]
+            dt = self.step / np.linalg.norm(va, axis=0)
+            vn = self._boris(xa, va, q, dt)
+            xn = xa + vn * dt
+
+            # the first event along the step: a wall, or the exit plane
+            first = np.full(active.size, 2.0)
+            which = np.full(active.size, -2)
+            step_normal = np.full((3, active.size), np.nan)
+            for k, wall in enumerate(self.walls):
+                hit = crossings(wall, xa, xn, samples=self.samples)
+                fraction = np.where(
+                    xp.to_numpy(hit.hit), xp.to_numpy(hit.fraction), 2.0
+                )
+                closer = fraction < first
+                first = np.where(closer, fraction, first)
+                which = np.where(closer, k, which)
+                step_normal[:, closer] = xp.to_numpy(hit.normal)[:, closer]
+            with np.errstate(divide="ignore", invalid="ignore"):
+                to_exit = (self.exit - xa[0]) / (xn[0] - xa[0])
+            leaves = (xn[0] >= self.exit) & (to_exit <= first)
+            first = np.where(leaves, to_exit, first)
+            which = np.where(leaves, -1, which)
+            stops = first <= 1.0
+            point = np.where(stops, xa + (xn - xa) * np.minimum(first, 1.0), xn)
+            x[:, active] = point
+            v[:, active] = vn
+            for k in range(len(paths)):
+                where = np.flatnonzero(active == k)
+                if where.size:
+                    paths[k].append(point[:, where[0]].copy())
+            ended = active[stops]
+            outcome[ended] = which[stops]
+            normal[:, ended] = step_normal[:, stops]
+            active = active[~stops]
+
+        moved = Markers(x, v, markers.power, markers.state, markers.states)
+        walled = outcome >= 0
+        return RegionResult(
+            exit=moved.subset(outcome == -1),
+            wall=moved.subset(walled),
+            wall_index=outcome[walled],
+            wall_normal=normal[:, walled],
+            lost=moved.subset(outcome == -2),
+            power=markers.total_power,
+            trajectories=[np.array(p).T for p in paths],
         )
