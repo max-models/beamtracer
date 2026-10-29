@@ -31,10 +31,10 @@ jobs:
       pre-build: uv run python docs/tools/examples.py
       smoke-paths: |
         getting-started/installation/index.html
-        tutorials/index.html
-        full-examples/index.html
-        full-examples/einzel-lens-design-map/index.html
+        examples/index.html
+        example-scripts/index.html
+        example-scripts/einzel-lens-design-map/index.html
         api/beamtracer/index.html
         api/beamtracer/model/index.html
-        guides/beam-optics/index.html
-        full-examples/einzel-lens-design-map/plot-2.png
+        model/beam-optics/index.html
+        example-scripts/einzel-lens-design-map/plot-2.png

@@ -39,7 +39,7 @@ print(model.stats)
 print(model.beam_moments(9.9e-3))
 ```
 
-See the [beam optics guide](/beamtracer/guides/beam-optics/) for the model and the
+See the [beam optics guide](/beamtracer/model/beam-optics/) for the model and the
 [API reference](/beamtracer/api/beamtracer/) for every module and function.
 
 ## Profiling
