@@ -726,7 +726,7 @@ class FieldRegion:
 
         active = np.arange(num)
         for k, wall in enumerate(self.walls):
-            inside = np.asarray(wall.contains_points(x), dtype=bool)
+            inside = xp.to_numpy(wall.contains_points(x)).astype(bool)
             outcome[inside & (outcome == -2)] = k
         active = active[outcome[active] == -2]
         done = x[0] >= self.exit
@@ -753,11 +753,13 @@ class FieldRegion:
             step_normal = np.full((3, active.size), np.nan)
             for k, wall in enumerate(self.walls):
                 hit = crossings(wall, xa, xn, samples=self.samples)
-                fraction = np.where(np.asarray(hit.hit), np.asarray(hit.fraction), 2.0)
+                fraction = np.where(
+                    xp.to_numpy(hit.hit), xp.to_numpy(hit.fraction), 2.0
+                )
                 closer = fraction < first
                 first = np.where(closer, fraction, first)
                 which = np.where(closer, k, which)
-                step_normal[:, closer] = np.asarray(hit.normal)[:, closer]
+                step_normal[:, closer] = xp.to_numpy(hit.normal)[:, closer]
             with np.errstate(divide="ignore", invalid="ignore"):
                 to_exit = (self.exit - xa[0]) / (xn[0] - xa[0])
             leaves = (xn[0] >= self.exit) & (to_exit <= first)
