@@ -22,8 +22,9 @@ concurrency:
 
 jobs:
   docs:
-    uses: max-models/starlight-theme/.github/workflows/docs.yml@v0.6.0
+    uses: max-models/starlight-theme/.github/workflows/docs.yml@pre-notebooks-hook
     with:
+      pre-notebooks: uv run python docs/tools/compile_kernels.py
       pre-build: uv run python docs/tools/examples.py
       smoke-paths: |
         getting-started/installation/index.html
