@@ -8,7 +8,6 @@ version = "0.1.0"
 description = "Steady ion beams in a self-consistent field: extraction, acceleration and charge changes."
 readme = "README.md"
 keywords = [ "ion optics", "beam extraction", "space charge", "negative ions", "neutral beam injection" ]
-license = { file = "LICENSE.txt" }
 authors = [ { name = "Max" } ]
 requires-python = ">=3.10"
 classifiers = [
