@@ -26,6 +26,10 @@ reionized in the duct onto its walls.
 :func:`fit_footprint` and :func:`divergence_from_widths` infer the beam's width and
 divergence from such maps the way the experiments do, to set against the markers'
 own :attr:`Markers.rms_angle`.
+
+:func:`beamline_summary` adds up where the power went, and
+:meth:`Markers.to_dataset` hands the neutrals at the port on, placed in the tokamak's
+frame with :meth:`Markers.placed`.
 """
 
 from __future__ import annotations
@@ -51,6 +55,7 @@ __all__ = [
     "Markers",
     "RegionResult",
     "beamlet_markers",
+    "beamline_summary",
     "box_field",
     "divergence_from_widths",
     "fit_footprint",
@@ -98,6 +103,20 @@ class Markers:
             raise ValueError("position and velocity need the same number of markers")
         if num and (self.state.min() < 0 or self.state.max() >= len(self.states)):
             raise ValueError("state must index states")
+
+    @staticmethod
+    def concatenate(parts: Sequence[Markers]) -> Markers:
+        """The markers of all ``parts``, which share their states."""
+        states = {p.states for p in parts}
+        if len(states) != 1:
+            raise ValueError("the markers to join need the same states")
+        return Markers(
+            np.hstack([p.position for p in parts]),
+            np.hstack([p.velocity for p in parts]),
+            np.concatenate([p.power for p in parts]),
+            np.concatenate([p.state for p in parts]),
+            states.pop(),
+        )
 
     def subset(self, index: np.ndarray | slice) -> Markers:
         """The markers at ``index``."""
@@ -164,6 +183,72 @@ class Markers:
         mean = np.average(slope, axis=1, weights=self.power)
         return np.sqrt(
             np.average((slope - mean[:, None]) ** 2, axis=1, weights=self.power)
+        )
+
+    def placed(
+        self,
+        origin: Sequence[float],
+        direction: Sequence[float],
+        up: Sequence[float] = (0.0, 0.0, 1.0),
+        x: float = 0.0,
+    ) -> Markers:
+        """The markers in another frame, e.g. the tokamak's.
+
+        The beamline frame has ``x`` along the beam and ``z`` up; its point ``(x, 0, 0)``
+        goes to ``origin``, its ``x`` axis to ``direction`` and its ``z`` axis to the part
+        of ``up`` normal to ``direction`` (``y`` completes the right-handed frame).
+        """
+        ex = np.asarray(direction, dtype=float)
+        ex = ex / np.linalg.norm(ex)
+        ez = np.asarray(up, dtype=float)
+        ez = ez - (ez @ ex) * ex
+        norm = np.linalg.norm(ez)
+        if norm < 1e-12:
+            raise ValueError("up must not be along the direction")
+        ez = ez / norm
+        rotation = np.column_stack([ex, np.cross(ez, ex), ez])
+        shift = np.asarray(origin, dtype=float)[:, None]
+        offset = self.position - np.array([x, 0.0, 0.0])[:, None]
+        return Markers(
+            rotation @ offset + shift,
+            rotation @ self.velocity,
+            self.power,
+            self.state,
+            self.states,
+        )
+
+    def to_dataset(self, mass: float) -> xr.Dataset:
+        """The markers as a dataset, with ``weight`` the particles per second.
+
+        ``mass`` (kg) is that of the beam particles; the weight is the power over the
+        kinetic energy. freeofcharge reads the neutrals
+        (``freeofcharge.NeutralBeam.from_dataset``).
+        """
+        energy = 0.5 * mass * np.sum(self.velocity**2, axis=0)
+        component = ("component", ["x", "y", "z"])
+        return xr.Dataset(
+            {
+                "position": (("component", "marker"), self.position, {"units": "m"}),
+                "velocity": (("component", "marker"), self.velocity, {"units": "m/s"}),
+                "power": ("marker", self.power, {"units": "W"}),
+                "weight": ("marker", self.power / energy, {"units": "1/s"}),
+                "state": ("marker", np.array(self.states)[self.state]),
+            },
+            coords={"component": component[1]},
+            attrs={"mass": mass, "states": list(self.states)},
+        )
+
+    @classmethod
+    def from_dataset(cls, dataset: xr.Dataset) -> Markers:
+        """The markers of :meth:`to_dataset`."""
+        states = tuple(dataset.attrs["states"])
+        index = {s: k for k, s in enumerate(states)}
+        return cls(
+            dataset.position.values,
+            dataset.velocity.values,
+            dataset.power.values,
+            np.array([index[str(s)] for s in dataset.state.values], dtype=int),
+            states,
         )
 
     def drift_to(self, x: float) -> Markers:
@@ -868,3 +953,48 @@ def divergence_from_widths(
     matrix = np.vstack([np.ones_like(distance), distance**2]).T
     (w0_squared, theta_squared), *_ = np.linalg.lstsq(matrix, width**2, rcond=None)
     return float(np.sqrt(max(w0_squared, 0.0))), float(np.sqrt(max(theta_squared, 0.0)))
+
+
+def beamline_summary(
+    port: Markers,
+    walls: Mapping[str, Markers],
+    *,
+    power: float,
+    halo_radius: float | None = None,
+    footprint_extent: tuple[float, float, float, float] | None = None,
+    bins: int = 40,
+) -> xr.Dataset:
+    """The power balance of a beamline as a dataset.
+
+    ``port`` are the markers through the port, ``walls`` the markers each part of the
+    beamline stopped (e.g. ``{"dump": ..., "duct": ...}``), and ``power`` the power
+    that entered (W). The balance ``port + sum(walls) = power`` is checked. With
+    ``halo_radius`` (m), the power at the port farther than that from the beam's centre
+    is the halo; with ``footprint_extent`` the dataset holds the power density at the
+    port over ``(y, z)``.
+    """
+    names = list(walls)
+    on_walls = np.array([walls[n].total_power for n in names])
+    total = port.total_power + on_walls.sum()
+    if not np.isclose(total, power, rtol=1e-9, atol=0.0):
+        raise ValueError(
+            f"the powers add up to {total} W, not the {power} W that entered"
+        )
+    data: dict[str, Any] = {
+        "power_in": ((), power, {"units": "W"}),
+        "power_port": ((), port.total_power, {"units": "W"}),
+        "power_on": ("part", on_walls, {"units": "W"}),
+        "transmission": ((), port.total_power / power if power else 0.0),
+    }
+    if halo_radius is not None and len(port):
+        centre = np.average(port.position[1:], axis=1, weights=port.power)
+        r = np.hypot(*(port.position[1:] - centre[:, None]))
+        data["power_halo"] = (
+            (),
+            float(port.power[r > halo_radius].sum()),
+            {"units": "W"},
+        )
+    dataset = xr.Dataset(data, coords={"part": names})
+    if footprint_extent is not None:
+        dataset["footprint"] = port.footprint(bins=bins, extent=footprint_extent)
+    return dataset
