@@ -23,7 +23,7 @@ what the coupled models compute, not what a neutralizer achieves.
 Install::
 
     pip install "beamtracer[examples] @ git+https://github.com/max-models/beamtracer"
-    pip install "wellbalanced @ git+https://github.com/max-models/wellbalanced@devel"
+    pip install "wellbalanced[cr] @ git+https://github.com/max-models/wellbalanced@devel"
 """
 
 from __future__ import annotations
@@ -67,12 +67,12 @@ EXAMPLE = {
 
 
 def neutralizer():
-    """The illustrative channel (placeholder cross sections, which warn)."""
-    from wellbalanced.neutralizer import illustrative_deuterium_neutralizer
+    """The channel with OpenCR's plasma rates (the beam data are placeholders, which warn)."""
+    from wellbalanced.cr import deuterium_neutralizer
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
-        return illustrative_deuterium_neutralizer(gas_inflow=GAS_INFLOW)
+        return deuterium_neutralizer(gas_inflow=GAS_INFLOW)
 
 
 def channel(divergence: float) -> NeutralizerChannel:
