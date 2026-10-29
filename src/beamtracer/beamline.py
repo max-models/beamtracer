@@ -38,6 +38,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+import cunumpy as xp
 import numpy as np
 import xarray as xr
 from scipy import constants
@@ -606,15 +607,15 @@ class Duct:
         index = np.full(num, -1)
         normal = np.full((3, num), np.nan)
         for k, wall in enumerate(self.walls):
-            inside = np.asarray(wall.contains_points(start), dtype=bool)
+            inside = xp.to_numpy(wall.contains_points(start)).astype(bool)
             hit = crossings(wall, start, end, samples=self.samples)
-            fraction = np.where(np.asarray(hit.hit), np.asarray(hit.fraction), 2.0)
+            fraction = np.where(xp.to_numpy(hit.hit), xp.to_numpy(hit.fraction), 2.0)
             fraction = np.where(inside, 0.0, fraction)
             closer = (fraction < first) & (fraction < 1.0 - PORT_TOLERANCE)
             first = np.where(closer, fraction, first)
             index = np.where(closer, k, index)
             normal[:, closer] = np.where(
-                inside[closer], np.nan, np.asarray(hit.normal)[:, closer]
+                inside[closer], np.nan, xp.to_numpy(hit.normal)[:, closer]
             )
 
         # the reionization point, as a fraction of the line
