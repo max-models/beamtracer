@@ -2,7 +2,8 @@
 
 The beam leaves the traced region (:class:`~beamtracer.model.BeamOptics`, the
 neutralizer) as :class:`Markers`: points in 3D with a velocity, a power and a charge
-state. Beyond it no field acts on the neutrals, so they move on straight lines and
+state. :func:`beamlet_markers` makes them from a beamlet traced in 2D, and
+:class:`ApertureGrid` copies the beamlet to every aperture of the grid with its aim. Beyond it no field acts on the neutrals, so they move on straight lines and
 no mesh is needed: :class:`Duct` intersects each line with the walls, given as
 simgeometry shapes (:func:`simgeometry.crossings.crossings`), and stops it at the
 first wall it enters or at the port, the plane ``x = port``. The beam moves along
@@ -27,11 +28,20 @@ from typing import Any
 import cunumpy as xp
 import numpy as np
 import xarray as xr
+from scipy import constants
 from simgeometry.crossings import crossings
 
 from beamtracer.solver.charge_changing import AxialProfile, Density
+from beamtracer.solver.tracer import PlaneHits
 
-__all__ = ["Duct", "DuctResult", "Markers", "gaussian_beam"]
+__all__ = [
+    "ApertureGrid",
+    "Duct",
+    "DuctResult",
+    "Markers",
+    "beamlet_markers",
+    "gaussian_beam",
+]
 
 #: A crossing this close to the end of a line counts as reaching the port.
 PORT_TOLERANCE = 1e-9
@@ -132,6 +142,17 @@ class Markers:
             attrs={"units": "W/m", "long_name": "power per length"},
         )
 
+    def drift_to(self, x: float) -> Markers:
+        """The markers moved on straight lines to the plane ``x``."""
+        time = (x - self.position[0]) / self.velocity[0]
+        return Markers(
+            self.position + self.velocity * time,
+            self.velocity,
+            self.power,
+            self.state,
+            self.states,
+        )
+
     def __len__(self) -> int:
         """The number of markers."""
         return self.position.shape[1]
@@ -171,6 +192,167 @@ def gaussian_beam(
         np.full(num, states.index(state)),
         states,
     )
+
+
+def beamlet_markers(
+    hits: PlaneHits,
+    *,
+    mass: float,
+    cylindrical: bool,
+    copies: int = 1,
+    charge: float = 1.0,
+    slit_length: float | None = None,
+    states: Sequence[str] = ("-", "0", "+"),
+    state: str = "-",
+    species: int | None = None,
+    seed: int | np.random.Generator | None = 0,
+) -> Markers:
+    """The 3D markers of a beamlet traced in 2D, from its crossings of a plane.
+
+    ``hits`` are the crossings of a diagnostic plane
+    (:meth:`~beamtracer.model.BeamOptics.plane`). In cylindrical geometry a trajectory
+    stands for a ring: each becomes ``copies`` markers at random azimuths, its point
+    and velocity rotated about the axis. In planar geometry it stands for a slit's
+    section per unit depth: each becomes ``copies`` markers spread at random over
+    ``z`` in ``(-slit_length / 2, slit_length / 2)``, carrying the current times the
+    slit length. The power of a trajectory is its particle current ``I / (charge e)``
+    (``charge`` the charge of the particles the current counts, in e) times their
+    kinetic energy, ``mass`` (kg) each; with charge-state ``fractions`` it is split
+    into one marker per state, else all is in ``state``. Only the forward crossings
+    count, of the beam ``species`` (an index) if given.
+    """
+    if copies < 1:
+        raise ValueError("copies must be at least 1")
+    if not cylindrical and slit_length is None:
+        raise ValueError("a planar beamlet needs the slit_length")
+    states = tuple(states)
+    rng = np.random.default_rng(seed)
+    keep = hits.direction > 0
+    if species is not None:
+        keep &= hits.species == species
+    point, speed = hits.point[:, keep], hits.velocity[:, keep]
+    speed2 = np.sum(speed**2, axis=0)
+    power = hits.current[keep] / (charge * constants.e) * 0.5 * mass * speed2
+    if not cylindrical:
+        power = power * float(slit_length)  # type: ignore[arg-type]
+    num = power.size
+    if hits.fractions is None:
+        share = np.zeros((len(states), num))
+        share[states.index(state)] = 1.0
+    else:
+        share = np.asarray(hits.fractions, dtype=float)[:, keep]
+        if share.shape[0] != len(states):
+            raise ValueError("the fractions need one row per state")
+    # one marker per (trajectory, state) with a share, then the copies
+    s_index, t_index = np.nonzero(share > 0.0)
+    marker_power = power[t_index] * share[s_index, t_index] / copies
+    t_index = np.repeat(t_index, copies)
+    s_index = np.repeat(s_index, copies)
+    marker_power = np.repeat(marker_power, copies)
+    position = point[:, t_index].copy()
+    velocity = speed[:, t_index].copy()
+    if cylindrical:
+        angle = rng.uniform(0.0, 2.0 * np.pi, t_index.size)
+        c, s = np.cos(angle), np.sin(angle)
+        for vector in (position, velocity):
+            y, z = vector[1].copy(), vector[2].copy()
+            vector[1] = c * y - s * z
+            vector[2] = s * y + c * z
+    else:
+        position[2] = rng.uniform(-0.5, 0.5, t_index.size) * float(slit_length)  # type: ignore[arg-type]
+    return Markers(position, velocity, marker_power, s_index, states)
+
+
+def _rotation_from_x(direction: np.ndarray) -> np.ndarray:
+    """The rotation taking the unit vector along ``x`` to the unit ``direction``."""
+    d = direction / np.linalg.norm(direction)
+    axis = np.cross([1.0, 0.0, 0.0], d)
+    sine, cosine = np.linalg.norm(axis), d[0]
+    if sine < 1e-15:
+        return np.eye(3)
+    k = axis / sine
+    cross = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+    return np.eye(3) + sine * cross + (1 - cosine) * cross @ cross
+
+
+@dataclass
+class ApertureGrid:
+    """The apertures of an accelerator grid, each emitting a copy of one beamlet.
+
+    The beamlet is traced about the ``x`` axis; :meth:`markers` copies it to every
+    aperture centre, turned to the aperture's aim. The grid lies in the plane of the
+    beamlet's markers.
+
+    Attributes:
+        centres: ``(2, M)`` the apertures' ``(y, z)`` (m).
+        focal_length: ``(f_y, f_z)`` (m), the distance at which the grid's curvature
+            aims the beamlets of each direction at the axis: a beamlet at ``y`` gets
+            the slope ``-y / f_y``. ``inf`` for a flat grid.
+        steering: ``(2, M)`` further slopes (rad) of each beamlet in ``y`` and ``z``,
+            e.g. from aperture offsets.
+    """
+
+    centres: np.ndarray
+    focal_length: tuple[float, float] = (np.inf, np.inf)
+    steering: np.ndarray | None = None
+
+    def __post_init__(self) -> None:
+        """Check the shapes."""
+        self.centres = np.asarray(self.centres, dtype=float).reshape(2, -1)
+        steering = (
+            np.zeros_like(self.centres) if self.steering is None else self.steering
+        )
+        self.steering = np.broadcast_to(
+            np.asarray(steering, dtype=float), self.centres.shape
+        ).copy()
+        self.focal_length = (float(self.focal_length[0]), float(self.focal_length[1]))
+
+    @classmethod
+    def regular(
+        cls,
+        rows: int,
+        columns: int,
+        pitch: tuple[float, float],
+        **kwargs: Any,
+    ) -> ApertureGrid:
+        """``rows`` (along ``z``) by ``columns`` (along ``y``) apertures, centred on the axis.
+
+        ``pitch`` is the spacing ``(in y, in z)`` (m); ``kwargs`` go to the grid.
+        """
+        y = (np.arange(columns) - 0.5 * (columns - 1)) * pitch[0]
+        z = (np.arange(rows) - 0.5 * (rows - 1)) * pitch[1]
+        yy, zz = np.meshgrid(y, z, indexing="xy")
+        return cls(np.vstack([yy.ravel(), zz.ravel()]), **kwargs)
+
+    @property
+    def slopes(self) -> np.ndarray:
+        """``(2, M)`` the slopes ``v_y / v_x`` and ``v_z / v_x`` of each beamlet's axis."""
+        f = np.array(self.focal_length)[:, None]
+        assert self.steering is not None
+        return -self.centres / f + self.steering
+
+    def markers(self, beamlet: Markers) -> Markers:
+        """The whole beam: ``beamlet`` (about the ``x`` axis) copied to every aperture."""
+        origin = np.array([beamlet.position[0].mean(), 0.0, 0.0])[:, None]
+        offset = beamlet.position - origin
+        positions, velocities = [], []
+        for centre, slope in zip(self.centres.T, self.slopes.T, strict=True):
+            rotation = _rotation_from_x(np.array([1.0, slope[0], slope[1]]))
+            shift = origin + np.array([0.0, centre[0], centre[1]])[:, None]
+            positions.append(rotation @ offset + shift)
+            velocities.append(rotation @ beamlet.velocity)
+        count = len(self)
+        return Markers(
+            np.hstack(positions),
+            np.hstack(velocities),
+            np.tile(beamlet.power, count),
+            np.tile(beamlet.state, count),
+            beamlet.states,
+        )
+
+    def __len__(self) -> int:
+        """The number of apertures."""
+        return self.centres.shape[1]
 
 
 @dataclass
