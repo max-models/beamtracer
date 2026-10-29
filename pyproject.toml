@@ -62,6 +62,8 @@ optional-dependencies.docs = [
   "matplotlib>=3.10.9",
   "nbclient>=0.11",
   "nbformat>=5.11.1",
+  # the figures of the tutorials
+  "plasma-plots>=0.2.3",
 ]
 optional-dependencies.test = [ "beamtracer[neutralizer]", "pytest", "pytest-cov", "pyccel>2.0" ]
 urls.Source = "https://github.com/max-models/beamtracer"
@@ -112,9 +114,9 @@ report.show_missing = true
 cunumpy = { git = "https://github.com/max-models/cunumpy", branch = "devel" }
 maybempi = { git = "https://github.com/max-models/maybempi", branch = "devel" }
 mpifield = { git = "https://github.com/max-models/mpifield", branch = "devel" }
-opencr = { git = "https://github.com/max-models/opencr", branch = "molecules-inference" }
+opencr = { git = "https://github.com/max-models/opencr", branch = "devel" }
 plasma-plots = { git = "https://github.com/max-models/plasma-plots", branch = "devel" }
-plasmacoll = { git = "https://github.com/max-models/plasmacoll", branch = "h2-highn" }
+plasmacoll = { git = "https://github.com/max-models/plasmacoll", branch = "devel" }
 scope-profiler = { git = "https://github.com/max-models/scope-profiler", branch = "devel" }
 simgeometry = { git = "https://github.com/max-models/simgeometry", branch = "devel" }
-wellbalanced = { git = "https://github.com/max-models/wellbalanced", branch = "opencr-rates" }
+wellbalanced = { git = "https://github.com/max-models/wellbalanced", branch = "devel" }

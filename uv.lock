@@ -314,6 +314,7 @@ docs = [
     { name = "matplotlib", version = "3.11.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "nbclient" },
     { name = "nbformat" },
+    { name = "plasma-plots" },
 ]
 examples = [
     { name = "matplotlib", version = "3.10.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -349,9 +350,10 @@ requires-dist = [
     { name = "nbclient", marker = "extra == 'docs'", specifier = ">=0.11" },
     { name = "nbformat", marker = "extra == 'docs'", specifier = ">=5.11.1" },
     { name = "numpy" },
-    { name = "opencr", marker = "extra == 'neutralizer'", git = "https://github.com/max-models/opencr?branch=molecules-inference" },
+    { name = "opencr", marker = "extra == 'neutralizer'", git = "https://github.com/max-models/opencr?branch=devel" },
+    { name = "plasma-plots", marker = "extra == 'docs'", git = "https://github.com/max-models/plasma-plots?branch=devel" },
     { name = "plasma-plots", marker = "extra == 'examples'", git = "https://github.com/max-models/plasma-plots?branch=devel" },
-    { name = "plasmacoll", git = "https://github.com/max-models/plasmacoll?branch=h2-highn" },
+    { name = "plasmacoll", git = "https://github.com/max-models/plasmacoll?branch=devel" },
     { name = "plotly", marker = "extra == 'examples'" },
     { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "pyccel", marker = "extra == 'test'", specifier = ">2.0" },
@@ -364,7 +366,7 @@ requires-dist = [
     { name = "scope-profiler", git = "https://github.com/max-models/scope-profiler?branch=devel" },
     { name = "simgeometry", git = "https://github.com/max-models/simgeometry?branch=devel" },
     { name = "sympy" },
-    { name = "wellbalanced", extras = ["cr"], marker = "extra == 'neutralizer'", git = "https://github.com/max-models/wellbalanced?branch=opencr-rates" },
+    { name = "wellbalanced", extras = ["cr"], marker = "extra == 'neutralizer'", git = "https://github.com/max-models/wellbalanced?branch=devel" },
     { name = "xarray" },
 ]
 provides-extras = ["neutralizer", "examples", "dev", "docs", "test"]
@@ -2854,7 +2856,7 @@ wheels = [
 [[package]]
 name = "opencr"
 version = "0.1.0"
-source = { git = "https://github.com/max-models/opencr?branch=molecules-inference#c726fbea4a0391eff09aceaa040f5ae72e88d5f1" }
+source = { git = "https://github.com/max-models/opencr?branch=devel#bb5431d486c228f57ecda0aabedbdbc208786df9" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
@@ -3174,7 +3176,7 @@ dependencies = [
 [[package]]
 name = "plasmacoll"
 version = "0.4.0"
-source = { git = "https://github.com/max-models/plasmacoll?branch=h2-highn#ae6322d59d81b1bcb6aa37d8137dcffef3ed103e" }
+source = { git = "https://github.com/max-models/plasmacoll?branch=devel#949d9ca4f1819dab5a87eaf4f70469cc3d4e4b80" }
 dependencies = [
     { name = "cunumpy" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -4250,7 +4252,7 @@ wheels = [
 [[package]]
 name = "simgeometry"
 version = "0.1.1"
-source = { git = "https://github.com/max-models/simgeometry?branch=devel#e5e0560a53e5228e067cbf3dd6fe19b285c878ed" }
+source = { git = "https://github.com/max-models/simgeometry?branch=devel#adc5a1d770bb45aea24f1e30619d2a01f07c480f" }
 dependencies = [
     { name = "cunumpy" },
     { name = "maybempi" },
@@ -4560,7 +4562,7 @@ wheels = [
 [[package]]
 name = "wellbalanced"
 version = "0.1.0"
-source = { git = "https://github.com/max-models/wellbalanced?branch=opencr-rates#e90e9f841d38c277a44688dbf61921a9adf8c81d" }
+source = { git = "https://github.com/max-models/wellbalanced?branch=devel#f24df9df819984ecb6af736d0ea848b854170126" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
