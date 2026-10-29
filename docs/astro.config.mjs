@@ -10,9 +10,8 @@ export default defineDocs({
 	pythonPackage: 'beamtracer',
 	nav: [
 		{ label: 'Getting started', link: '/getting-started/installation/' },
-		{ label: 'Guides', link: '/guides/beam-optics/' },
-		{ label: 'Tutorials', link: '/tutorials/' },
-		{ label: 'Full examples', link: '/full-examples/' },
+		{ label: 'Model', link: '/model/beam-optics/' },
+		{ label: 'Examples', link: '/examples/' },
 		{ label: 'Development', link: '/development/docs/' },
 		{ label: 'API', link: '/api/beamtracer/' },
 	],
@@ -25,16 +24,15 @@ export default defineDocs({
 			],
 		},
 		{
-			label: 'Guides',
-			items: [{ label: 'Beam optics', slug: 'guides/beam-optics' }],
+			label: 'Model',
+			items: [{ label: 'Beam optics', slug: 'model/beam-optics' }],
 		},
 		{
-			label: 'Tutorials',
-			items: [{ autogenerate: { directory: 'tutorials' } }],
-		},
-		{
-			label: 'Full examples',
-			items: [{ autogenerate: { directory: 'full-examples' } }],
+			label: 'Examples',
+			items: [
+				{ autogenerate: { directory: 'examples' } },
+				{ label: 'Scripts', items: [{ autogenerate: { directory: 'example-scripts' } }] },
+			],
 		},
 		{
 			label: 'Development',
