@@ -32,13 +32,9 @@ jobs:
       smoke-paths: |
         getting-started/installation/index.html
         tutorials/index.html
-        tutorials/example-tutorial/index.html
         full-examples/index.html
-        full-examples/sine-wave/index.html
         full-examples/einzel-lens-design-map/index.html
         api/beamtracer/index.html
         api/beamtracer/model/index.html
         guides/beam-optics/index.html
-        tutorials/example-tutorial/example_tutorial.ipynb
-        full-examples/sine-wave/plot-1.png
         full-examples/einzel-lens-design-map/plot-2.png
