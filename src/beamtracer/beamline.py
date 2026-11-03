@@ -768,6 +768,8 @@ class RegionResult:
         lost: The markers still in the region after ``max_steps``.
         power: The power entering, in W.
         trajectories: The paths ``(3, steps)`` of the first ``save`` markers.
+        work: The power the electric field gave the markers, in W: what leaves
+            (exit, walls, lost) is ``power + work``.
     """
 
     exit: Markers
@@ -777,19 +779,21 @@ class RegionResult:
     lost: Markers
     power: float
     trajectories: list[np.ndarray]
+    work: float = 0.0
 
     def wall_power(self, walls: int) -> np.ndarray:
         """The power (W) on each of the ``walls`` walls."""
         return np.bincount(self.wall_index, weights=self.wall.power, minlength=walls)
 
     def summary(self) -> xr.Dataset:
-        """The power balance as a dataset: in, exit, walls, lost (W)."""
+        """The power balance as a dataset: in, exit, walls, lost, the field's work (W)."""
         return xr.Dataset(
             {
                 "power_in": self.power,
                 "power_exit": self.exit.total_power,
                 "power_wall": self.wall.total_power,
                 "power_lost": self.lost.total_power,
+                "power_work": self.work,
             }
         )
 
@@ -832,6 +836,7 @@ def _boris_problem() -> ConvergenceProblem:
         r"steps of path length $\ell$ = `step`, each tested against the walls and the exit plane as a straight segment, so $\ell$ must be well below the radius of curvature",
         r"the rotation is exact for the angle $2 \arctan |\mathbf t|$ and keeps $|\mathbf v|$ without an electric field",
         r"the order is in the step, for the position on the Larmor circle",
+        r"a marker keeps its particles per second, so its power follows its kinetic energy, $P = P_0\,|\mathbf v|^2 / |\mathbf v_0|^2$ with the last half-step velocity: the work of the electric field reaches the walls",
     ),
     references=(
         "J. P. Boris, Proc. Fourth Conf. Numerical Simulation of Plasmas, 3 (1970)",
@@ -966,7 +971,10 @@ class FieldRegion:
             normal[:, ended] = step_normal[:, stops]
             active = active[~stops]
 
-        moved = Markers(x, v, markers.power, markers.state, markers.states)
+        # every marker keeps its particles per second: its power follows its energy
+        start = np.sum(markers.velocity**2, axis=0)
+        gain = np.sum(v**2, axis=0) / np.where(start > 0.0, start, 1.0)
+        moved = Markers(x, v, markers.power * gain, markers.state, markers.states)
         walled = outcome >= 0
         return RegionResult(
             exit=moved.subset(outcome == -1),
@@ -976,6 +984,7 @@ class FieldRegion:
             lost=moved.subset(outcome == -2),
             power=markers.total_power,
             trajectories=[np.array(p).T for p in paths],
+            work=moved.total_power - markers.total_power,
         )
 
 
@@ -1089,16 +1098,19 @@ def divergence_from_widths(
 
 @method(
     equations={
-        "balance": r"P_\mathrm{port} + \sum_\mathrm{parts} P_\mathrm{wall} = P_\mathrm{in} \quad \text{(to a relative } 10^{-9})",
+        "balance": r"P_\mathrm{port} + \sum_\mathrm{parts} P_\mathrm{wall} = P_\mathrm{in} + W \quad \text{(to a relative } 10^{-9})",
         "halo": r"P_\mathrm{halo} = \sum_{|\mathbf r_k - \bar{\mathbf r}| > r_\mathrm{halo}} P_k, \qquad \bar{\mathbf r} = \langle (y, z) \rangle_P",
     },
-    assumptions=(r"the balance is checked, a mismatch raises",),
+    assumptions=(
+        r"the balance is checked, a mismatch raises; $W$ the work of the fields (`RegionResult.work`)",
+    ),
 )
 def beamline_summary(
     port: Markers,
     walls: Mapping[str, Markers],
     *,
     power: float,
+    work: float = 0.0,
     halo_radius: float | None = None,
     footprint_extent: tuple[float, float, float, float] | None = None,
     bins: int = 40,
@@ -1107,7 +1119,9 @@ def beamline_summary(
 
     ``port`` are the markers through the port, ``walls`` the markers each part of the
     beamline stopped (e.g. ``{"dump": ..., "duct": ...}``), and ``power`` the power
-    that entered (W). The balance ``port + sum(walls) = power`` is checked. With
+    that entered (W), ``work`` what the fields gave the markers on the way (W, the
+    `RegionResult.work` of the regions). The balance
+    ``port + sum(walls) = power + work`` is checked. With
     ``halo_radius`` (m), the power at the port farther than that from the beam's centre
     is the halo; with ``footprint_extent`` the dataset holds the power density at the
     port over ``(y, z)``.
@@ -1115,12 +1129,14 @@ def beamline_summary(
     names = list(walls)
     on_walls = np.array([walls[n].total_power for n in names])
     total = port.total_power + on_walls.sum()
-    if not np.isclose(total, power, rtol=1e-9, atol=0.0):
+    if not np.isclose(total, power + work, rtol=1e-9, atol=0.0):
         raise ValueError(
-            f"the powers add up to {total} W, not the {power} W that entered"
+            f"the powers add up to {total} W, not the {power} W that entered "
+            f"and the {work} W the fields gave"
         )
     data: dict[str, Any] = {
         "power_in": ((), power, {"units": "W"}),
+        "power_work": ((), work, {"units": "W"}),
         "power_port": ((), port.total_power, {"units": "W"}),
         "power_on": ("part", on_walls, {"units": "W"}),
         "transmission": ((), port.total_power / power if power else 0.0),

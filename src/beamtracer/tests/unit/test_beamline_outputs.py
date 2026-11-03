@@ -51,11 +51,13 @@ def test_the_power_balance_over_the_whole_beamline():
         Markers.concatenate([duct.port, bent.exit]),
         {"dump": dump.wall, "duct": duct.wall, "duct (reionized)": bent.wall},
         power=beam.total_power,
+        work=dump.work + bent.work,
         halo_radius=0.05,
         footprint_extent=(-0.1, 0.1, -0.1, 0.1),
     )
     total = float(summary.power_port + summary.power_on.sum())
-    assert total == pytest.approx(beam.total_power, rel=1e-12)
+    assert total == pytest.approx(beam.total_power + dump.work, rel=1e-12)
+    assert dump.work > 0.0 and bent.work == pytest.approx(0.0, abs=1e-9 * bent.power)
     assert list(summary.part.values) == ["dump", "duct", "duct (reionized)"]
     assert 0.0 < float(summary.power_halo) < float(summary.power_port)
     assert summary.footprint.dims == ("y", "z")
