@@ -291,7 +291,7 @@ class FieldBCs:
         return self._bc[dir][side]
 
     def to_dict(self) -> ConfigDict:
-        """Return the configuration-file form, the inverse of :meth:`from_dict`."""
+        """Return the configuration-file form, the inverse of `from_dict`."""
         params: ConfigDict = {}
         for axis, sides in self._bc.items():
             lower = sides["min"]
@@ -340,7 +340,7 @@ _OBJECT_ARGUMENTS = {
     "aperture2d": ("axis", "position", "vertices"),
 }
 
-#: The geometry entries of a shape, in the order of :class:`ShapeParams`.
+#: The geometry entries of a shape, in the order of `ShapeParams`.
 _GEOMETRY = ("vertices", "midpoint", "side_lengths", "radius", "axis", "position")
 
 
@@ -348,9 +348,9 @@ _GEOMETRY = ("vertices", "midpoint", "side_lengths", "radius", "axis", "position
 class ShapeParams:
     """One simgeometry shape of an electrode, without a potential.
 
-    ``type`` is one of :data:`OBJECT_TYPES`; the geometry entries are those of the
+    ``type`` is one of `OBJECT_TYPES`; the geometry entries are those of the
     simgeometry class (lengths in metres). An electrode of several shapes,
-    :meth:`ObjectParams.union`, lists them.
+    `ObjectParams.union`, lists them.
     """
 
     type: str
@@ -434,11 +434,11 @@ class ShapeParams:
 class ObjectParams:
     """An electrode: a simgeometry object held at a potential (``bc_type="dirichlet"``).
 
-    ``type`` is one of :data:`OBJECT_TYPES`; the geometry entries are those of the
+    ``type`` is one of `OBJECT_TYPES`; the geometry entries are those of the
     simgeometry class (lengths in metres). ``type="union"`` is an electrode of several
-    shapes at one potential, the :class:`ShapeParams` (or their configuration-file
+    shapes at one potential, the `ShapeParams` (or their configuration-file
     entries) in ``shapes``, e.g. a tube with rounded ends from a rectangle and two
-    circles; see :meth:`union`. It is one electrode for the field, the hits and the
+    circles; see `union`. It is one electrode for the field, the hits and the
     diagnostics.
     """
 
@@ -507,7 +507,7 @@ class ObjectParams:
     def get_filtered_obj_params(self) -> dict[str, Any]:
         """Return the simgeometry constructor arguments of the object, with ``bc``.
 
-        A union has none: build it with :meth:`build`.
+        A union has none: build it with `build`.
         """
         if self.type == "union":
             raise ValueError("a union has no constructor arguments; use build()")

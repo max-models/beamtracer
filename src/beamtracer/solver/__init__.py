@@ -1,13 +1,13 @@
 """Steady-state ion optics in planar or cylindrical geometry.
 
-- :mod:`.mesh`: the node mesh, electrodes and wall distances,
-- :mod:`.poisson`: Poisson's equation with a Boltzmann plasma species (electrons for
+- `.mesh`: the node mesh, electrodes and wall distances,
+- `.poisson`: Poisson's equation with a Boltzmann plasma species (electrons for
   positive-ion extraction, positive ions for negative-ion extraction),
-- :mod:`.fields`: the staggered electric field and axisymmetric magnetic fields,
-- :mod:`.tracer`: beams, trajectory tracing, space charge and diagnostic planes,
-- :mod:`.charge_changing`: charge changes of the beam on gas and plasma targets,
-- :mod:`.diagnostics`: emittance and Twiss parameters,
-- :mod:`.vlasov`: the Vlasov iteration that ties them together.
+- `.fields`: the staggered electric field and axisymmetric magnetic fields,
+- `.tracer`: beams, trajectory tracing, space charge and diagnostic planes,
+- `.charge_changing`: charge changes of the beam on gas and plasma targets,
+- `.diagnostics`: emittance and Twiss parameters,
+- `.vlasov`: the Vlasov iteration that ties them together.
 """
 
 from beamtracer.solver.charge_changing import (

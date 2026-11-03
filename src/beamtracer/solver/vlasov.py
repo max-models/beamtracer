@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import scope_profiler
+from methodcard import method
 
 from beamtracer._profiling import PROFILE_TAGS
 from beamtracer.solver.fields import StaggeredElectricField
@@ -105,6 +106,14 @@ class VlasovState:
     plasma: BoltzmannElectrons | BoltzmannIons | None = None
 
 
+@method(
+    equations={
+        "compensation": r"\rho_b \leftarrow (1 - f)\, \rho_b \quad \text{on the node columns } x_\mathrm{min} \le x_i \le x_\mathrm{max}",
+    },
+    assumptions=(
+        r"$f \in [0, 1]$ the compensated share, e.g. by the electrons of the background gas; regions applied in turn, so overlapping ones multiply",
+    ),
+)
 def apply_compensation(
     mesh: IonOpticsMesh, rho: np.ndarray, compensation: Sequence[Compensation]
 ) -> np.ndarray:
@@ -117,6 +126,26 @@ def apply_compensation(
     return rho
 
 
+@method(
+    equations={
+        "iteration_0": r"\phi^0 = \text{the vacuum solution, with the free nodes at } x < x_\mathrm{plasma} \text{ held at } U_p \text{ (with a plasma)}",
+        "solve": r"\nabla^2 \phi^{n} = -\frac{\rho_b^{n} + \rho_p(\phi^{n})}{\varepsilon_0}, \qquad \text{Newton from } \phi^{n-1}",
+        "relaxation": r"\rho_b^{n+1} = (1 - \omega)\, \rho_b^{n} + \omega\, \rho_\mathrm{new}(\phi^{n}), \qquad \rho_b^1 = \rho_\mathrm{new}(\phi^0)",
+        "convergence": r"\max |\phi^{n} - \phi^{n-1}| < \text{tolerance}",
+    },
+    assumptions=(
+        r"$\rho_\mathrm{new}$ the compensated deposit of the beam traced in $\phi^n$, re-seeded identically every iteration; $\omega$ = `relaxation` in $(0, 1]$ acts on the charge density, not on the potential",
+        r"the Boltzmann species built once, at $n = 1$, with $\rho_0$ given or the beams' $\sum J / v_0$",
+        r"at most `iterations`; an unconverged iteration returns its last state without a warning (`stats['converged']` is 0); the returned trace is that of the newest potential",
+        r"with MPI every rank solves the whole field and the deposits are summed",
+    ),
+    components=(
+        "beamtracer.solver.poisson.IonOpticsPoisson.solve",
+        "beamtracer.solver.fields.StaggeredElectricField",
+        "beamtracer.solver.tracer.BeamTracer.trace",
+        "beamtracer.solver.vlasov.apply_compensation",
+    ),
+)
 @scope_profiler.profile("beamtracer.vlasov_iterate", tags=PROFILE_TAGS)
 def vlasov_iterate(
     mesh: IonOpticsMesh,

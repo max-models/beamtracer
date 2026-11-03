@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from methodcard import method
 from scipy import constants
 
 from beamtracer.solver.tracer import PlaneHits
@@ -36,6 +37,20 @@ class BeamMoments:
         return dict(self.__dict__)
 
 
+@method(
+    equations={
+        "mean": r"\langle \cdot \rangle = \frac{\sum_k |I_k|\, (\cdot)}{\sum_k |I_k|} \quad \text{over the forward crossings of the plane}",
+        "rings": r"\langle x^2 \rangle = \tfrac12 \langle r^2 \rangle, \quad \langle x'^2 \rangle = \tfrac12 \langle r'^2 + a'^2 \rangle, \quad \langle x x' \rangle = \tfrac12 \langle r r' \rangle, \qquad r' = \frac{v_r}{v_x}, \ a' = \frac{v_\theta}{v_x}",
+        "planar": r"\langle y^2 \rangle, \ \langle y'^2 \rangle, \ \langle y y' \rangle \ \text{about their means}, \qquad y' = \frac{v_y}{v_x}",
+        "emittance": r"\varepsilon = \sqrt{\langle x^2 \rangle \langle x'^2 \rangle - \langle x x' \rangle^2}, \qquad \varepsilon_n = \varepsilon \frac{\langle v_x \rangle}{c}",
+        "twiss": r"\alpha = -\frac{\langle x x' \rangle}{\varepsilon}, \qquad \beta = \frac{\langle x^2 \rangle}{\varepsilon}, \qquad \gamma = \frac{\langle x'^2 \rangle}{\varepsilon}",
+    },
+    assumptions=(
+        r"cylindrical: each trajectory a ring, projected on one transverse plane and averaged over the azimuth (no mean subtracted), which removes the cross term $r a'$",
+        r"non-relativistic: $\varepsilon_n$ uses $\beta = \langle v_x \rangle / c$ only",
+        r"no crossings or zero current give NaN moments; $\varepsilon = 0$ gives NaN Twiss parameters; a negative $\varepsilon^2$ (round-off) is clipped to 0",
+    ),
+)
 def plane_moments(
     hits: PlaneHits,
     *,
@@ -44,7 +59,7 @@ def plane_moments(
     species: int | None = None,
     forward_only: bool = True,
 ) -> BeamMoments:
-    """Return the :class:`BeamMoments` of the trajectories crossing a plane.
+    """Return the `BeamMoments` of the trajectories crossing a plane.
 
     In cylindrical geometry each trajectory is a ring, and the moments are those of its
     projection on ``x``-``x'`` (the ring rotated about the axis, averaged over all angles): ``<x^2> = <r^2>/2``, ``<x'^2> = <r'^2 + a'^2>/2`` and ``<x x'> = <r r'>/2``,
@@ -109,6 +124,29 @@ def plane_moments(
     )
 
 
+def _mismatch_rules() -> dict:
+    """The SymPy rule of `mismatch` (for the tests)."""
+    import sympy
+
+    alpha, beta, alpha0, beta0 = sympy.symbols("alpha beta alpha0 beta0", positive=True)
+    gamma, gamma0 = (1 + alpha**2) / beta, (1 + alpha0**2) / beta0
+    r = (beta * gamma0 + beta0 * gamma) / 2 - alpha * alpha0
+    # the usual form, sqrt(R + sqrt(R^2 - 1)) - 1, with Delta = 2 (R - 1)
+    return {"mismatch": sympy.sqrt(r + sympy.sqrt(r**2 - 1)) - 1}
+
+
+@method(
+    equations={
+        "mismatch": r"M = \sqrt{1 + \tfrac12 \left(\Delta + \sqrt{\Delta (\Delta + 4)}\right)} - 1, \qquad \Delta = (\alpha - \alpha_0)^2 - (\gamma - \gamma_0)(\beta - \beta_0), \qquad \gamma = \frac{1 + \alpha^2}{\beta}",
+    },
+    assumptions=(
+        r"$(\alpha_0, \beta_0)$ the design Twiss parameters; $M = 0$ for a matched beam",
+    ),
+    references=(
+        "[Midttun et al., Proc. IPAC'17, THPVA013 (2017)](https://doi.org/10.18429/JACoW-IPAC2017-THPVA013), eq. (1)",
+    ),
+    symbolic=_mismatch_rules,
+)
 def mismatch(alpha: float, beta: float, alpha0: float, beta0: float) -> float:
     """Return the mismatch parameter ``M`` of a beam ``(alpha, beta)``.
 

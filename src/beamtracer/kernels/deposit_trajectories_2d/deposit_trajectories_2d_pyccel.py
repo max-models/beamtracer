@@ -2,7 +2,7 @@
 
 ``deposit_trajectories_2d_cuda.cu`` next to this file is the CUDA version (GPU) and
 ``deposit_trajectories_2d_numpy.py`` the version for machines without Pyccel, all with the
-same arguments; :class:`beamtracer.solver.BeamTracer` calls it.
+same arguments; `beamtracer.solver.BeamTracer` calls it.
 """
 
 # mypy: ignore-errors

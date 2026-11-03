@@ -1,7 +1,7 @@
-r"""A negative-ion beamlet: the extraction of H$^-$ as a problem of :mod:`beamtracer.optimization`.
+r"""A negative-ion beamlet: the extraction of H$^-$ as a problem of `beamtracer.optimization`.
 
 One round beamlet in cylindrical ``(x, r)`` geometry, solved with
-:class:`~beamtracer.BeamOptics` and :class:`~beamtracer.NegativeExtractionPlasma`: the
+`beamtracer.BeamOptics` and `beamtracer.NegativeExtractionPlasma`: the
 H$^-$ ions and the electrons extracted with them are traced from the plasma, the plasma's
 positive ions follow a Boltzmann distribution and form the meniscus, and a Vlasov
 iteration converges the field and the trajectories together (see the example
@@ -18,7 +18,7 @@ which grows as the mesh is refined. The PG's chamfer ends in a knife edge whose 
 singular too; it is reported, not constrained.
 
 The objective is the rms divergence of the H$^-$ behind the GG (``rms_angle`` of
-:meth:`~beamtracer.BeamOptics.beam_moments`). The constraints, ``<= 0`` when met:
+`beamtracer.BeamOptics.beam_moments`). The constraints, ``<= 0`` when met:
 
 - ``loss``: the lost fraction of the emitted H$^-$ current minus ``max_loss``;
 - ``surface_field``: the largest field on the EG and GG surfaces over ``field_limit``,
@@ -36,20 +36,20 @@ cycle of a few volts instead of converging: such an evaluation has ``converged=F
 and the searches rank it behind every converged one; its diagnostics keep the spread of
 the potential changes over the last iterations.
 
-:class:`NegativeIonBeamlet` holds the fixed settings and makes the
-:class:`~beamtracer.optimization.Design` and :class:`~beamtracer.optimization.Problem`
-of any of :data:`PARAMETERS`: a few of them, or the full design (:data:`FULL_DESIGN`,
-with the constraints :data:`FULL_CONSTRAINTS`). A design that cannot be built (an
+`NegativeIonBeamlet` holds the fixed settings and makes the
+`beamtracer.optimization.Design` and `beamtracer.optimization.Problem`
+of any of `PARAMETERS`: a few of them, or the full design (`FULL_DESIGN`,
+with the constraints `FULL_CONSTRAINTS`). A design that cannot be built (an
 aperture that does not fit, a gap the mesh does not resolve) is a failed evaluation.
-:data:`COARSE` is the mesh and the number of trajectories of a search, compared with the
+`COARSE` is the mesh and the number of trajectories of a search, compared with the
 example's in the tutorial "Optimising a negative-ion beamlet".
 
 A search on a coarse mesh is followed by a check of its best designs with a better
-model: :func:`~beamtracer.optimization.recheck` evaluates them again with another
-function of the same beamlet, e.g. :meth:`NegativeIonBeamlet.evaluate` of a beamlet on
+model: `beamtracer.optimization.recheck` evaluates them again with another
+function of the same beamlet, e.g. `NegativeIonBeamlet.evaluate` of a beamlet on
 a finer mesh, or a PIC model of the source written in user code, which takes the
-:class:`NegativeIonBeamlet` of a design (its geometry and voltages) and returns an
-:class:`~beamtracer.optimization.Evaluation`; beamtracer does not import the PIC code.
+`NegativeIonBeamlet` of a design (its geometry and voltages) and returns an
+`beamtracer.optimization.Evaluation`; beamtracer does not import the PIC code.
 """
 
 from __future__ import annotations
@@ -60,6 +60,7 @@ from dataclasses import dataclass, fields, replace
 from typing import Any
 
 import numpy as np
+from methodcard import Rule, method
 from scipy import constants
 
 from beamtracer.config import (
@@ -92,7 +93,7 @@ PARAMETERS = {
     "acceleration_gap": "m",
 }
 
-#: The bounds of the full design, all of :data:`PARAMETERS`; some corners do not fit in
+#: The bounds of the full design, all of `PARAMETERS`; some corners do not fit in
 #: the domain radius (the half pitch of the beamlets) and are failed evaluations.
 FULL_DESIGN = {
     "extraction_voltage": (3e3, 10e3),
@@ -119,7 +120,48 @@ H_MINUS_MASS = 1.00849
 SPREAD_ITERATIONS = 5
 
 
+def _child_langmuir_rules() -> dict:
+    """The SymPy rule of `NegativeIonBeamlet.child_langmuir` (for the tests)."""
+    import sympy
+
+    voltage, gap = sympy.symbols("voltage gap", positive=True)
+    eps0, e = sympy.Float(constants.epsilon_0), sympy.Float(constants.e)
+    mass = sympy.Float(H_MINUS_MASS * constants.atomic_mass)
+    thickness = 1.0e-3  # the PG's: the distance runs from its upstream face
+    rule = (
+        sympy.Rational(4, 9) * eps0 * sympy.sqrt(2 * e / mass)
+        * voltage ** sympy.Rational(3, 2) / (gap + thickness) ** 2
+    )  # fmt: skip
+
+    def child_langmuir(voltage, gap):
+        beamlet = NegativeIonBeamlet(
+            extraction_voltage=voltage, gap=gap, pg_thickness=thickness
+        )
+        return beamlet.child_langmuir
+
+    ranges = {"voltage": (3.0e3, 1.0e4), "gap": (3.0e-3, 6.0e-3)}
+    return {"child_langmuir": Rule(rule, implementation=child_langmuir, ranges=ranges)}
+
+
 @dataclass(frozen=True)
+@method(
+    equations={
+        "objective": r"\theta_\mathrm{rms} \text{ of the H}^- \text{ at the exit plane, half the drift behind the GG}",
+        "loss": r"\text{loss} = \max\left(0, 1 - \frac{I_{\mathrm H^-}}{I_\mathrm{emit}}\right) - \text{max\_loss}, \qquad I_\mathrm{emit} = \pi (r_\mathrm{PG} - \delta)^2 J",
+        "surface_field": r"\text{surface\_field} = \frac{\max(E_\mathrm{EG}, E_\mathrm{GG})}{\text{field\_limit}} - 1",
+        "gap_field": r"\text{gap\_field} = \frac{\max\left(V_\mathrm{EG} / g,\ (V_\mathrm{GG} - V_\mathrm{EG}) / g_\mathrm{acc}\right)}{\text{gap\_field\_limit}} - 1",
+        "divergence_limit": r"\text{divergence\_limit} = \frac{\theta_\mathrm{rms}}{\text{divergence\_limit}} - 1",
+    },
+    assumptions=(
+        r"the constraints are met when $\le 0$; the PG's knife-edge field is reported, not constrained",
+        r"the H$^-$ current density is an input (the source sets it); $\delta$ = `emission_margin`",
+        r"an unconverged Vlasov iteration (a limit cycle where the beam grazes the EG) keeps its objective but ranks behind every converged design",
+    ),
+    components=(
+        "beamtracer.model.BeamOptics",
+        "beamtracer.optimization.beamlet.NegativeIonBeamlet.child_langmuir",
+    ),
+)
 class NegativeIonBeamlet:
     """The fixed settings of a round H- beamlet, and its problems.
 
@@ -142,7 +184,7 @@ class NegativeIonBeamlet:
     The limits of the constraints: ``max_loss`` (fraction of the H- current),
     ``field_limit`` [V/m] (on the surfaces), ``gap_field_limit`` [V/m] (the mean
     field of a gap) and ``divergence_limit`` [rad]. A frozen dataclass, so it
-    pickles: its :meth:`config` and :meth:`evaluate` are the build and evaluation
+    pickles: its `config` and `evaluate` are the build and evaluation
     functions of its problems, also in a process pool.
     """
 
@@ -221,6 +263,20 @@ class NegativeIonBeamlet:
         return math.pi * self.emission_radius**2 * self.current_density
 
     @property
+    @method(
+        equations={
+            "child_langmuir": r"J_\mathrm{CL} = \frac{4 \varepsilon_0}{9} \sqrt{\frac{2 e}{m}}\, \frac{V^{3/2}}{d^2}",
+        },
+        assumptions=(
+            r"a planar diode of H$^-$ (1.00849 u) starting at rest; $V$ the extraction voltage, $d$ from the PG's upstream face to the EG's",
+            r"a diagnostic: `perveance_ratio` $= J / J_\mathrm{CL}$",
+        ),
+        references=(
+            "C. D. Child, Phys. Rev. (Series I) 32, 492 (1911)",
+            "[I. Langmuir, Phys. Rev. 2, 450 (1913)](https://doi.org/10.1103/PhysRev.2.450)",
+        ),
+        symbolic=_child_langmuir_rules,
+    )
     def child_langmuir(self) -> float:
         """Return the Child-Langmuir current density [A/m^2] of H- over the PG-EG gap.
 
@@ -234,7 +290,7 @@ class NegativeIonBeamlet:
         )  # fmt: skip
 
     def values(self, values: Mapping[str, float] | None = None) -> dict[str, float]:
-        """Return all :data:`PARAMETERS`: ``values``, the defaults for the others."""
+        """Return all `PARAMETERS`: ``values``, the defaults for the others."""
         given: dict[str, float] = dict(values or {})
         unknown = set(given) - set(PARAMETERS)
         if unknown:
@@ -247,18 +303,18 @@ class NegativeIonBeamlet:
         }
 
     def at(self, values: Mapping[str, float] | None = None) -> NegativeIonBeamlet:
-        """Return the beamlet with the parameter ``values`` (some of :data:`PARAMETERS`).
+        """Return the beamlet with the parameter ``values`` (some of `PARAMETERS`).
 
         The build function of its designs: the evaluation takes the beamlet, which
-        knows its geometry, and solves its :meth:`config`. Raises :class:`ValueError`
-        for a beamlet that cannot be built (see :meth:`check`).
+        knows its geometry, and solves its `config`. Raises `ValueError`
+        for a beamlet that cannot be built (see `check`).
         """
         case = replace(self, **self.values(values))
         case.check()
         return case
 
     def check(self) -> None:
-        """Raise :class:`ValueError` for a beamlet that cannot be built."""
+        """Raise `ValueError` for a beamlet that cannot be built."""
         names = {f.name for f in fields(self)}
         for name in sorted(names):
             value = getattr(self, name)
@@ -336,9 +392,9 @@ class NegativeIonBeamlet:
         }
 
     def config(self, values: Mapping[str, float] | None = None) -> BeamOpticsConfig:
-        """Return the :class:`~beamtracer.BeamOpticsConfig` of the beamlet at ``values``.
+        """Return the `beamtracer.BeamOpticsConfig` of the beamlet at ``values``.
 
-        Raises :class:`ValueError` for a beamlet that cannot be built (see :meth:`check`).
+        Raises `ValueError` for a beamlet that cannot be built (see `check`).
         """
         case = self.at(values)
         neumann = FieldBoundaryCondition.neumann(0.0)
@@ -404,7 +460,7 @@ class NegativeIonBeamlet:
         values: Mapping[str, float] | None = None,
         iterates: list[BeamMoments] | None = None,
     ) -> BeamOptics:
-        """Return the solved :class:`~beamtracer.BeamOptics` of the beamlet.
+        """Return the solved `beamtracer.BeamOptics` of the beamlet.
 
         With a list ``iterates``, the H- moments at the exit plane of every Vlasov
         iteration are appended to it.
@@ -464,18 +520,18 @@ class NegativeIonBeamlet:
     def measure(
         self, model: BeamOptics, iterates: Sequence[BeamMoments] = ()
     ) -> Evaluation:
-        """Return the :class:`~beamtracer.optimization.Evaluation` of a solved beamlet.
+        """Return the `beamtracer.optimization.Evaluation` of a solved beamlet.
 
-        The model must be that of this beamlet's :meth:`config`; ``iterates`` are the H-
-        moments of its iterations (see :meth:`solve`). The objective ``divergence`` is
+        The model must be that of this beamlet's `config`; ``iterates`` are the H-
+        moments of its iterations (see `solve`). The objective ``divergence`` is
         the rms angle [rad] of the H- at the exit plane; the constraints are ``loss``,
         ``surface_field``, ``gap_field`` and ``divergence_limit`` (see the module
         docstring). The diagnostics hold the transmission, the extracted current density
         [A/m^2], the emittance [m rad], the mean energy [eV], the perveance over its
         Child-Langmuir value, the surface field of each grid and the mean field of each
-        gap [V/m], where the lost H- end (:meth:`h_minus_losses`), the electrons'
+        gap [V/m], where the lost H- end (`h_minus_losses`), the electrons'
         transmission, the Vlasov iterations, the largest potential change [V] of the
-        last iteration and over the last :data:`SPREAD_ITERATIONS`, and over those (with
+        last iteration and over the last `SPREAD_ITERATIONS`, and over those (with
         ``iterates``) the spread of the divergence [rad] and of the transmission.
         """
         h_minus = model.beam_moments(self.exit_plane, "H-")
@@ -529,7 +585,7 @@ class NegativeIonBeamlet:
         )
 
     def evaluate(self, case: NegativeIonBeamlet) -> Evaluation:
-        """Solve a beamlet (this one at some parameters, see :meth:`at`) and measure it."""
+        """Solve a beamlet (this one at some parameters, see `at`) and measure it."""
         iterates: list[BeamMoments] = []
         model = case.solve(iterates=iterates)
         return case.measure(model, iterates)

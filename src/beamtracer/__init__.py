@@ -1,10 +1,10 @@
 """Steady ion beams in a self-consistent field: extraction, acceleration, charge changes.
 
-:class:`BeamOptics` traces a beam self-consistently (a Vlasov iteration of field
+`BeamOptics` traces a beam self-consistently (a Vlasov iteration of field
 solve, trajectory tracing and space-charge deposition) in planar or cylindrical
 geometry, from the plasma it is extracted from through electrodes and solenoids;
-:class:`BeamOpticsConfig` describes the run. :mod:`beamtracer.neutralizer` couples the
-traced beam to the plasma of a neutralizer, and :mod:`beamtracer.solver` holds the
+`BeamOpticsConfig` describes the run. `beamtracer.neutralizer` couples the
+traced beam to the plasma of a neutralizer, and `beamtracer.solver` holds the
 numerics.
 """
 

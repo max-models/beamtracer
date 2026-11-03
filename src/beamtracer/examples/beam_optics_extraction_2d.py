@@ -93,7 +93,7 @@ def proton_beam(num_particles: int = 200) -> BeamSpecies:
 def create_config(*, num_particles: int = 200, **settings: Any) -> BeamOpticsConfig:
     """Return the configuration of the ion extraction example.
 
-    ``settings`` override fields of :class:`BeamOpticsConfig` (for example
+    ``settings`` override fields of `BeamOpticsConfig` (for example
     ``iterations=2``).
     """
     neumann = FieldBoundaryCondition.neumann(0.0)
@@ -135,10 +135,10 @@ def create_config(*, num_particles: int = 200, **settings: Any) -> BeamOpticsCon
 
 
 def create_model(**settings: Any) -> BeamOptics:
-    """Create the ion extraction example model (see :func:`create_config`).
+    """Create the ion extraction example model (see `create_config`).
 
-    Run it with :meth:`~beamtracer.model.BeamOptics.run`; its
-    :meth:`~beamtracer.model.BeamOptics.write_files` writes the end-of-run file.
+    Run it with `beamtracer.model.BeamOptics.run`; its
+    `beamtracer.model.BeamOptics.write_files` writes the end-of-run file.
     """
     return BeamOptics(create_config(**settings))
 
@@ -208,7 +208,7 @@ def save(
     show: bool = False,
     **kwargs: Any,
 ) -> None:
-    """Save a gallery figure as ``<name>.<format>`` (see :func:`plasma_plots.save_figure`).
+    """Save a gallery figure as ``<name>.<format>`` (see `plasma_plots.save_figure`).
 
     A ``png`` format is skipped with a note when kaleido cannot export images.
     """
@@ -249,7 +249,7 @@ def object_outlines(config: Any) -> dict[str, tuple[Any, Any]]:
 
 
 def pproc(result, show=False, formats=("plotly.json", "png")):
-    """Draw and save the figures of a result of :func:`simulate`."""
+    """Draw and save the figures of a result of `simulate`."""
     import plasma_plots
 
     outlines = {

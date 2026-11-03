@@ -1,0 +1,90 @@
+---
+title: Overview
+description: The equations of beamtracer, from the field and the trajectories of a steady beam to the beamline and the design searches, and what the model leaves out.
+sidebar:
+  label: Overview
+---
+
+import MethodCard from '@max-models/starlight-theme/components/MethodCard.astro';
+
+beamtracer solves steady ion beams in their own field: the extraction of positive or negative
+ions from a plasma, their acceleration and focusing by electrodes and solenoids, and the
+charge changes of a fast beam on a gas or a plasma. Nothing depends on time. The beam is the
+fixed point of a field solve, a trace of the trajectories and a deposit of their space
+charge, on a 2D mesh, planar per unit depth or cylindrically symmetric $(x, r)$.
+
+Each equation on these pages is declared on the code that implements it, as a method card,
+and checked by the tests: six closed forms against SymPy rules, seven discretisations against
+their order of convergence. The pages of the section list the cards module by module; this
+one shows how they fit together.
+
+## The pipeline
+
+<MethodCard name="beamtracer.model.BeamOptics" headingLevel={3} />
+
+1. **[Mesh](/beamtracer/numerics/solver-mesh/).** Uniform nodes of spacing $h$; the
+   electrodes are simgeometry shapes, and the distance from a node to an electrode surface
+   is bracketed in 255ths of a cell.
+2. **[Poisson's equation](/beamtracer/numerics/solver-poisson/)** with the Boltzmann plasma
+   species, by finite differences (Shortley-Weller next to the electrodes, the axis by
+   L'Hôpital) and Newton's method, second order in $h$.
+3. **[Fields](/beamtracer/numerics/solver-fields/):** the electric field on the edges between
+   the nodes, at the electrode surfaces taken over the bracketed distance; the magnetic field
+   of solenoids or a measured profile, expanded off the axis.
+4. **[Beams](/beamtracer/numerics/solver-tracer/)** seeded from an emission line with a
+   quasi-random Sobol beam (the same on every iteration), traced by RK4, their charge
+   $I \Delta t$ deposited at the midpoint of every step.
+5. **[Charge changes](/beamtracer/numerics/solver-charge-changing/)** of every trajectory on
+   the targets it crosses, as fractions (third order in the step) or as sampled events, with
+   the tallies a plasma model takes its sources from.
+6. **[The Vlasov iteration](/beamtracer/numerics/solver-vlasov/)** ties them together,
+   relaxing the charge density until the potential stops changing:
+
+<MethodCard name="beamtracer.solver.vlasov.vlasov_iterate" headingLevel={3} />
+
+7. **[Beam moments](/beamtracer/numerics/solver-diagnostics/)** at diagnostic planes: rms
+   emittance, Twiss parameters and the mismatch, with the trajectories of a cylindrical beam
+   as rings.
+
+Around the solve:
+
+- The **[neutralizer](/beamtracer/numerics/neutralizer/)** iterates the traced beam with the
+  global plasma model of the channel (wellbalanced) to a fixed point of the path fractions.
+- The **[beamline](/beamtracer/numerics/beamline/)** carries the beam on as 3D markers on
+  straight lines: a grid of beamlets, the duct with its reionization, a residual-ion dump or
+  stray field (Boris push), a calorimeter and the fits the experiments make.
+- The design problems, the **[einzel lens](/beamtracer/numerics/optimization-einzel/)** (with
+  its thin-lens and paraxial estimates) and the
+  **[H- beamlet](/beamtracer/numerics/optimization-beamlet/)**, are searched by
+  **[differential evolution](/beamtracer/numerics/optimization-search/)**, which ranks the
+  **[designs](/beamtracer/numerics/optimization-design/)** by feasibility first.
+
+## Units and conventions
+
+SI units in the solver; the configuration takes charges in e, masses in u and energies and
+temperatures in eV, and converts them to C, kg and J. The beam moves along $+x$; in
+cylindrical geometry $y$ is the radius $r$ and a trajectory stands for a ring, in planar
+geometry a current is per metre of depth. Currents are magnitudes: the sign of the space
+charge is that of the particles' charge.
+
+## Not in the model
+
+- No time dependence and no relativity (the normalised emittance uses $\beta$ only).
+- No 3D fields in the traced region, no planar or non-axisymmetric magnetic fields.
+- The source plasma is not modelled: the beams' current densities are inputs, the Boltzmann
+  species has no inertia, flow or sheath, and the meniscus is where its density falls off.
+- No collisions besides the charge changes (no scattering, energy loss or secondaries); the
+  targets are prescribed, not transported.
+- The beamline has no space charge, no fields in the duct, no gas in the field region and no
+  wall physics.
+- No convergence safeguards: an unconverged Vlasov iteration, Newton solve or neutralizer
+  fixed point returns its last iterate, flagged but without a warning.
+
+## Verification
+
+Besides the checks of the cards, the tests compare the field with the coaxial and uniformly
+charged cylinders, the Child-Langmuir diode with $-V (x/d)^{4/3}$, Busch's theorem through a
+solenoid, the charge-state fractions with plasmacoll's on the line density, the analog mean
+with the fractions mode, a parallel beam in the neutralizer with the global model, the duct
+transmission and reionization with their closed forms, the Boris push with the Larmor circle,
+and the thin-lens voltage of the einzel lens with a scan of the full model.

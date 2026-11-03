@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import numpy as np
+from methodcard import ConvergenceProblem, Rule, method
 
 from beamtracer.kernels.staggered_field_2d import kernel as staggered_field_2d
 from beamtracer.solver.mesh import IonOpticsMesh
@@ -57,6 +58,41 @@ def _edge_field(phi, solid, near, dist_lo, dist_hi, h, extrapolation):
     return out
 
 
+def _staggered_problem() -> ConvergenceProblem:
+    """The field of ``sin(x) cos(y)`` at points inside the mesh, against its gradient."""
+
+    def error(h: float) -> float:
+        n = round(2.0 / h)
+        mesh = IonOpticsMesh((n + 1, n + 1), (0.0, 0.0), h, "planar")
+        x, y = mesh.nodes()
+        field = StaggeredElectricField(mesh, np.sin(x) * np.cos(y))
+        px, py = np.random.default_rng(0).uniform(0.5, 1.5, (2, 200))
+        ex, ey = field(px, py)
+        return float(
+            max(
+                np.max(np.abs(ex + np.cos(px) * np.cos(py))),
+                np.max(np.abs(ey - np.sin(px) * np.sin(py))),
+            )
+        )
+
+    return ConvergenceProblem(error, steps=[0.1, 0.05, 0.025, 0.0125])
+
+
+@method(
+    equations={
+        "edges": r"E_{x,\, i-1/2,\, j} = \frac{\phi_{i-1,j} - \phi_{i,j}}{h}, \qquad E_{y,\, i,\, j-1/2} = \frac{\phi_{i,j-1} - \phi_{i,j}}{h}",
+        "surface": r"E_\text{edge} = \pm\frac{\phi_\text{near} - \phi_\text{electrode}}{d\, h} \quad \text{between a near-solid node and its electrode node}",
+        "faces": r"E_\text{face} = -E_\text{first} \ \text{(mirror: the axis)} \quad \text{or} \quad E_\text{face} = 2 E_\text{first} - E_\text{second} \ \text{(linear)}",
+        "interpolation": r"E(x, y) = \text{bilinear interpolation on each staggered grid}, \qquad E_x \text{ at the index } \frac{x - x_0}{h} + \tfrac12",
+    },
+    order=2,
+    assumptions=(
+        r"$d$ the bracketed distance to the surface in units of $h$; on an edge inside an electrode the field is extrapolated from the one adjacent surface, if there is exactly one",
+        r"the axis of a cylindrical mesh mirrors, so $E_r = 0$ there; the other faces extrapolate linearly",
+        r"points outside the mesh are clamped to its edges; the order is in $h$, away from electrodes and faces",
+    ),
+    problem=_staggered_problem,
+)
 class StaggeredElectricField:
     """The electric field of a potential on the edges between nodes.
 
@@ -119,14 +155,53 @@ class StaggeredElectricField:
         return ex, ey
 
 
+def _magnetic_problem() -> ConvergenceProblem:
+    """A Gaussian profile, off the axis, against the series with its exact derivatives."""
+    z = np.linspace(-1.0, 1.0, 41) + 0.0123
+    r = 0.2
+    g = np.exp(-(z**2))
+    bz = g - r**2 / 4.0 * (4.0 * z**2 - 2.0) * g
+    br = -r / 2.0 * (-2.0 * z * g) + r**3 / 16.0 * (-8.0 * z**3 + 12.0 * z) * g
+
+    def error(hz: float) -> float:
+        samples = np.arange(-5.0, 5.0 + 0.5 * hz, hz)
+        field = AxisymmetricMagneticField(-5.0, hz, np.exp(-(samples**2)), order=3)
+        got_z, got_r = field(z, np.full_like(z, r))
+        return float(max(np.max(np.abs(got_z - bz)), np.max(np.abs(got_r - br))))
+
+    return ConvergenceProblem(error, steps=[0.2, 0.1, 0.05, 0.025])
+
+
+@method(
+    equations={
+        "expansion": r"B_z = \sum_k (-1)^k \left(\frac{r}{2}\right)^{2k} \frac{B^{(2k)}}{(k!)^2}, \qquad B_r = \sum_k (-1)^{k+1} \left(\frac{r}{2}\right)^{2k+1} \frac{B^{(2k+1)}}{k!\,(k+1)!}",
+        "truncated": r"B_z = B - \frac{r^2}{4} B'' + \frac{r^4}{64} B'''' - \frac{r^6}{2304} B^{(6)}, \qquad B_r = -\frac{r}{2} B' + \frac{r^3}{16} B''' - \frac{r^5}{384} B^{(5)}",
+        "stencils": r"B^{(k)}_i = \frac{1}{\Delta z^k} \sum_{a=-3}^{3} c^{(k)}_a B_{i+a}, \quad \text{of orders } 6, 6, 4, 4, 2, 2 \text{ for } k = 1, \dots, 6",
+        "interpolation": r"B^{(k)}(z) = (1 - t)\, B^{(k)}_i + t\, B^{(k)}_{i+1}, \qquad t = \frac{z - z_0}{\Delta z} - i",
+    },
+    order=2,
+    assumptions=(
+        r"current-free and divergence-free near the axis; $B_z$ kept to $r^{2\lfloor n/2\rfloor}$ and $B_r$ to $r^{2\lceil n/2\rceil - 1}$ for `order` $n \le 6$",
+        r"at least 8 samples; the three end samples have no derivatives, and beyond the valid cells the derivatives are extrapolated linearly",
+        r"$\nabla \cdot \mathbf B = 0$ to $O(\Delta z^2)$: $B_z$ is interpolated linearly, $B_r$ uses the differenced derivatives",
+        r"the order is in the sample spacing $\Delta z$, between the samples (the linear interpolation)",
+    ),
+    references=(
+        "[Reiser, Theory and Design of Charged Particle Beams, 2nd ed. (2008)](https://doi.org/10.1002/9783527622047)",
+    ),
+    problem=_magnetic_problem,
+)
 class AxisymmetricMagneticField:
-    """A static axisymmetric magnetic field from its on-axis profile ``B_z(z)``.
+    r"""A static axisymmetric magnetic field from its on-axis profile ``B_z(z)``.
 
     ``bz`` [T] is sampled at ``z0 + hz * k``. Off the axis, the field is the power series in
     ``r`` up to ``order`` (at most 6), with the derivatives of the profile from 7-point finite
     differences:
 
-        B_z = B - r^2 B''/4 + r^4 B''''/64 - ...,   B_r = -r B'/2 + r^3 B'''/16 - ...
+    $$
+    B_z = B - \frac{r^2}{4} B'' + \frac{r^4}{64} B'''' - \dots, \qquad
+    B_r = -\frac{r}{2} B' + \frac{r^3}{16} B''' - \dots
+    $$
     """
 
     def __init__(
@@ -193,6 +268,31 @@ class AxisymmetricMagneticField:
         return bz, br
 
 
+def _solenoid_rules() -> dict:
+    """The SymPy rule of `solenoid_on_axis` (for the tests)."""
+    import sympy
+
+    z, c, length, a, peak = sympy.symbols("z centre length radius peak", real=True)
+
+    def shape(at):
+        low, high = at - c + length / 2, at - c - length / 2
+        return low / sympy.sqrt(low**2 + a**2) - high / sympy.sqrt(high**2 + a**2)
+
+    ranges = {"z": (-2.0, 2.0), "centre": (-0.5, 0.5)}
+    return {"shape": Rule(peak * shape(z) / shape(c), ranges=ranges)}
+
+
+@method(
+    equations={
+        "shape": r"B(z) = B_0 \frac{S(z)}{S(c)}, \qquad S(z) = \frac{z - c + L/2}{\sqrt{(z - c + L/2)^2 + a^2}} - \frac{z - c - L/2}{\sqrt{(z - c - L/2)^2 + a^2}}",
+    },
+    assumptions=(
+        r"a thin-walled solenoid (a finite current sheet) of length $L$, winding radius $a$ and centre $c$; $S$ is its on-axis field in units of $\mu_0 n I / 2$",
+        r"scaled so that $B_0$ is the field at the centre",
+        r"`BeamOptics` samples the solenoids at $\Delta z = h/2$ from $x_\mathrm{min} - 8\Delta z$ to $x_\mathrm{max} + 8\Delta z$, or adds them to a measured axial field",
+    ),
+    symbolic=_solenoid_rules,
+)
 def solenoid_on_axis(
     z: np.ndarray, centre: float, length: float, radius: float, peak: float
 ) -> np.ndarray:
@@ -227,6 +327,17 @@ def _node_component(
     )
 
 
+@method(
+    equations={
+        "component": r"E_{x,\text{node}} = \begin{cases} E \text{ on the edge to the electrode} & \text{a solid neighbour on one side} \\ \text{the larger in magnitude} & \text{solid neighbours on both sides} \\ \tfrac12 (E_{i-1/2} + E_{i+1/2}) & \text{none} \end{cases}",
+        "magnitude": r"|E| = \sqrt{E_x^2 + E_y^2} \quad \text{at the near-solid nodes}",
+    },
+    assumptions=(
+        r"the edge to an electrode is taken over the bracketed distance to its surface, so it is the field at the surface",
+        r"at a sharp corner the field is singular and this value grows as the mesh is refined: round the electrode edges whose field matters",
+    ),
+    components=("beamtracer.solver.fields.StaggeredElectricField",),
+)
 def surface_field(
     mesh: IonOpticsMesh, field: StaggeredElectricField
 ) -> tuple[np.ndarray, np.ndarray]:

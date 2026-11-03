@@ -1,8 +1,8 @@
-"""The configuration of a beam: :class:`BeamOpticsConfig` and its sections.
+"""The configuration of a beam: `BeamOpticsConfig` and its sections.
 
 The sections are the beams, the plasma, the solenoids, the space-charge compensation and
 the charge changes; the grid, the walls and the electrodes are in
-:mod:`beamtracer.sections`. All values are SI, except charges in elementary charges,
+`beamtracer.sections`. All values are SI, except charges in elementary charges,
 masses in atomic mass units and energies and temperatures in eV.
 """
 
@@ -144,14 +144,14 @@ class ChargeChangingParams:
     ``cross_sections`` are ``{target: {from_state: {to_state: sigma}}}`` (m^2),
     ``densities`` the target densities ``{target: n}`` (m^-3), uniform or a profile
     along ``x`` ``{"x": [...], "density": [...]}`` (e.g. the gas between the grids
-    of an accelerator, :func:`~beamtracer.solver.charge_changing.conductance_profile`),
+    of an accelerator, `beamtracer.solver.charge_changing.conductance_profile`),
     ``charges`` the charge of every state in e, ``ionization``
     ``{target: {state: sigma}}`` cross sections for ionizing the targets, tallied
     only. In ``mode="fractions"`` every trajectory carries the fractions of its
     particles in each state; in ``mode="analog"`` it is in one state that changes
     at sampled events, and an event splits it into ``splitting`` trajectories
     for its first ``split_events`` events, with random numbers from ``seed``; see
-    :mod:`beamtracer.solver.charge_changing`.
+    `beamtracer.solver.charge_changing`.
     """
 
     cross_sections: dict
@@ -205,7 +205,7 @@ class ChargeChangingParams:
         )
 
     def build(self):
-        """The :class:`~beamtracer.solver.charge_changing.ChargeChanging` of these settings."""
+        """The `beamtracer.solver.charge_changing.ChargeChanging` of these settings."""
         from plasmacoll import ChargeStateTransitions
 
         from beamtracer.solver.charge_changing import AxialProfile, ChargeChanging
@@ -348,10 +348,10 @@ class BeamOpticsConfig:
     (Dirichlet or Neumann; in cylindrical geometry the ``y`` lower face is the axis);
     ``None`` is grounded faces.
 
-    ``beams`` are :class:`BeamSpecies` (emitted from a line) or :class:`ParticleBeam`
+    ``beams`` are `BeamSpecies` (emitted from a line) or `ParticleBeam`
     (given trajectory by trajectory). ``plasma`` adds the Boltzmann plasma species: electrons
-    for positive-ion extraction (:class:`ExtractionPlasma`), positive ions for negative-ion
-    extraction (:class:`NegativeExtractionPlasma`, the negative ions and electrons being
+    for positive-ion extraction (`ExtractionPlasma`), positive ions for negative-ion
+    extraction (`NegativeExtractionPlasma`, the negative ions and electrons being
     beams), ``solenoids`` and ``axial_field`` an axisymmetric magnetic field expanded
     off the axis to ``field_order``, ``compensation`` reduces the beam's space charge in
     regions of ``x``. ``charge_changing`` lets the beam change charge state on
@@ -428,7 +428,7 @@ class BeamOpticsConfig:
         return replace(self, **changes)
 
     def to_dict(self) -> ConfigDict:
-        """Return the configuration-file form, which :meth:`from_dict` reads."""
+        """Return the configuration-file form, which `from_dict` reads."""
         params: ConfigDict = {"type": self.model_name}
         for entry in fields(self):
             value = getattr(self, entry.name)

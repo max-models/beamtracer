@@ -1,4 +1,4 @@
-"""Poisson's equation on an :class:`IonOpticsMesh`, with a Boltzmann plasma species.
+r"""Poisson's equation on an `IonOpticsMesh`, with a Boltzmann plasma species.
 
 The finite differences are the 5-point Laplacian, in
 cylindrical geometry ``(1 -/+ 1/2j)`` weights on the radial neighbours and ``4 (phi_1 - phi_0)``
@@ -7,12 +7,16 @@ faces. Each row is scaled by ``h**2``.
 
 For positive-ion extraction the plasma electrons follow a Boltzmann distribution,
 
-    rho_e = -rho_e0 exp((phi - U_p) / T_e),
+$$
+\rho_e = -\rho_{e0} \exp\left(\frac{\phi - U_p}{T_e}\right),
+$$
 
 and for negative-ion extraction the plasma's positive ions do, the beams of negative ions and
 electrons being traced,
 
-    rho_p = rho_p0 exp(-(phi - U_p) / T_p),
+$$
+\rho_p = \rho_{p0} \exp\left(-\frac{\phi - U_p}{T_p}\right),
+$$
 
 on every free node; the nonlinear equation is solved with Newton's method. Before the first
 beam is known, the potential of an *initial plasma* region is fixed to ``U_p`` instead.
@@ -26,6 +30,7 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 import scope_profiler
+from methodcard import ConvergenceProblem, method
 from scipy.constants import epsilon_0
 
 from beamtracer._profiling import PROFILE_TAGS
@@ -33,6 +38,17 @@ from beamtracer.solver.mesh import IonOpticsMesh
 
 
 @dataclass(frozen=True)
+@method(
+    equations={
+        "density": r"\rho_e = -\rho_{e0} \exp\left(\frac{\phi - U_p}{T_e}\right)",
+        "neutral": r"\rho_{e0} = \sum_\mathrm{beams} \frac{J}{v_0}, \qquad v_0 = \sqrt{\frac{2 E e}{m}}",
+    },
+    assumptions=(
+        r"isothermal electrons in equilibrium with the potential: no inertia, flow or sheath beyond the Boltzmann factor",
+        r"$\rho_{e0}$ given, or by default the charge density of the beams at their start, so the plasma is neutral there (`ParticleBeam`s add nothing)",
+        r"$T_e$ and $U_p$ in eV and V; the species has the sign $s = -1$",
+    ),
+)
 class BoltzmannElectrons:
     """Boltzmann plasma electrons for positive-ion extraction.
 
@@ -60,10 +76,22 @@ class BoltzmannElectrons:
 
 
 @dataclass(frozen=True)
+@method(
+    equations={
+        "density": r"\rho_p = \rho_{p0} \exp\left(-\frac{\phi - U_p}{T_p}\right)",
+        "neutral": r"\rho_{p0} = \sum_\mathrm{beams} \frac{J}{v_0}, \qquad v_0 = \sqrt{\frac{2 E e}{m}}",
+        "both_signs": r"\rho = s\, \rho_0\, e^{-s (\phi - U_p) / T}, \qquad s = +1 \text{ (ions)}, \ -1 \text{ (electrons)}",
+    },
+    assumptions=(
+        r"the plasma's positive ions, repelled by the extraction field; the negative ions and the co-extracted electrons are traced beams",
+        r"isothermal ions in equilibrium with the potential, $T_p > 0$",
+        r"$\rho_{p0}$ given, or by default the negative charge density of the beams at their start",
+    ),
+)
 class BoltzmannIons:
     """Thermal positive plasma ions for negative-ion extraction.
 
-    The counterpart of :class:`BoltzmannElectrons`: the negative ions and the electrons are
+    The counterpart of `BoltzmannElectrons`: the negative ions and the electrons are
     traced as beams, the positive ions repelled by the extraction field follow
     ``rho_p exp(-(phi - U_p) / T_p)``. ``rho_p`` [C/m^3] is their charge density in the
     plasma, usually the negative charge density of the beams at their start (``sum J / v``),
@@ -202,6 +230,50 @@ def _assemble(mesh: IonOpticsMesh, fixed: np.ndarray, value: np.ndarray) -> _Sys
     return _System(matrix, rhs, free)
 
 
+def _poisson_problem() -> ConvergenceProblem:
+    """A manufactured potential in cylindrical geometry, against its exact values."""
+    from beamtracer.solver.mesh import FaceCondition
+
+    def error(h: float) -> float:
+        n = round(1.0 / h)
+        zero = FaceCondition("dirichlet", 0.0)
+        mesh = IonOpticsMesh(
+            (2 * n + 1, n + 1),
+            (-1.0, 0.0),
+            h,
+            "cylindrical",
+            faces={"x_min": zero, "x_max": zero, "y_max": zero},
+        )
+        x, r = mesh.nodes()
+        cx, cr = np.cos(0.5 * np.pi * x), np.cos(0.5 * np.pi * r)
+        # sin(pi r / 2) / r, pi / 2 on the axis
+        sinc = 0.5 * np.pi * np.sinc(0.5 * r)
+        laplacian = -0.5 * np.pi**2 * cx * cr - 0.5 * np.pi * cx * sinc
+        phi = IonOpticsPoisson(mesh).solve(-epsilon_0 * laplacian)
+        return float(np.max(np.abs(phi - cx * cr)))
+
+    return ConvergenceProblem(error, steps=[1 / 8, 1 / 16, 1 / 32, 1 / 64])
+
+
+@method(
+    equations={
+        "poisson": r"\nabla^2 \phi = -\frac{\rho_b + \rho_p}{\varepsilon_0}, \qquad \nabla^2 = \partial_x^2 + \frac{1}{r}\partial_r (r\, \partial_r) \text{ (cylindrical, } \partial_\theta = 0)",
+        "shortley_weller": r"h^2 \partial_x^2 \phi \approx \frac{2\, \phi_-}{(\alpha + \beta)\alpha} + \frac{2\, \phi_+}{(\alpha + \beta)\beta} - \frac{2\, \phi_0}{\alpha \beta}",
+        "radial": r"h^2 \frac{1}{r}\partial_r (r\, \partial_r \phi) \approx \frac{2/\alpha - 1/j}{\alpha + \beta}\, \phi_- + \frac{2/\beta + 1/j}{\alpha + \beta}\, \phi_+ - \frac{2}{\alpha \beta}\, \phi_0, \quad j \ge 1",
+        "axis": r"h^2 \frac{1}{r}\partial_r (r\, \partial_r \phi)\Big|_{r = 0} \approx 4 (\phi_1 - \phi_0)",
+        "neumann": r"\phi_{-1} = \phi_1 + 2 h g: \qquad h^2 \partial_x^2 \phi \approx \frac{2 (\phi_1 - \phi_0)}{\beta^2} + \frac{2 h g}{\beta}",
+        "rhs": r"b = -\frac{h^2 \rho}{\varepsilon_0} - \sum_\text{fixed neighbours} w\, \phi_\text{fixed}",
+    },
+    order=2,
+    assumptions=(
+        r"$\alpha$, $\beta$ the distances to the lower and upper neighbour or electrode surface in units of $h$ (1 away from electrodes); for $\alpha = \beta = 1$ the 5-point stencil",
+        r"$g$ the outward normal derivative of a Neumann face [V/m]",
+        r"the linear system solved by SuperLU (`scipy.sparse.linalg.splu`), its factorisation cached per set of fixed nodes",
+        r"the order is in $h$, for a smooth potential away from electrode corners",
+    ),
+    references=("G. H. Shortley and R. Weller, J. Appl. Phys. 9, 334 (1938)",),
+    problem=_poisson_problem,
+)
 class IonOpticsPoisson:
     """Solve ``laplace(phi) = -rho / epsilon_0`` (plus a Boltzmann plasma species) on a mesh.
 
@@ -223,6 +295,19 @@ class IonOpticsPoisson:
             self._systems = {key: _assemble(self.mesh, fixed, value)}
         return self._systems[key]
 
+    @method(
+        equations={
+            "residual": r"R(u) = A u - b + s\, a\, e^{-s (u - U_p) / T}, \qquad a = \frac{\rho_0 h^2}{\varepsilon_0}",
+            "newton": r"\left(A - \operatorname{diag}\frac{a\, e^{-s (u - U_p) / T}}{T}\right) \delta u = -R(u), \qquad u \leftarrow u + \delta u",
+            "stop": r"\max |\delta u| < 10^{-6} \max\left(\operatorname{ptp}(\phi_\text{fixed}),\ T,\ 1\ \mathrm{V}\right)",
+        },
+        assumptions=(
+            r"$s = \pm 1$ the sign of the Boltzmann species; the exponent capped at 50 to keep a bad first guess finite",
+            r"started from the vacuum solution or the previous potential; undamped, at most 100 steps, the last iterate returned without a warning",
+            r"without a plasma species one linear solve; an initial plasma region is held at $U_p$ as extra fixed nodes",
+        ),
+        components=("beamtracer.solver.poisson.IonOpticsPoisson",),
+    )
     @scope_profiler.profile("beamtracer.field_solve", tags=PROFILE_TAGS)
     def solve(
         self,

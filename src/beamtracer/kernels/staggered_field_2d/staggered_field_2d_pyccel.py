@@ -2,7 +2,7 @@
 
 ``staggered_field_2d_cuda.cu`` next to this file is the CUDA version (GPU) and
 ``staggered_field_2d_numpy.py`` the version for machines without Pyccel, all with the
-same arguments; :class:`beamtracer.solver.StaggeredElectricField` calls it.
+same arguments; `beamtracer.solver.StaggeredElectricField` calls it.
 """
 
 # mypy: ignore-errors

@@ -1,18 +1,18 @@
 """A neutralizer: beam trajectories through the channel, coupled to the plasma they make.
 
 The plasma of a beam-driven plasma neutralizer is a global model of the channel
-(:class:`wellbalanced.neutralizer.Neutralizer`, which also holds the channel, the
+(`wellbalanced.neutralizer.Neutralizer`, which also holds the channel, the
 beam and its cross sections). Alone it treats the beam as a line integral along
-the axis. :class:`NeutralizerChannel` traces the beam instead: a
-:class:`~beamtracer.model.BeamOptics` run on the channel's section in
+the axis. `NeutralizerChannel` traces the beam instead: a
+`beamtracer.model.BeamOptics` run on the channel's section in
 ``(x, y)`` (planar, per unit height), grounded walls at ``y = +-w/2``, every
 trajectory carrying its charge-state fractions on the gas and the plasma of the
-global model (:mod:`beamtracer.solver.charge_changing`), its space charge
+global model (`beamtracer.solver.charge_changing`), its space charge
 reduced by the plasma's ``compensation``. From the trace the global model takes
 its beam sources: the path-integrated fractions ``sum_k N_k int F_s ds / (N L)``
 in place of the fractions averaged along the axis, so beam particles lost to
 the walls early feed the plasma less. The two are iterated to a fixed point
-(:meth:`NeutralizerChannel.solve`), starting from the global model alone.
+(`NeutralizerChannel.solve`), starting from the global model alone.
 
 The trace gives what the global model cannot: the transmission of each charge
 state to the exit, the beam lost on the walls, and the divergence of the
@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+from methodcard import method
 from scipy import constants
 
 from beamtracer.config import (
@@ -68,7 +69,7 @@ class TracedNeutralizer:
         path_fractions: ``sum_k N_k int F_s ds / (N L)``, the fractions the plasma sees.
         neutral_divergence: rms angle (rad) of the neutrals at the exit.
         plasma: The plasma's steady state.
-        model: The last :class:`~beamtracer.model.BeamOptics` run.
+        model: The last `beamtracer.model.BeamOptics` run.
         axis: The global model alone (the beam as a line integral along the axis).
         iterations: Fixed-point iterations.
         converged: Whether the fixed point converged.
@@ -91,6 +92,28 @@ class TracedNeutralizer:
 
 
 @dataclass
+@method(
+    equations={
+        "beam": r"J = \frac{I}{w_b H}, \qquad T_\perp = 2 E \theta^2",
+        "path_fractions": r"f_s = \frac{\sum_k N_k \int F_{s,k}\, ds}{\dot N L}, \qquad \dot N = \frac{I}{e H}",
+        "relaxation": r"f \leftarrow (1 - \omega)\, f + \omega\, f_\mathrm{traced}, \qquad f \leftarrow f_\mathrm{traced} \text{ in the first iteration}",
+        "convergence": r"\max_s |f_{\mathrm{traced}, s} - f_s| < \text{tolerance} \quad \text{and the plasma converged}",
+        "exit": r"F_s^\mathrm{exit} = \frac{I_s(x_\mathrm{exit})}{e \dot N}",
+    },
+    assumptions=(
+        r"the channel's section in $(x, y)$, planar per metre of the height $H$; grounded walls at $y = \pm w/2$; the beam of width $w_b$ enters as negative ions, centred",
+        r"rms divergence $\theta = \sigma_\perp / v_0$, hence $T_\perp = 2 E \theta^2$; the space charge reduced by the plasma's `compensation`",
+        r"the gas target at the plasma's gas target density, the plasma target at its electron density; the plasma model (wellbalanced) takes the path fractions in place of fractions averaged along the axis",
+        r"$\omega$ = `relaxation` (0.7); at most `max_iterations`, the last state returned with `converged=False` and no warning",
+    ),
+    references=(
+        "[wellbalanced](https://github.com/max-models/wellbalanced) `neutralizer`",
+    ),
+    components=(
+        "beamtracer.model.BeamOptics",
+        "beamtracer.solver.charge_changing.ChargeChanging",
+    ),
+)
 class NeutralizerChannel:
     """One neutralizer channel traced in ``(x, y)``; see the module docstring.
 
@@ -107,7 +130,7 @@ class NeutralizerChannel:
         step_fraction: Step of the tracer, a share of its estimate.
         mode: ``"fractions"`` (every trajectory carries the fractions of its
             states) or ``"analog"`` (one state per trajectory, changed at
-            sampled events); see :mod:`beamtracer.solver.charge_changing`.
+            sampled events); see `beamtracer.solver.charge_changing`.
         splitting: In analog mode, the trajectories an event splits one into.
         seed: In analog mode, the seed of the random numbers.
         settings: Entries of the ``BeamOptics`` configuration to override.
