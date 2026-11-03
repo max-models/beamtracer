@@ -91,10 +91,14 @@ def test_the_dump_sorts_the_states_onto_the_plates():
     # where on the plate: the parabola from the axis
     distance = SPEED * np.sqrt(gap / (constants.e * e_field / MASS))
     assert np.median(result.wall.position[0]) == pytest.approx(distance, rel=0.1)
-    total = result.exit.total_power + result.wall.total_power
-    assert total == pytest.approx(3e6)
+    # the ions bring the field's work to the plates: from about the axis to the
+    # plate, e E gap / 2 on top of their energy (the neutrals keep theirs)
+    gain = constants.e * e_field * gap / 2 / (0.5 * MASS * SPEED**2)
+    assert result.exit.total_power == pytest.approx(1e6)
+    assert result.wall_power(2) == pytest.approx([1e6 * (1 + gain)] * 2, rel=0.2 * gain)
     assert float(result.summary().power_lost) == 0.0
-    assert result.wall_power(2) == pytest.approx([1e6, 1e6])
+    rate = result.wall.power / (0.5 * MASS * np.sum(result.wall.velocity**2, axis=0))
+    assert rate.sum() == pytest.approx(2e6 / (0.5 * MASS * SPEED**2))
 
 
 def test_stray_field_bends_reionized_ions_onto_the_duct():
