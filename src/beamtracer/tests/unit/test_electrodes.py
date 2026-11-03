@@ -109,7 +109,7 @@ def test_a_union_round_trips_through_its_configuration_file_form() -> None:
     ]
     assert tube["bc"] == {
         "type": "dirichlet",
-        "potential": {"value": VOLTAGE, "unit": "V"},
+        "potential": f"{VOLTAGE:g} V",
     }
     again = BeamOpticsConfig.from_dict(params)
     assert again.to_dict() == config.to_dict()
@@ -127,8 +127,8 @@ def test_union_shapes_read_units_and_configuration_entries() -> None:
         shapes=[
             {
                 "type": "circle",
-                "midpoint": {"values": [3.5, 3.0], "unit": "mm"},
-                "radius": {"value": 0.5, "unit": "mm"},
+                "midpoint": ["3.5 mm", "3 mm"],
+                "radius": "0.5 mm",
             },
             ShapeParams("rectangle", midpoint=(5e-3, 3e-3), side_lengths=(3e-3, 1e-3)),
         ],  # type: ignore[list-item]

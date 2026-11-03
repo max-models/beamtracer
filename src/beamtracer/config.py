@@ -3,14 +3,26 @@
 The sections are the beams, the plasma, the solenoids, the space-charge compensation and
 the charge changes; the grid, the walls and the electrodes are in
 `beamtracer.sections`. All values are SI, except charges in elementary charges,
-masses in atomic mass units and energies and temperatures in eV.
+masses in atomic mass units (u) and energies and temperatures in eV. Every physical
+setting also takes an astropy Quantity (``5 * u.keV``) or a string astropy parses
+(``"5 keV"``, as in a configuration file), converted to these units when the setting
+is made (`plasmacoll.units`); temperatures convert between K and eV.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field, fields, replace
+from dataclasses import dataclass, field, fields, replace
 from typing import Any, ClassVar
+
+from plasmacoll.units import (
+    convert_units,
+    dataclass_to_dict,
+    to_array,
+    to_unit,
+    unit_field,
+    with_unit,
+)
 
 from beamtracer.sections import (
     ConfigDict,
@@ -28,24 +40,24 @@ class BeamSpecies:
     ``num_particles`` trajectories start evenly spaced on the segment from ``start`` to
     ``end`` (``(x, y)`` or ``(x, r)`` [m]) with ``energy`` [eV] perpendicular to it and
     Gaussian spreads ``parallel_temperature`` / ``transverse_temperature`` [eV].
-    ``current_density`` [A/m^2], ``charge`` [e], ``mass`` [u].
+    ``current_density`` [A/m^2], ``charge`` [e], ``mass`` [u]. The physical settings
+    take Quantities or strings too (``energy="5 keV"``, ``mass=2.014 * u.u``).
     """
 
     name: str
-    current_density: float
-    start: tuple[float, float]
-    end: tuple[float, float]
+    current_density: float = unit_field("A/m2")
+    start: tuple[float, float] = unit_field("m")
+    end: tuple[float, float] = unit_field("m")
     charge: float = 1.0
-    mass: float = 1.007276
-    energy: float = 5.0
-    parallel_temperature: float = 0.0
-    transverse_temperature: float = 0.5
+    mass: float = unit_field("u", 1.007276)
+    energy: float = unit_field("eV", 5.0)
+    parallel_temperature: float = unit_field("eV", 0.0)
+    transverse_temperature: float = unit_field("eV", 0.5)
     num_particles: int = 1000
 
     def __post_init__(self) -> None:
-        """Check the values."""
-        object.__setattr__(self, "start", tuple(float(v) for v in self.start))
-        object.__setattr__(self, "end", tuple(float(v) for v in self.end))
+        """Convert the units and check the values."""
+        convert_units(self)
         if len(self.start) != 2 or len(self.end) != 2:
             raise ValueError("start and end are (x, y) points")
         if self.num_particles < 1:
@@ -62,6 +74,7 @@ class ParticleBeam:
 
     ``position`` and ``velocity`` are ``(N, 3)`` Cartesian [m, m/s] (in cylindrical geometry
     ``x`` is the axis), ``current`` [A] per trajectory, one ``charge`` [e] and ``mass`` [u].
+    The arrays and the mass take Quantities too (``position=points * u.mm``).
     """
 
     name: str
@@ -69,15 +82,19 @@ class ParticleBeam:
     velocity: tuple
     current: tuple
     charge: float = 1.0
-    mass: float = 1.007276
+    mass: float = unit_field("u", 1.007276)
 
     def __post_init__(self) -> None:
-        """Store the arrays as nested tuples."""
+        """Convert the units and store the arrays as nested tuples."""
         import numpy as np
 
-        position = np.asarray(self.position, dtype=float).reshape(-1, 3)
-        velocity = np.asarray(self.velocity, dtype=float).reshape(-1, 3)
-        current = np.asarray(self.current, dtype=float).ravel()
+        convert_units(self)
+        position = to_array(self.position, "m", "position")
+        velocity = to_array(self.velocity, "m/s", "velocity")
+        current = to_array(self.current, "A", "current")
+        position = np.asarray(position, dtype=float).reshape(-1, 3)
+        velocity = np.asarray(velocity, dtype=float).reshape(-1, 3)
+        current = np.asarray(current, dtype=float).ravel()
         if not position.shape[0] == velocity.shape[0] == current.size:
             raise ValueError(
                 "position, velocity and current need one row per trajectory"
@@ -97,14 +114,19 @@ class ExtractionPlasma:
 
     In the first iteration the free nodes with ``x < initial_plasma_x`` [m] are held at
     ``plasma_potential`` [V]; later the electron charge density is
-    ``-rho_e exp((phi - plasma_potential) / electron_temperature)``, with ``rho_e`` of
-    ``None`` the ion charge density of the beams at their start (``sum J / v``).
+    ``-rho_e exp((phi - plasma_potential) / electron_temperature)`` [eV], with ``rho_e``
+    [C/m^3] of ``None`` the ion charge density of the beams at their start
+    (``sum J / v``). Each takes a Quantity or a string too (``"2 eV"``, ``"20000 K"``).
     """
 
-    electron_temperature: float
-    plasma_potential: float
-    initial_plasma_x: float
-    rho_e: float | None = None
+    electron_temperature: float = unit_field("eV")
+    plasma_potential: float = unit_field("V")
+    initial_plasma_x: float = unit_field("m")
+    rho_e: float | None = unit_field("C/m3", None)
+
+    def __post_init__(self) -> None:
+        """Convert the units."""
+        convert_units(self)
 
 
 @dataclass(frozen=True)
@@ -113,19 +135,20 @@ class NegativeExtractionPlasma:
 
     The negative ions and the electrons extracted with them are the beams, traced; the
     positive ions, repelled by the extraction field, have the charge density
-    ``rho_p exp(-(phi - plasma_potential) / ion_temperature)``, with ``rho_p`` of ``None``
-    the negative charge density of the beams at their start (``sum J / v``). In the first
-    iteration the free nodes with ``x < initial_plasma_x`` [m] are held at
-    ``plasma_potential`` [V].
+    ``rho_p exp(-(phi - plasma_potential) / ion_temperature)`` [eV], with ``rho_p``
+    [C/m^3] of ``None`` the negative charge density of the beams at their start
+    (``sum J / v``). In the first iteration the free nodes with ``x < initial_plasma_x``
+    [m] are held at ``plasma_potential`` [V]. Each takes a Quantity or a string too.
     """
 
-    ion_temperature: float
-    plasma_potential: float
-    initial_plasma_x: float
-    rho_p: float | None = None
+    ion_temperature: float = unit_field("eV")
+    plasma_potential: float = unit_field("V")
+    initial_plasma_x: float = unit_field("m")
+    rho_p: float | None = unit_field("C/m3", None)
 
     def __post_init__(self) -> None:
-        """Check the temperature."""
+        """Convert the units and check the temperature."""
+        convert_units(self)
         if not self.ion_temperature > 0.0:
             raise ValueError(
                 f"ion_temperature must be positive, got {self.ion_temperature}"
@@ -151,7 +174,8 @@ class ChargeChangingParams:
     particles in each state; in ``mode="analog"`` it is in one state that changes
     at sampled events, and an event splits it into ``splitting`` trajectories
     for its first ``split_events`` events, with random numbers from ``seed``; see
-    `beamtracer.solver.charge_changing`.
+    `beamtracer.solver.charge_changing`. The cross sections, densities and ``x`` take
+    Quantities or strings too (``"1e-20 m2"``, ``"1e19 m-3"``).
     """
 
     cross_sections: dict
@@ -177,7 +201,9 @@ class ChargeChangingParams:
                     str(a): {str(b): float(v) for b, v in row.items()}
                     for a, row in table.items()
                 }
-                for t, table in self.cross_sections.items()
+                for t, table in to_unit(
+                    self.cross_sections, "m2", "cross_sections"
+                ).items()
             },
         )
         object.__setattr__(
@@ -186,11 +212,15 @@ class ChargeChangingParams:
             {
                 str(t): (
                     {
-                        "x": [float(v) for v in _entry(n, "x")],
-                        "density": [float(v) for v in _entry(n, "density")],
+                        "x": list(to_unit(_entry(n, "x"), "m", f"densities[{t!r}].x")),
+                        "density": list(
+                            to_unit(
+                                _entry(n, "density"), "m-3", f"densities[{t!r}].density"
+                            )
+                        ),
                     }
                     if isinstance(n, Mapping) or hasattr(n, "density")
-                    else float(n)
+                    else to_unit(n, "m-3", f"densities[{t!r}]")
                 )
                 for t, n in self.densities.items()
             },
@@ -200,9 +230,32 @@ class ChargeChangingParams:
             "ionization",
             {
                 str(t): {str(k): float(v) for k, v in row.items()}
-                for t, row in (self.ionization or {}).items()
+                for t, row in to_unit(self.ionization or {}, "m2", "ionization").items()
             },
         )
+
+    def to_dict(self) -> ConfigDict:
+        """Return the configuration-file form (cross sections in m^2, densities in m^-3)."""
+        return {
+            "cross_sections": with_unit(self.cross_sections, "m2"),
+            "densities": {
+                t: (
+                    {
+                        "x": with_unit(n["x"], "m"),
+                        "density": with_unit(n["density"], "m-3"),
+                    }
+                    if isinstance(n, dict)
+                    else with_unit(n, "m-3")
+                )
+                for t, n in self.densities.items()
+            },
+            "charges": dict(self.charges),
+            "ionization": with_unit(self.ionization, "m2"),
+            "mode": self.mode,
+            "splitting": self.splitting,
+            "split_events": self.split_events,
+            "seed": self.seed,
+        }
 
     def build(self):
         """The `beamtracer.solver.charge_changing.ChargeChanging` of these settings."""
@@ -241,38 +294,51 @@ class ChargeChangingParams:
 class Solenoid:
     """A thin-walled solenoid on the axis.
 
-    ``centre``, ``length``, winding ``radius`` [m] and on-axis ``peak`` field [T].
+    ``centre``, ``length``, winding ``radius`` [m] and on-axis ``peak`` field [T]; each
+    takes a Quantity or a string too (``"50 mm"``, ``"0.1 T"``).
     """
 
-    centre: float
-    length: float
-    radius: float
-    peak: float
+    centre: float = unit_field("m")
+    length: float = unit_field("m")
+    radius: float = unit_field("m")
+    peak: float = unit_field("T")
+
+    def __post_init__(self) -> None:
+        """Convert the units."""
+        convert_units(self)
 
 
 @dataclass(frozen=True)
 class AxialField:
-    """A measured on-axis field ``bz`` [T] sampled at ``z0 + dz * k`` [m]."""
+    """A measured on-axis field ``bz`` [T] sampled at ``z0 + dz * k`` [m].
 
-    z0: float
-    dz: float
-    bz: tuple
+    Each takes a Quantity or a string too (``bz=samples * u.mT``).
+    """
+
+    z0: float = unit_field("m")
+    dz: float = unit_field("m")
+    bz: tuple = unit_field("T")
 
     def __post_init__(self) -> None:
-        """Store the samples as a tuple."""
-        object.__setattr__(self, "bz", tuple(float(b) for b in self.bz))
+        """Convert the units; store the samples as a tuple."""
+        convert_units(self)
 
 
 @dataclass(frozen=True)
 class SpaceChargeCompensation:
-    """The beam's space charge is reduced by ``fraction`` between ``x_min`` and ``x_max``."""
+    """The beam's space charge is reduced by ``fraction`` between ``x_min`` and ``x_max``.
 
-    x_min: float
-    x_max: float
-    fraction: float
+    ``x_min`` and ``x_max`` in m, or Quantities or strings such as ``"10 mm"``.
+    """
+
+    x_min: float = unit_field("m")
+    x_max: float = unit_field("m")
+    # required: pyright takes the unit fields for fields with defaults
+    fraction: float  # pyright: ignore[reportGeneralTypeIssues]
 
     def __post_init__(self) -> None:
-        """Check the fraction."""
+        """Convert the units and check the fraction."""
+        convert_units(self)
         if not 0.0 <= self.fraction <= 1.0:
             raise ValueError(f"fraction must be in [0, 1], got {self.fraction}")
 
@@ -288,7 +354,7 @@ def beam_from_value(value: Any) -> BeamSpecies | ParticleBeam:
 
 def beam_to_dict(beam: BeamSpecies | ParticleBeam) -> ConfigDict:
     """Return the configuration-file form of a beam."""
-    params = asdict(beam)
+    params = dataclass_to_dict(beam)
     params["type"] = "particles" if isinstance(beam, ParticleBeam) else "line"
     return params
 
@@ -317,7 +383,7 @@ def plasma_to_dict(
     """Return the configuration-file form of a plasma."""
     if plasma is None:
         return None
-    params = asdict(plasma)
+    params = dataclass_to_dict(plasma)
     params["type"] = (
         "negative" if isinstance(plasma, NegativeExtractionPlasma) else "positive"
     )
@@ -363,6 +429,8 @@ class BeamOpticsConfig:
     ``max_steps`` steps.
     ``diagnostic_planes`` [m] record the trajectories crossing ``x = const``;
     ``save_trajectories`` keeps every n-th trajectory for plotting (0: none).
+    ``tolerance`` and ``diagnostic_planes`` take Quantities or strings too, like the
+    settings of the sections.
     """
 
     #: The ``type`` of the configuration-file form.
@@ -379,15 +447,16 @@ class BeamOpticsConfig:
     compensation: list[SpaceChargeCompensation] = field(default_factory=list)
     charge_changing: ChargeChangingParams | None = None
     iterations: int = 20
-    tolerance: float = 1.0e-3
+    tolerance: float = unit_field("V", 1.0e-3)
     relaxation: float = 1.0
     step_fraction: float = 0.5
     max_steps: int = 100_000
-    diagnostic_planes: list[float] = field(default_factory=list)
+    diagnostic_planes: list[float] = unit_field("m", default_factory=list)
     save_trajectories: int = 0
 
     def __post_init__(self) -> None:
-        """Check the grid and read the sections."""
+        """Convert the units, check the grid and read the sections."""
+        convert_units(self)
         self.grid = _section(GridParams, self.grid)
         self.objects = {
             name: _section(ObjectParams, obj)
@@ -413,7 +482,7 @@ class BeamOpticsConfig:
             coerce(SpaceChargeCompensation, c) for c in self.compensation
         ]
         self.charge_changing = coerce(ChargeChangingParams, self.charge_changing)
-        self.diagnostic_planes = [float(x) for x in self.diagnostic_planes]
+        self.diagnostic_planes = list(self.diagnostic_planes)
         if (
             self.solenoids or self.axial_field
         ) and self.grid.coordinates != "cylindrical":
@@ -434,19 +503,20 @@ class BeamOpticsConfig:
             value = getattr(self, entry.name)
             if value is None:
                 continue
-            params[entry.name] = value
+            unit = entry.metadata.get("unit")
+            params[entry.name] = value if unit is None else with_unit(value, unit)
         params["grid"] = self.grid.to_dict()
         params["objects"] = {name: obj.to_dict() for name, obj in self.objects.items()}
         params["bcs_field"] = self.bcs_field.to_dict()  # type: ignore[union-attr]
         params["beams"] = [beam_to_dict(beam) for beam in self.beams]
         params["plasma"] = plasma_to_dict(self.plasma)
-        params["solenoids"] = [asdict(s) for s in self.solenoids]
+        params["solenoids"] = [dataclass_to_dict(s) for s in self.solenoids]
         params["axial_field"] = (
-            None if self.axial_field is None else asdict(self.axial_field)
+            None if self.axial_field is None else dataclass_to_dict(self.axial_field)
         )
-        params["compensation"] = [asdict(c) for c in self.compensation]
+        params["compensation"] = [dataclass_to_dict(c) for c in self.compensation]
         params["charge_changing"] = (
-            None if self.charge_changing is None else asdict(self.charge_changing)
+            None if self.charge_changing is None else self.charge_changing.to_dict()
         )
         return plain_value(params)
 

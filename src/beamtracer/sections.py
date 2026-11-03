@@ -2,13 +2,13 @@
 
 They read and write the configuration-file forms of picnic's sections of the same names
 (``grid``, ``bcs_field``, ``objects``), so a picnic ``BeamOptics`` configuration file
-is a beamtracer one. Values are SI; a ``{"value": ..., "unit": ...}`` entry of a
-configuration file is converted with astropy.
+is a beamtracer one. Values are SI: lengths in m, potentials in V. Every one of them
+also takes an astropy Quantity (``2.5 * u.mm``) or a string astropy parses
+(``"2.5 mm"``, as in a configuration file), converted with `plasmacoll.units`.
 """
 
 from __future__ import annotations
 
-import numbers
 import operator
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -17,6 +17,12 @@ from typing import Any, Literal, TypeAlias
 
 import astropy.units as u
 import numpy as np
+from plasmacoll.units import (
+    convert_units,
+    to_unit,
+    unit_field,
+    with_unit,
+)
 
 ConfigDict: TypeAlias = dict[str, Any]
 
@@ -24,25 +30,6 @@ FaceType = Literal["dirichlet", "neumann"]
 
 #: The 2D objects an electrode can be, by configuration-file ``type``.
 OBJECT_TYPES = ("line", "rectangle", "triangle", "polygon", "circle", "aperture2d")
-
-
-def to_si(value: Any, unit: str) -> Any:
-    """Return ``value`` (a number or a nested list, tuple or dict of them) in SI units."""
-    unit_obj = u.Unit(unit)
-
-    def scalar(x: Any) -> float:
-        si = u.Quantity(x, unit=unit_obj).si.value
-        return int(si) if isinstance(x, int) and float(si).is_integer() else float(si)
-
-    if isinstance(value, numbers.Real):
-        return scalar(value)
-    if isinstance(value, list):
-        return [to_si(v, unit) for v in value]
-    if isinstance(value, tuple):
-        return tuple(to_si(v, unit) for v in value)
-    if isinstance(value, dict):
-        return {k: to_si(v, unit) for k, v in value.items()}
-    raise TypeError(f"unsupported type {type(value)} for to_si")
 
 
 def plain_value(value: Any) -> Any:
@@ -71,36 +58,32 @@ def _per_axis(value: Any) -> tuple:
     return values
 
 
-def _bound(value: Any) -> tuple[float, float]:
-    if isinstance(value, dict):
-        value = to_si(value["values"], value["unit"])
-    return tuple(float(v) for v in _per_axis(value))  # type: ignore[return-value]
-
-
 @dataclass
 class GridParams:
     """The 2D grid of nodes: nodes per axis and extent in metres.
 
     ``coordinates`` is ``"cartesian"`` (planar, per unit depth) or ``"cylindrical"``
     (``(x, r)`` with the axis at ``r = 0``). A scalar ``num_gridpoints`` or bound
-    applies to both axes; bounds may also be ``{"values": ..., "unit": "mm"}``.
+    applies to both axes; the bounds are lengths in m, or Quantities or strings such
+    as ``"5 mm"`` (also per axis, ``("0 mm", "5 mm")``).
     ``ndim`` is always 2 (kept so that picnic's grid entries read unchanged).
     """
 
     ndim: int = 2
     num_gridpoints: Any = 64
-    lower_bound: Any = 0.0
-    upper_bound: Any = 32.0e-3
+    lower_bound: Any = unit_field("m", 0.0)
+    upper_bound: Any = unit_field("m", 32.0e-3)
     coordinates: str = "cartesian"
 
     def __post_init__(self) -> None:
-        """Normalize every per-axis value to a tuple and check them."""
+        """Convert the bounds to metres, normalize every per-axis value to a tuple."""
+        convert_units(self)
         if int(self.ndim) != 2:
             raise ValueError(f"the beam tracer needs a 2D grid, got ndim={self.ndim}")
         self.ndim = 2
         self.num_gridpoints = tuple(int(n) for n in _per_axis(self.num_gridpoints))
-        self.lower_bound = _bound(self.lower_bound)
-        self.upper_bound = _bound(self.upper_bound)
+        self.lower_bound = _per_axis(self.lower_bound)
+        self.upper_bound = _per_axis(self.upper_bound)
         if any(
             hi <= lo for lo, hi in zip(self.lower_bound, self.upper_bound, strict=True)
         ):
@@ -124,8 +107,8 @@ class GridParams:
         return {
             "ndim": self.ndim,
             "num_gridpoints": list(self.num_gridpoints),
-            "lower_bound": {"values": list(self.lower_bound), "unit": "m"},
-            "upper_bound": {"values": list(self.upper_bound), "unit": "m"},
+            "lower_bound": with_unit(self.lower_bound, "m"),
+            "upper_bound": with_unit(self.upper_bound, "m"),
             "coordinates": self.coordinates,
         }
 
@@ -147,7 +130,9 @@ class SymbolicSpaceFunction:
 
     ``unit`` scales the value (``"kV"``: the expression is in kilovolts); ``variables``
     gives the units of the coordinates in the expression, e.g. ``{"y": {"unit": "mm"}}``.
-    Expressions are parsed with sympy.
+    Expressions are parsed with sympy. ``expression`` may also be an astropy Quantity,
+    e.g. ``5 * u.kV``: a constant, converted to ``unit`` (or kept in its own unit
+    without one).
     """
 
     def __init__(
@@ -157,15 +142,21 @@ class SymbolicSpaceFunction:
         variables: Mapping[str, Any] | None = None,
     ) -> None:
         """Parse the expression and its units."""
+        if isinstance(expression, u.Quantity):
+            if unit is None:
+                unit = str(expression.unit)
+            expression = to_unit(expression, unit, "value")
         self._expression = expression
         self._unit = unit
         self._variables = None if variables is None else dict(variables)
-        self._factor = 1.0 if not unit else float(to_si(1.0, unit))
+        self._factor = 1.0 if not unit else float(u.Quantity(1.0, unit).si.value)
         self._si_factors = {"x": 1.0, "y": 1.0, "z": 1.0, "t": 1.0}
         for name, variable in (self._variables or {}).items():
             if name not in self._si_factors:
                 raise ValueError(f"unknown variable {name!r} (x, y, z, t)")
-            self._si_factors[name] = 1.0 / float(to_si(1.0, variable["unit"]))
+            self._si_factors[name] = 1.0 / float(
+                u.Quantity(1.0, variable["unit"]).si.value
+            )
         if self._variables is None and _is_number(expression):
             value = float(expression)
             # a constant, like sympy's lambdify of a number
@@ -198,17 +189,28 @@ class SymbolicSpaceFunction:
     def to_dict(self) -> ConfigDict:
         """Return the configuration-file form (``value`` or ``func``)."""
         if self._variables is None and _is_number(self._expression):
-            return {"value": float(self._expression), "unit": self._unit or ""}
+            return {"value": with_unit(float(self._expression), self._unit or "")}
         func: ConfigDict = {"expression": str(self._expression), "unit": self._unit}
         if self._variables is not None:
             func["variables"] = self._variables
         return {"func": func}
 
     @classmethod
-    def from_dict(cls, params: Mapping[str, Any]) -> SymbolicSpaceFunction:
-        """Create the value from ``{"value", "unit"}`` or ``{"func": {...}}``."""
+    def from_dict(
+        cls, params: Mapping[str, Any], unit: str = "V"
+    ) -> SymbolicSpaceFunction:
+        """Create the value from ``{"value": ...}`` or ``{"func": {...}}``.
+
+        A value is a number in ``unit`` or a quantity such as ``"5 kV"``, converted
+        to ``unit``.
+        """
         if "value" in params:
-            return cls(params["value"], params.get("unit"))
+            if "unit" in params:
+                raise ValueError(
+                    "write the value of a field boundary with its unit, e.g. "
+                    "value: 5 kV"
+                )
+            return cls(to_unit(params["value"], unit, "value"), unit)
         if "func" in params:
             func = params["func"]
             return cls(func["expression"], func.get("unit"), func.get("variables"))
@@ -231,7 +233,11 @@ class FieldBoundaryCondition:
     def dirichlet(
         value: float | str = 0.0, unit: str = "V", variables: Mapping | None = None
     ) -> FieldBoundaryCondition:
-        """Return a Dirichlet condition: a potential or an expression of x, y."""
+        """Return a Dirichlet condition: a potential or an expression of x, y.
+
+        ``value`` is a number or an expression in ``unit``, or a Quantity such as
+        ``5 * u.kV``.
+        """
         return FieldBoundaryCondition(
             "dirichlet", SymbolicSpaceFunction(value, unit, variables)
         )
@@ -242,7 +248,11 @@ class FieldBoundaryCondition:
         unit: str = "V/m",
         variables: Mapping | None = None,
     ) -> FieldBoundaryCondition:
-        """Return a Neumann condition on the normal derivative of the potential."""
+        """Return a Neumann condition on the normal derivative of the potential.
+
+        ``normal_derivative`` is a number or an expression in ``unit``, or a Quantity
+        such as ``1 * u.kV / u.mm``.
+        """
         return FieldBoundaryCondition(
             "neumann", SymbolicSpaceFunction(normal_derivative, unit, variables)
         )
@@ -300,13 +310,20 @@ class FieldBCs:
                 side = bc.value.to_dict()
                 if bc.bc_type != lower.bc_type:
                     side["type"] = bc.bc_type
-                entry[key] = side
+                entry[key] = side["value"] if list(side) == ["value"] else side
             params[axis] = entry
         return params
 
     @classmethod
     def from_dict(cls, params: Mapping[str, Any]) -> FieldBCs:
-        """Create the faces from ``{axis: {"type", "min": {...}, "max": {...}}}``."""
+        """Create the faces from ``{axis: {"type", "min": ..., "max": ...}}``.
+
+        A side is a value (``5 kV``, or a number in V, V/m for Neumann),
+        ``{value: ..., type: ...}`` for a side of another type, or
+        ``{func: {expression, unit, variables}}`` for an expression of x and y::
+
+            x: {type: dirichlet, min: 0 V, max: 5 kV}
+        """
         faces: dict[str, FieldBoundaryCondition] = {}
         for axis in ("x", "y"):
             if axis not in params:
@@ -315,19 +332,16 @@ class FieldBCs:
             axis_type = item.get("type")
             for key, name in (("min", "lower"), ("max", "upper")):
                 side = item[key]
+                if not isinstance(side, Mapping):
+                    side = {"value": side}  # a bare value, e.g. ``min: 5 kV``
                 bc_type = side.get("type", axis_type)
                 if bc_type is None:
                     raise ValueError(f"field boundary '{axis}/{key}' needs a type")
+                unit = "V/m" if bc_type == "neumann" else "V"
                 faces[f"{axis}_{name}"] = FieldBoundaryCondition(
-                    bc_type, SymbolicSpaceFunction.from_dict(side)
+                    bc_type, SymbolicSpaceFunction.from_dict(side, unit)
                 )
         return cls(**faces)
-
-
-def _plain(value: Any) -> Any:
-    if isinstance(value, (int, float)):
-        return float(value)
-    return [_plain(item) for item in value]
 
 
 #: The geometry entries each shape type takes (simgeometry's constructor arguments).
@@ -349,20 +363,22 @@ class ShapeParams:
     """One simgeometry shape of an electrode, without a potential.
 
     ``type`` is one of `OBJECT_TYPES`; the geometry entries are those of the
-    simgeometry class (lengths in metres). An electrode of several shapes,
-    `ObjectParams.union`, lists them.
+    simgeometry class, lengths in m (or Quantities, or strings such as
+    ``"2.5 mm"``). An electrode of several shapes, `ObjectParams.union`, lists
+    them.
     """
 
     type: str
-    vertices: Any = None
-    midpoint: Any = None
-    side_lengths: Any = None
-    radius: float | None = None
+    vertices: Any = unit_field("m", None)
+    midpoint: Any = unit_field("m", None)
+    side_lengths: Any = unit_field("m", None)
+    radius: float | None = unit_field("m", None)
     axis: str | None = None
-    position: float | None = None
+    position: float | None = unit_field("m", None)
 
     def __post_init__(self) -> None:
-        """Check the type."""
+        """Convert the lengths to metres and check the type."""
+        convert_units(self)
         if self.type not in OBJECT_TYPES:
             raise ValueError(
                 f"shape type must be one of {OBJECT_TYPES}, got {self.type!r}"
@@ -394,39 +410,23 @@ class ShapeParams:
         return classes[self.type](**self.arguments(), bc=bc)
 
     def to_dict(self) -> ConfigDict:
-        """Return the configuration-file form (lengths in metres)."""
+        """Return the configuration-file form (lengths in m)."""
         params: ConfigDict = {"type": self.type}
         if self.axis is not None:
             params["axis"] = self.axis
-        for key in ("vertices", "midpoint", "side_lengths"):
+        for key in ("vertices", "midpoint", "side_lengths", "radius", "position"):
             value = getattr(self, key)
             if value is not None:
-                params[key] = {"values": _plain(value), "unit": "m"}
-        for key in ("radius", "position"):
-            value = getattr(self, key)
-            if value is not None:
-                params[key] = {"value": float(value), "unit": "m"}
+                params[key] = with_unit(value, "m")
         return params
 
     @classmethod
     def from_dict(cls, params: Mapping[str, Any]) -> ShapeParams:
         """Create the shape from its configuration-file entry (``bc`` is ignored)."""
-
-        def entry(name: str) -> Any:
-            if name not in params:
-                return None
-            item = params[name]
-            value = item["values"] if "values" in item else item["value"]
-            return to_si(value, item["unit"])
-
         return cls(
             type=params["type"],
-            vertices=entry("vertices"),
-            midpoint=entry("midpoint"),
-            side_lengths=entry("side_lengths"),
-            radius=entry("radius"),
             axis=params.get("axis"),
-            position=entry("position"),
+            **{name: params.get(name) for name in _GEOMETRY if name != "axis"},
         )
 
 
@@ -435,7 +435,9 @@ class ObjectParams:
     """An electrode: a simgeometry object held at a potential (``bc_type="dirichlet"``).
 
     ``type`` is one of `OBJECT_TYPES`; the geometry entries are those of the
-    simgeometry class (lengths in metres). ``type="union"`` is an electrode of several
+    simgeometry class, lengths in m. ``bc_value`` is the potential in V (the
+    normal derivative in V/m for ``bc_type="neumann"``). Each takes a Quantity or a
+    string such as ``"2.5 mm"`` or ``"5 kV"`` too. ``type="union"`` is an electrode of several
     shapes at one potential, the `ShapeParams` (or their configuration-file
     entries) in ``shapes``, e.g. a tube with rounded ends from a rectangle and two
     circles; see `union`. It is one electrode for the field, the hits and the
@@ -445,16 +447,18 @@ class ObjectParams:
     type: str
     bc_type: str
     bc_value: float | None = None
-    vertices: Any = None
-    midpoint: Any = None
-    side_lengths: Any = None
-    radius: float | None = None
+    vertices: Any = unit_field("m", None)
+    midpoint: Any = unit_field("m", None)
+    side_lengths: Any = unit_field("m", None)
+    radius: float | None = unit_field("m", None)
     axis: str | None = None
-    position: float | None = None
+    position: float | None = unit_field("m", None)
     shapes: list[ShapeParams] | None = None
 
     def __post_init__(self) -> None:
-        """Check the type and read the shapes of a union."""
+        """Convert the lengths and the potential, check the type, read the shapes."""
+        convert_units(self)
+        self.bc_value = to_unit(self.bc_value, self.bc_unit, "bc_value")
         if self.type == "union":
             if not self.shapes:
                 raise ValueError("a union needs at least one shape")
@@ -477,6 +481,11 @@ class ObjectParams:
             )
         if self.shapes is not None:
             raise ValueError(f"only a union has shapes, not a {self.type!r}")
+
+    @property
+    def bc_unit(self) -> str:
+        """Return the unit of ``bc_value``: V/m for Neumann, V otherwise."""
+        return "V/m" if self.bc_type == "neumann" else "V"
 
     @classmethod
     def union(
@@ -516,7 +525,7 @@ class ObjectParams:
         return arguments
 
     def to_dict(self) -> ConfigDict:
-        """Return the configuration-file form (lengths in metres)."""
+        """Return the configuration-file form (lengths in m, the potential in V)."""
         if self.shapes is not None:
             params: ConfigDict = {
                 "type": self.type,
@@ -524,11 +533,11 @@ class ObjectParams:
             }
         else:
             params = self.shape_list[0].to_dict()
-        if self.bc_type == "neumann":
-            bc = {"normal_derivative": {"value": self.bc_value, "unit": "V/m"}}
-        else:
-            bc = {"potential": {"value": self.bc_value, "unit": "V"}}
-        params["bc"] = {"type": self.bc_type, **bc}
+        key = "normal_derivative" if self.bc_type == "neumann" else "potential"
+        params["bc"] = {
+            "type": self.bc_type,
+            key: with_unit(self.bc_value, self.bc_unit),
+        }
         return params
 
     @classmethod
@@ -541,8 +550,7 @@ class ObjectParams:
         key = "normal_derivative" if bc_type == "neumann" else "potential"
         if key not in params["bc"]:
             raise ValueError(f"an object with a {bc_type!r} condition needs bc.{key}")
-        value = params["bc"][key]
-        bc_value = to_si(value["value"], value["unit"])
+        bc_value = params["bc"][key]
         if params["type"] == "union":
             return cls.union(
                 [ShapeParams.from_dict(shape) for shape in params["shapes"]],

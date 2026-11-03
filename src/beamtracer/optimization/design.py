@@ -24,6 +24,7 @@ from typing import Any, TypeAlias
 
 import numpy as np
 from methodcard import method
+from plasmacoll.units import to_unit
 
 #: Parameter values: ``{name: value}``, or a sequence or array in the design's order.
 Values: TypeAlias = Mapping[str, float] | Sequence[float] | np.ndarray
@@ -34,7 +35,10 @@ KEY_DECIMALS = 10
 
 @dataclass(frozen=True)
 class Parameter:
-    """A design parameter ``name`` between ``lower`` and ``upper`` (in ``unit``)."""
+    """A design parameter ``name`` between ``lower`` and ``upper`` (in ``unit``).
+
+    The bounds take Quantities or strings too (``"2 mm"``), converted to ``unit``.
+    """
 
     name: str
     lower: float
@@ -42,9 +46,11 @@ class Parameter:
     unit: str = ""
 
     def __post_init__(self) -> None:
-        """Check the bounds."""
-        object.__setattr__(self, "lower", float(self.lower))
-        object.__setattr__(self, "upper", float(self.upper))
+        """Convert and check the bounds."""
+        lower = to_unit(self.lower, self.unit, f"{self.name}.lower")
+        upper = to_unit(self.upper, self.unit, f"{self.name}.upper")
+        object.__setattr__(self, "lower", float(lower))
+        object.__setattr__(self, "upper", float(upper))
         if not (math.isfinite(self.lower) and math.isfinite(self.upper)):
             raise ValueError(f"the bounds of {self.name!r} must be finite")
         if not self.lower < self.upper:

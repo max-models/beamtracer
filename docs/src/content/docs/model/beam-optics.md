@@ -80,8 +80,10 @@ potential and every beam charge gives the negated potential and the same traject
 checks this to round-off).
 
 A configuration is written to and read from its configuration-file form with
-`config.to_dict()` and `BeamOpticsConfig.from_dict(...)`; quantities with units
-(`{"value": 2, "unit": "mm"}`) are converted to SI.
+`config.to_dict()` and `BeamOpticsConfig.from_dict(...)`. Every physical setting, in
+Python or in the file, takes an astropy Quantity (`2 * u.mm`), a quantity string (`"2 mm"`)
+or a bare number in its documented unit (SI, energies and temperatures in eV, masses in u),
+and is stored in that unit; `to_dict` writes the quantity strings (`"0.002 m"`).
 
 ## Electrodes of several shapes
 
@@ -113,21 +115,21 @@ In the configuration-file form the shapes are listed under `shapes`, each withou
     "shapes": [
         {
             "type": "rectangle",
-            "midpoint": {"values": [40, 6], "unit": "mm"},
-            "side_lengths": {"values": [6, 2], "unit": "mm"},
+            "midpoint": ["40 mm", "6 mm"],
+            "side_lengths": ["6 mm", "2 mm"],
         },
         {
             "type": "circle",
-            "midpoint": {"values": [37, 6], "unit": "mm"},
-            "radius": {"value": 1, "unit": "mm"},
+            "midpoint": ["37 mm", "6 mm"],
+            "radius": "1 mm",
         },
         {
             "type": "circle",
-            "midpoint": {"values": [43, 6], "unit": "mm"},
-            "radius": {"value": 1, "unit": "mm"},
+            "midpoint": ["43 mm", "6 mm"],
+            "radius": "1 mm",
         },
     ],
-    "bc": {"type": "dirichlet", "potential": {"value": 15, "unit": "kV"}},
+    "bc": {"type": "dirichlet", "potential": "15 kV"},
 }
 ```
 

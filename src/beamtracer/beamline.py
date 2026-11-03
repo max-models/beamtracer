@@ -30,6 +30,11 @@ own `Markers.rms_angle`.
 `beamline_summary` adds up where the power went, and
 `Markers.to_dataset` hands the neutrals at the port on, placed in the tokamak's
 frame with `Markers.placed`.
+
+The settings of the beamline (`gaussian_beam`, `beamlet_markers`, `ApertureGrid`,
+`Duct`, `FieldRegion`, `Calorimeter` and the positions of `box_field` and
+`profile_field`) are SI, masses in kg, and take astropy Quantities or strings
+astropy parses too (``"5 mm"``, ``2 * u.mrad``), converted with `plasmacoll.units`.
 """
 
 from __future__ import annotations
@@ -42,6 +47,7 @@ import cunumpy as xp
 import numpy as np
 import xarray as xr
 from methodcard import ConvergenceProblem, method
+from plasmacoll.units import convert_units, to_array, to_unit, unit_field
 from scipy import constants
 from simgeometry.crossings import crossings
 
@@ -301,13 +307,19 @@ def gaussian_beam(
     states: Sequence[str] = ("-", "0", "+"),
     seed: int | np.random.Generator | None = 0,
 ) -> Markers:
-    """A round Gaussian beam along ``+x``, starting in the plane ``x``.
+    """A round Gaussian beam along ``+x``, starting in the plane ``x`` (m).
 
     Each of ``y`` and ``z`` has the standard deviation ``width`` (m), and each of the
     slopes ``v_y / v_x`` and ``v_z / v_x`` has the standard deviation ``divergence``
     (rad); at a distance ``L`` the width is ``sqrt(width^2 + (L divergence)^2)``
-    exactly. Every marker carries ``power / num``.
+    exactly. Every marker carries ``power / num`` (W) at ``speed`` (m/s). The
+    physical arguments take Quantities or strings too.
     """
+    power = to_unit(power, "W", "power")
+    speed = to_unit(speed, "m/s", "speed")
+    width = to_unit(width, "m", "width")
+    divergence = to_unit(divergence, "rad", "divergence")
+    x = to_unit(x, "m", "x")
     rng = np.random.default_rng(seed)
     position = np.zeros((3, num))
     position[0] = x
@@ -361,8 +373,11 @@ def beamlet_markers(
     (``charge`` the charge of the particles the current counts, in e) times their
     kinetic energy, ``mass`` (kg) each; with charge-state ``fractions`` it is split
     into one marker per state, else all is in ``state``. Only the forward crossings
-    count, of the beam ``species`` (an index) if given.
+    count, of the beam ``species`` (an index) if given. ``mass`` and
+    ``slit_length`` (m) take Quantities or strings too.
     """
+    mass = to_unit(mass, "kg", "mass")
+    slit_length = to_unit(slit_length, "m", "slit_length")
     if copies < 1:
         raise ValueError("copies must be at least 1")
     if not cylindrical and slit_length is None:
@@ -443,6 +458,8 @@ class ApertureGrid:
             the slope ``-y / f_y``. ``inf`` for a flat grid.
         steering: ``(2, M)`` further slopes (rad) of each beamlet in ``y`` and ``z``,
             e.g. from aperture offsets.
+
+    Each takes a Quantity (or a string) too.
     """
 
     centres: np.ndarray
@@ -450,15 +467,19 @@ class ApertureGrid:
     steering: np.ndarray | None = None
 
     def __post_init__(self) -> None:
-        """Check the shapes."""
-        self.centres = np.asarray(self.centres, dtype=float).reshape(2, -1)
+        """Convert the units and check the shapes."""
+        centres = to_array(self.centres, "m", "centres")
+        self.centres = np.asarray(centres, dtype=float).reshape(2, -1)
         steering = (
-            np.zeros_like(self.centres) if self.steering is None else self.steering
+            np.zeros_like(self.centres)
+            if self.steering is None
+            else to_array(self.steering, "rad", "steering")
         )
         self.steering = np.broadcast_to(
             np.asarray(steering, dtype=float), self.centres.shape
         ).copy()
-        self.focal_length = (float(self.focal_length[0]), float(self.focal_length[1]))
+        focal_length = to_unit(self.focal_length, "m", "focal_length")
+        self.focal_length = (float(focal_length[0]), float(focal_length[1]))
 
     @classmethod
     def regular(
@@ -470,8 +491,10 @@ class ApertureGrid:
     ) -> ApertureGrid:
         """``rows`` (along ``z``) by ``columns`` (along ``y``) apertures, centred on the axis.
 
-        ``pitch`` is the spacing ``(in y, in z)`` (m); ``kwargs`` go to the grid.
+        ``pitch`` is the spacing ``(in y, in z)`` (m, or Quantities); ``kwargs`` go to
+        the grid.
         """
+        pitch = to_unit(pitch, "m", "pitch")
         y = (np.arange(columns) - 0.5 * (columns - 1)) * pitch[0]
         z = (np.arange(rows) - 0.5 * (rows - 1)) * pitch[1]
         yy, zz = np.meshgrid(y, z, indexing="xy")
@@ -583,27 +606,37 @@ class Duct:
             between them. Shapes with analytic crossings (boxes, spheres, slanted tubes)
             are exact and fast; others are sampled (see
             `simgeometry.crossings.crossings`).
-        port: The plane ``x = port`` (m) where the duct ends.
+        port: The plane ``x = port`` (m, or a Quantity or a string) where the duct
+            ends.
         transitions: The charge-changing cross sections
             (`plasmacoll.ChargeStateTransitions`), for reionization; none
             without gas.
-        gas: The target densities ``{target: n}`` (m^-3), uniform or an
+        gas: The target densities ``{target: n}`` (m^-3, or Quantities or strings
+            such as ``"1e18 m-3"``), uniform or an
             `beamtracer.solver.charge_changing.AxialProfile` along ``x``.
         samples: The samples per line for the walls whose crossings are sampled.
         seed: The random numbers of the free paths.
     """
 
     walls: Sequence[Any]
-    port: float
+    port: float = unit_field("m")
     transitions: Any = None
     gas: Mapping[str, Density] | None = None
     samples: int = 64
     seed: int | np.random.Generator | None = 0
 
     def __post_init__(self) -> None:
-        """Check the gas against the transitions."""
+        """Convert the units and check the gas against the transitions."""
+        convert_units(self)
         self.walls = list(self.walls)
-        self._gas: dict[str, Density] = dict(self.gas or {})
+        self._gas: dict[str, Density] = {
+            target: (
+                n
+                if isinstance(n, AxialProfile)
+                else to_unit(n, "m-3", f"gas[{target!r}]")
+            )
+            for target, n in (self.gas or {}).items()
+        }
         if self._gas and self.transitions is None:
             raise ValueError("gas needs the transitions")
         if self.transitions is not None:
@@ -727,11 +760,13 @@ def box_field(
 ):
     """A uniform field ``vector`` inside the box from ``lower`` to ``upper``, zero outside.
 
-    E.g. the field between two parallel plates (V/m), or a uniform stray field (T).
+    E.g. the field between two parallel plates (V/m), or a uniform stray field (T);
+    ``vector`` is in the unit of the field it stands for. The corners ``lower`` and
+    ``upper`` are in m, or Quantities or strings.
     """
     value = np.asarray(vector, dtype=float)[:, None]
-    lo = np.asarray(lower, dtype=float)[:, None]
-    hi = np.asarray(upper, dtype=float)[:, None]
+    lo = np.asarray(to_unit(lower, "m", "lower"), dtype=float)[:, None]
+    hi = np.asarray(to_unit(upper, "m", "upper"), dtype=float)[:, None]
 
     def field(points: np.ndarray) -> np.ndarray:
         inside = np.all((points >= lo) & (points <= hi), axis=0)
@@ -743,9 +778,10 @@ def box_field(
 def profile_field(x: Sequence[float], values: Sequence[Sequence[float]]):
     """A field along ``x``: ``values`` is ``(3, len(x))``, linear between, held beyond.
 
-    E.g. the stray field of the tokamak along the beamline (T).
+    E.g. the stray field of the tokamak along the beamline (T); ``values`` is in the
+    unit of the field it stands for, ``x`` in m (or a Quantity).
     """
-    nodes = np.asarray(x, dtype=float)
+    nodes = np.asarray(to_array(x, "m", "x"), dtype=float)
     table = np.asarray(values, dtype=float).reshape(3, nodes.size)
     if nodes.size < 2 or np.any(np.diff(nodes) <= 0.0):
         raise ValueError("a profile needs at least two increasing x")
@@ -860,21 +896,24 @@ class FieldRegion:
         max_steps: The steps after which a marker counts as lost.
         save: Keep the paths of the first ``save`` markers.
         samples: The samples per step for the walls whose crossings are sampled.
+
+    ``exit``, ``mass`` and ``step`` take Quantities or strings too.
     """
 
     walls: Sequence[Any]
-    exit: float
-    mass: float
+    exit: float = unit_field("m")
+    mass: float = unit_field("kg")
     electric: Any = None
     magnetic: Any = None
     charges: Mapping[str, float] | None = None
-    step: float = 5e-3
+    step: float = unit_field("m", 5e-3)
     max_steps: int = 10_000
     save: int = 0
     samples: int = 16
 
     def __post_init__(self) -> None:
-        """Fill in the charges."""
+        """Convert the units and fill in the charges."""
+        convert_units(self)
         self.walls = list(self.walls)
         self._charges = dict(self.charges or {"-": -1.0, "0": 0.0, "+": 1.0})
         if self.step <= 0.0:
@@ -1000,11 +1039,17 @@ class Calorimeter:
         position: The plane ``x`` of its face (m).
         extent: ``(y_min, y_max, z_min, z_max)`` of the face (m).
         tiles: The number of tiles ``(in y, in z)``.
+
+    ``position`` and ``extent`` take Quantities or strings too.
     """
 
-    position: float
-    extent: tuple[float, float, float, float]
+    position: float = unit_field("m")
+    extent: tuple[float, float, float, float] = unit_field("m")
     tiles: tuple[int, int] = (40, 40)
+
+    def __post_init__(self) -> None:
+        """Convert the units."""
+        convert_units(self)
 
     def measure(self, markers: Markers) -> xr.DataArray:
         """The power density (W/m^2) on each tile, over ``(y, z)`` at the tile centres."""

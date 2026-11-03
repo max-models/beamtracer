@@ -7,6 +7,13 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Every physical setting of the setup (`BeamOpticsConfig` and its sections, the beamline,
+  `NeutralizerChannel`, `EinzelLens`, `NegativeIonBeamlet`, `Parameter`, `AxialProfile`,
+  `conductance_profile`) takes an astropy Quantity or a quantity string (`"5 mm"`) as well as
+  a bare number in its documented unit, converted once with `plasmacoll.units`; a wrong
+  dimension raises. The configuration-file form writes quantity strings (`"0.005 m"`,
+  `potential: "-1000 V"`, a face `max: "5 kV"`) in place of `{"value": ..., "unit": ...}`
+  entries, which are no longer read.
 - Method cards (methodcard) on the equations of the model: the mesh, Poisson's equation with
   the Boltzmann plasma species and Newton's method, the staggered electric field, the
   axisymmetric magnetic field and the solenoids, the surface field, the beam seeding, the

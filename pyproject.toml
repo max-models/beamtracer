@@ -22,7 +22,7 @@ classifiers = [
 # PyPI rejects direct references (name @ git+...), so only version ranges go here; the
 # max-models packages come from their devel branches through [tool.uv.sources]
 dependencies = [
-  # units of configuration files (imported only for a {value, unit} entry)
+  # the units of the settings (plasmacoll.units) and of boundary expressions
   "astropy",
   "cunumpy>=0.7.0",
   # MPI only under an MPI launcher; a serial stand-in for mpi4py otherwise
@@ -67,6 +67,7 @@ optional-dependencies.docs = [
   "plasma-plots>=0.2.3",
 ]
 optional-dependencies.test = [
+  "astropy",
   "beamtracer[neutralizer]",
   "methodcard[symbolic]",
   "pyccel>2.0",
