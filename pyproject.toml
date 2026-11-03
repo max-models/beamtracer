@@ -33,7 +33,7 @@ dependencies = [
   "mpifield>=0.1.0",
   "numpy",
   # the charge-state transitions of a fast beam (ChargeChanging)
-  "plasmacoll>=0.3.0",
+  "plasmacoll>=0.5.0",
   "scipy",
   "scope-profiler>=0.7.5",
   # the electrodes
