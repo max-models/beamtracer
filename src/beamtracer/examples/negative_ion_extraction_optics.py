@@ -293,7 +293,7 @@ def save(
     show: bool = False,
     **kwargs: Any,
 ) -> None:
-    """Save a gallery figure as ``<name>.<format>`` (see :func:`plasma_plots.save_figure`).
+    """Save a gallery figure as ``<name>.<format>`` (see `plasma_plots.save_figure`).
 
     A ``png`` format is skipped with a note when kaleido cannot export images.
     """
@@ -340,7 +340,7 @@ def grid_outlines(case: BeamletCase) -> dict[str, tuple[np.ndarray, np.ndarray]]
 
 
 def pproc(result, show=False, formats=("plotly.json", "png")):
-    """Draw and save the figures of a result of :func:`simulate`."""
+    """Draw and save the figures of a result of `simulate`."""
     import plasma_plots
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots

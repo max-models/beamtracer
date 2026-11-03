@@ -1,35 +1,35 @@
 """The beamline after the accelerator: neutrals through the duct to the port.
 
-The beam leaves the traced region (:class:`~beamtracer.model.BeamOptics`, the
-neutralizer) as :class:`Markers`: points in 3D with a velocity, a power and a charge
-state. :func:`beamlet_markers` makes them from a beamlet traced in 2D, and
-:class:`ApertureGrid` copies the beamlet to every aperture of the grid with its aim. Beyond it no field acts on the neutrals, so they move on straight lines and
-no mesh is needed: :class:`Duct` intersects each line with the walls, given as
-simgeometry shapes (:func:`simgeometry.crossings.crossings`), and stops it at the
+The beam leaves the traced region (`beamtracer.model.BeamOptics`, the
+neutralizer) as `Markers`: points in 3D with a velocity, a power and a charge
+state. `beamlet_markers` makes them from a beamlet traced in 2D, and
+`ApertureGrid` copies the beamlet to every aperture of the grid with its aim. Beyond it no field acts on the neutrals, so they move on straight lines and
+no mesh is needed: `Duct` intersects each line with the walls, given as
+simgeometry shapes (`simgeometry.crossings.crossings`), and stops it at the
 first wall it enters or at the port, the plane ``x = port``. The beam moves along
 ``+x``.
 
 On the way the duct gas reionizes the neutrals. A neutral leaves the neutral state
 at the rate ``sum_t n_t(x) sigma_t`` per unit length, ``sigma_t`` the cross sections
-out of the neutral state on target ``t`` (:class:`plasmacoll.ChargeStateTransitions`);
+out of the neutral state on target ``t`` (`plasmacoll.ChargeStateTransitions`);
 its free path is sampled from the exponential distribution of the line density along
 its path, ``int n_t ds = int n_t dx |v| / v_x``. A reionized neutral stops where it is
 born; the transitions back into the neutral state are not followed, as a reionized
 particle leaves the beam.
 
-:class:`FieldRegion` pushes charged markers through static electric and magnetic
+`FieldRegion` pushes charged markers through static electric and magnetic
 fields to the walls: the residual-ion dump, whose plates deflect the ions left after the
 neutralizer out of the beam, and the stray field of the tokamak, which bends the ions
 reionized in the duct onto its walls.
 
-:class:`Calorimeter` records the power map of the beam on its tiles, and
-:func:`fit_footprint` and :func:`divergence_from_widths` infer the beam's width and
+`Calorimeter` records the power map of the beam on its tiles, and
+`fit_footprint` and `divergence_from_widths` infer the beam's width and
 divergence from such maps the way the experiments do, to set against the markers'
-own :attr:`Markers.rms_angle`.
+own `Markers.rms_angle`.
 
-:func:`beamline_summary` adds up where the power went, and
-:meth:`Markers.to_dataset` hands the neutrals at the port on, placed in the tokamak's
-frame with :meth:`Markers.placed`.
+`beamline_summary` adds up where the power went, and
+`Markers.to_dataset` hands the neutrals at the port on, placed in the tokamak's
+frame with `Markers.placed`.
 """
 
 from __future__ import annotations
@@ -41,6 +41,7 @@ from typing import Any
 import cunumpy as xp
 import numpy as np
 import xarray as xr
+from methodcard import ConvergenceProblem, method
 from scipy import constants
 from simgeometry.crossings import crossings
 
@@ -75,6 +76,19 @@ def _as_profile(density: Density) -> AxialProfile:
 
 
 @dataclass
+@method(
+    equations={
+        "weight": r"w = \frac{P}{\tfrac12 m |\mathbf v|^2} \quad [\mathrm{s^{-1}}]",
+        "rms_angle": r"\theta_{y,z} = \sqrt{\left\langle (s - \langle s \rangle)^2 \right\rangle_P}, \qquad s = \frac{v_y}{v_x}, \ \frac{v_z}{v_x}",
+        "drift": r"\mathbf x \leftarrow \mathbf x + \mathbf v\, \frac{x_\mathrm{plane} - x}{v_x}",
+        "placed": r"\mathbf x' = R\, (\mathbf x - x_0 \hat{\mathbf x}) + \mathbf o, \qquad R = [\hat{\mathbf e}_x, \hat{\mathbf e}_z \times \hat{\mathbf e}_x, \hat{\mathbf e}_z]",
+    },
+    assumptions=(
+        r"markers are streams of particles on straight lines (no field acts on them outside a `FieldRegion`); $\langle\cdot\rangle_P$ weighted by the power",
+        r"`placed`: $\hat{\mathbf e}_x$ along `direction`, $\hat{\mathbf e}_z$ the part of `up` normal to it",
+        r"the weight (particles per second) is what freeofcharge reads as a neutral beam",
+    ),
+)
 class Markers:
     """Beam markers in 3D.
 
@@ -241,7 +255,7 @@ class Markers:
 
     @classmethod
     def from_dataset(cls, dataset: xr.Dataset) -> Markers:
-        """The markers of :meth:`to_dataset`."""
+        """The markers of `to_dataset`."""
         states = tuple(dataset.attrs["states"])
         index = {s: k for k, s in enumerate(states)}
         return cls(
@@ -268,6 +282,13 @@ class Markers:
         return self.position.shape[1]
 
 
+@method(
+    equations={
+        "sampling": r"y, z \sim \mathcal N(0, w^2), \qquad s_y, s_z \sim \mathcal N(0, \theta^2), \qquad \mathbf v = v \frac{(1, s_y, s_z)}{|(1, s_y, s_z)|}",
+        "width": r"w(L) = \sqrt{w^2 + (L \theta)^2}",
+    },
+    assumptions=(r"a round beam along $+x$; every marker carries $P / N$",),
+)
 def gaussian_beam(
     num: int,
     *,
@@ -304,6 +325,17 @@ def gaussian_beam(
     )
 
 
+@method(
+    equations={
+        "power": r"P = \frac{I}{z e} \cdot \tfrac12 m v^2 \ \text{(cylindrical)}, \qquad P = \frac{I}{z e} \cdot \tfrac12 m v^2\, \ell \ \text{(planar, slit length } \ell)",
+        "states": r"P_s = P\, F_s / n_\mathrm{copies}",
+        "copies": r"\text{cylindrical: rotated about } x \text{ by } \varphi \sim U(0, 2\pi); \qquad \text{planar: } z \sim U(-\ell/2, \ell/2)",
+    },
+    assumptions=(
+        r"only the forward crossings of the plane, of one beam species if given; $z$ the charge the current counts, in e",
+        r"one marker per trajectory and state with a share, repeated `copies` times",
+    ),
+)
 def beamlet_markers(
     hits: PlaneHits,
     *,
@@ -320,7 +352,7 @@ def beamlet_markers(
     """The 3D markers of a beamlet traced in 2D, from its crossings of a plane.
 
     ``hits`` are the crossings of a diagnostic plane
-    (:meth:`~beamtracer.model.BeamOptics.plane`). In cylindrical geometry a trajectory
+    (`beamtracer.model.BeamOptics.plane`). In cylindrical geometry a trajectory
     stands for a ring: each becomes ``copies`` markers at random azimuths, its point
     and velocity rotated about the axis. In planar geometry it stands for a slit's
     section per unit depth: each becomes ``copies`` markers spread at random over
@@ -386,10 +418,21 @@ def _rotation_from_x(direction: np.ndarray) -> np.ndarray:
 
 
 @dataclass
+@method(
+    equations={
+        "slopes": r"\mathbf s = -\frac{\mathbf c}{\mathbf f} + \mathbf s_\mathrm{steer}, \qquad \mathbf c = (c_y, c_z), \ \mathbf f = (f_y, f_z)",
+        "rotation": r"R = I + \sin\vartheta\, K + (1 - \cos\vartheta)\, K^2, \qquad R\, \hat{\mathbf x} = \frac{(1, s_y, s_z)}{|(1, s_y, s_z)|}",
+        "copy": r"\mathbf x' = R\, (\mathbf x - \bar x \hat{\mathbf x}) + (\bar x, c_y, c_z)",
+    },
+    assumptions=(
+        r"$K$ the cross-product matrix of the unit rotation axis $\hat{\mathbf x} \times \hat{\mathbf d}$ (Rodrigues); the identity below a sine of $10^{-15}$",
+        r"every aperture carries the whole beamlet power; a flat grid has $f = \infty$; $\bar x$ the mean $x$ of the beamlet's markers",
+    ),
+)
 class ApertureGrid:
     """The apertures of an accelerator grid, each emitting a copy of one beamlet.
 
-    The beamlet is traced about the ``x`` axis; :meth:`markers` copies it to every
+    The beamlet is traced about the ``x`` axis; `markers` copies it to every
     aperture centre, turned to the aperture's aim. The grid lies in the plane of the
     beamlet's markers.
 
@@ -515,6 +558,23 @@ class DuctResult:
 
 
 @dataclass
+@method(
+    equations={
+        "depth": r"\tau(x) = \sum_t \sigma_t^\mathrm{out} \int_{x_0}^{x} n_t\, dx', \qquad \sigma_t^\mathrm{out} = \sum_{j \ne 0} \sigma_t(0 \to j)",
+        "birth": r"\tau(x_\mathrm{born}) = \tau(x_0) + \xi\, \frac{v_x}{|\mathbf v|}, \qquad \xi \sim \mathrm{Exp}(1)",
+        "product": r"P(j) \propto \sum_t n_t(x_\mathrm{born})\, \sigma_t^\mathrm{out}\, \sigma_t(0 \to j)",
+        "walls": r"\mathbf x_\mathrm{end} = \mathbf x_0 + \mathbf v \frac{x_\mathrm{port} - x_0}{v_x}, \qquad \text{the first wall crossing of the segment, else the port}",
+    },
+    assumptions=(
+        r"neutrals on straight lines along $+x$; a reionized neutral stops where it is born, transitions back to the neutral state are not followed",
+        r"$\int n_t\, ds = \int n_t\, dx\, |\mathbf v| / v_x$ along the slanted path; $\tau$ tabulated by the trapezoidal rule on 1025 nodes plus the profile points and inverted by linear interpolation",
+        r"the product is drawn with the weights $n_t \sigma_t^\mathrm{out} \sigma_t(0 \to j)$ as coded; $\propto \sum_t n_t \sigma_t(0 \to j)$ would be the rate of each channel, the same for one target",
+        r"walls are simgeometry shapes (`simgeometry.crossings.crossings`: analytic for boxes, spheres and slanted tubes, sampled otherwise); a marker starting inside a wall stops at once",
+    ),
+    references=(
+        "[simgeometry](https://github.com/max-models/simgeometry) `crossings`",
+    ),
+)
 class Duct:
     """The duct from the end of the traced region to the port.
 
@@ -522,13 +582,13 @@ class Duct:
         walls: The solid walls, simgeometry 3D shapes; the beam runs in the space
             between them. Shapes with analytic crossings (boxes, spheres, slanted tubes)
             are exact and fast; others are sampled (see
-            :func:`simgeometry.crossings.crossings`).
+            `simgeometry.crossings.crossings`).
         port: The plane ``x = port`` (m) where the duct ends.
         transitions: The charge-changing cross sections
-            (:class:`plasmacoll.ChargeStateTransitions`), for reionization; none
+            (`plasmacoll.ChargeStateTransitions`), for reionization; none
             without gas.
         gas: The target densities ``{target: n}`` (m^-3), uniform or an
-            :class:`~beamtracer.solver.charge_changing.AxialProfile` along ``x``.
+            `beamtracer.solver.charge_changing.AxialProfile` along ``x``.
         samples: The samples per line for the walls whose crossings are sampled.
         seed: The random numbers of the free paths.
     """
@@ -698,7 +758,7 @@ def profile_field(x: Sequence[float], values: Sequence[Sequence[float]]):
 
 @dataclass
 class RegionResult:
-    """Where the markers crossing a :class:`FieldRegion` end.
+    """Where the markers crossing a `FieldRegion` end.
 
     Attributes:
         exit: The markers reaching the exit plane, there.
@@ -734,7 +794,50 @@ class RegionResult:
         )
 
 
+def _boris_problem() -> ConvergenceProblem:
+    """A proton on one radian of its Larmor circle in a uniform field, against the circle."""
+    mass, field, speed = constants.m_p, 0.1, 1.0e5
+    radius = mass * speed / (constants.e * field)
+    markers = Markers(
+        np.zeros((3, 1)), np.array([[speed], [0.0], [0.0]]), np.ones(1), np.array([2])
+    )
+    # a proton turns clockwise about +z
+    exact = radius * np.array([np.sin(1.0), np.cos(1.0) - 1.0, 0.0])
+
+    def error(step: float) -> float:
+        region = FieldRegion(
+            [],
+            exit=1.0e9,
+            mass=mass,
+            magnetic=box_field((0.0, 0.0, field)),
+            step=step * radius,
+            max_steps=round(1.0 / step),
+        )
+        end = region.trace(markers).lost.position[:, 0]
+        return float(np.linalg.norm(end - exact) / radius)
+
+    return ConvergenceProblem(error, steps=[0.1, 0.05, 0.025, 0.0125])
+
+
 @dataclass
+@method(
+    equations={
+        "kick": r"\mathbf v^- = \mathbf v^{n-1/2} + \eta \mathbf E, \qquad \eta = \frac{q \Delta t}{2m}",
+        "rotation": r"\mathbf t = \eta \mathbf B, \quad \mathbf s = \frac{2\mathbf t}{1 + t^2}, \quad \mathbf v' = \mathbf v^- + \mathbf v^- \times \mathbf t, \quad \mathbf v^+ = \mathbf v^- + \mathbf v' \times \mathbf s",
+        "update": r"\mathbf v^{n+1/2} = \mathbf v^+ + \eta \mathbf E, \qquad \mathbf x^{n+1} = \mathbf x^n + \mathbf v^{n+1/2} \Delta t, \qquad \Delta t = \frac{\ell}{|\mathbf v|}",
+    },
+    order=2,
+    assumptions=(
+        r"the fields at $\mathbf x^n$; the leapfrog starts from the velocity pushed back half a step; neutrals move straight",
+        r"steps of path length $\ell$ = `step`, each tested against the walls and the exit plane as a straight segment, so $\ell$ must be well below the radius of curvature",
+        r"the rotation is exact for the angle $2 \arctan |\mathbf t|$ and keeps $|\mathbf v|$ without an electric field",
+        r"the order is in the step, for the position on the Larmor circle",
+    ),
+    references=(
+        "J. P. Boris, Proc. Fourth Conf. Numerical Simulation of Plasmas, 3 (1970)",
+    ),
+    problem=_boris_problem,
+)
 class FieldRegion:
     """Markers through static electric and magnetic fields, to the walls or an exit plane.
 
@@ -742,7 +845,7 @@ class FieldRegion:
     stretch of the beamline in the stray field. Every marker moves by the Boris scheme
     in steps of ``step`` (m) along its path, its charge set by its state; the neutrals
     move on straight lines. Each step is tested against the walls as a straight segment
-    (:func:`simgeometry.crossings.crossings`), so ``step`` should be well below the
+    (`simgeometry.crossings.crossings`), so ``step`` should be well below the
     radius of curvature.
 
     Attributes:
@@ -750,8 +853,8 @@ class FieldRegion:
         exit: The plane ``x = exit`` (m) where the region ends.
         mass: The mass of the beam particles (kg).
         electric: ``E(points)``, ``(3, N)`` in V/m at ``(3, N)`` points; none if absent.
-        magnetic: ``B(points)`` in T, the same way; :func:`box_field` and
-            :func:`profile_field` make simple ones.
+        magnetic: ``B(points)`` in T, the same way; `box_field` and
+            `profile_field` make simple ones.
         charges: The charge of each state, in e.
         step: The path length per step (m).
         max_steps: The steps after which a marker counts as lost.
@@ -877,6 +980,15 @@ class FieldRegion:
 
 
 @dataclass
+@method(
+    equations={
+        "map": r"p_{ab} = \frac{1}{A_{ab}} \sum_{k \in \text{tile } ab} P_k \quad [\mathrm{W/m^2}]",
+    },
+    assumptions=(
+        r"the markers drift on straight lines to the face (backwards for one already past it); those outside the face pass by",
+        r"tiles of equal area on the face extent, closed bounds",
+    ),
+)
 class Calorimeter:
     """A flat calorimeter of ``tiles`` in the plane ``x = position``, facing the beam.
 
@@ -908,6 +1020,15 @@ class Calorimeter:
         return power_map.assign_attrs(position=self.position)
 
 
+@method(
+    equations={
+        "gaussian": r"p(y, z) = p_0 \exp\left(-\frac{(y - c_y)^2}{2 w_y^2} - \frac{(z - c_z)^2}{2 w_z^2}\right)",
+    },
+    assumptions=(
+        r"an unweighted least-squares fit (`scipy.optimize.curve_fit`) on the tile centres, started from the map's power-weighted centre and widths and its maximum",
+        r"no bounds and no fallback: a failed fit raises",
+    ),
+)
 def fit_footprint(power_map: xr.DataArray) -> dict[str, float]:
     """Fit a 2D Gaussian (axes along ``y`` and ``z``) to a calorimeter map.
 
@@ -941,6 +1062,14 @@ def fit_footprint(power_map: xr.DataArray) -> dict[str, float]:
     }
 
 
+@method(
+    equations={
+        "widths": r"w^2(L) = w_0^2 + (L \theta)^2",
+    },
+    assumptions=(
+        r"linear least squares of $w^2$ on the columns $(1, L^2)$, at least two distances; negative $w_0^2$ or $\theta^2$ clipped to 0",
+    ),
+)
 def divergence_from_widths(
     distances: Sequence[float], widths: Sequence[float]
 ) -> tuple[float, float]:
@@ -958,6 +1087,13 @@ def divergence_from_widths(
     return float(np.sqrt(max(w0_squared, 0.0))), float(np.sqrt(max(theta_squared, 0.0)))
 
 
+@method(
+    equations={
+        "balance": r"P_\mathrm{port} + \sum_\mathrm{parts} P_\mathrm{wall} = P_\mathrm{in} \quad \text{(to a relative } 10^{-9})",
+        "halo": r"P_\mathrm{halo} = \sum_{|\mathbf r_k - \bar{\mathbf r}| > r_\mathrm{halo}} P_k, \qquad \bar{\mathbf r} = \langle (y, z) \rangle_P",
+    },
+    assumptions=(r"the balance is checked, a mismatch raises",),
+)
 def beamline_summary(
     port: Markers,
     walls: Mapping[str, Markers],

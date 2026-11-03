@@ -1,7 +1,7 @@
 """The Metal version (Apple-silicon GPU, float32) of the ``staggered_field_2d`` kernel.
 
 ``staggered_field_2d_pyccel.py`` next to this file is the CPU version with the same
-arguments. One thread per point; see :mod:`beamtracer.kernels`. The cell
+arguments. One thread per point; see `beamtracer.kernels`. The cell
 coordinates ``(p - origin) / h`` are formed on the host in float64, then the GPU
 interpolates in float32.
 """

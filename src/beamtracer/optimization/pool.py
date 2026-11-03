@@ -1,6 +1,6 @@
 """Evaluating designs in worker processes, robust to crashes, hangs and a dying parent.
 
-:class:`WorkerPool` wraps a :class:`~concurrent.futures.ProcessPoolExecutor`:
+`WorkerPool` wraps a `concurrent.futures.ProcessPoolExecutor`:
 
 - its workers exit when the main process is gone (a search killed from outside leaves no
   orphans waiting for work);
@@ -110,8 +110,8 @@ def evaluate(
 class WorkerPool:
     """Evaluate designs of a problem serially (``workers=1``) or in worker processes.
 
-    ``workers`` of ``-1`` is one per CPU; ``mp_context`` is the :mod:`multiprocessing`
-    context that starts them (default: :func:`default_context`); ``timeout`` [s] bounds
+    ``workers`` of ``-1`` is one per CPU; ``mp_context`` is the `multiprocessing`
+    context that starts them (default: `default_context`); ``timeout`` [s] bounds
     every evaluation.
     """
 

@@ -37,4 +37,6 @@ jobs:
         api/beamtracer/index.html
         api/beamtracer/model/index.html
         model/beam-optics/index.html
+        numerics/index.html
+        numerics/solver-vlasov/index.html
         example-scripts/einzel-lens-design-map/plot-2.png

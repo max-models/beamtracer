@@ -2,9 +2,9 @@
 
 A fast beam crossing a gas (or a plasma) changes charge state: a negative ion
 loses its electron (``- -> 0``), a neutral is ionized (``0 -> +``), an ion
-captures one (``+ -> 0``). :class:`ChargeChanging` follows these changes on
-every trajectory of the :class:`~beamtracer.solver.tracer.BeamTracer` in one of
-two modes, with the cross sections of a :class:`plasmacoll.ChargeStateTransitions`
+captures one (``+ -> 0``). `ChargeChanging` follows these changes on
+every trajectory of the `beamtracer.solver.tracer.BeamTracer` in one of
+two modes, with the cross sections of a `plasmacoll.ChargeStateTransitions`
 (``M_t``, one transition matrix per target of density ``n_t``):
 
 ``"fractions"``
@@ -34,9 +34,9 @@ two modes, with the cross sections of a :class:`plasmacoll.ChargeStateTransition
     fractions are then one-hot, so everything below holds in both modes, and
     the mean over trajectories is the fractions mode.
 
-The target densities are uniform or :class:`AxialProfile` s along ``x``, e.g.
+The target densities are uniform or `AxialProfile` s along ``x``, e.g.
 the gas between the grids of an accelerator from conductances
-(:func:`conductance_profile`) or sampled from a neutral-transport run
+(`conductance_profile`) or sampled from a neutral-transport run
 (picnic's ``NeutralParticleTransport``).
 
 The space charge of a trajectory is that of every state with its own sign. Its
@@ -56,6 +56,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
+from methodcard import ConvergenceProblem, Rule, method
 from plasmacoll import ChargeStateTransitions
 from scipy import constants
 
@@ -69,11 +70,21 @@ __all__ = [
 
 #: The charge (in e) of the states of a hydrogen-like beam.
 DEFAULT_CHARGES = {"-": -1.0, "0": 0.0, "+": 1.0}
-#: The modes of :class:`ChargeChanging`.
+#: The modes of `ChargeChanging`.
 MODES = ("fractions", "analog")
 
 
 @dataclass(frozen=True)
+@method(
+    equations={
+        "profile": r"n(x) = n_i + \frac{x - x_i}{x_{i+1} - x_i} (n_{i+1} - n_i), \quad x_i \le x \le x_{i+1}; \qquad n(x) = n_0,\ n_\mathrm{last} \text{ beyond}",
+        "line_density": r"\int_a^b n\, dx = \text{the trapezoidal rule on } a, \text{ the points inside } (a, b), b \quad \text{(exact)}",
+    },
+    assumptions=(
+        r"at least two points, increasing $x$, densities $\ge 0$",
+        r"in the tracer the density is taken at the midpoint of each step, as if uniform over it",
+    ),
+)
 class AxialProfile:
     """A target density (m^-3) along ``x`` (m), linear between the points.
 
@@ -111,6 +122,36 @@ class AxialProfile:
 Density = float | AxialProfile
 
 
+def _conductance_rules() -> dict:
+    """The SymPy rule of `conductance_profile` (for the tests)."""
+    import sympy
+
+    a1, l1, a2, l2, up = sympy.symbols("a1 l1 a2 l2 upstream", positive=True)
+
+    def resistance(a, length):
+        return (1 + 3 * length / (8 * a)) / a**2
+
+    def after_first(a1, l1, a2, l2, upstream):
+        apertures = [(0.0, l1, a1), (l1 + 1.0, l1 + 1.0 + l2, a2)]
+        return conductance_profile(apertures, upstream).density[1]
+
+    drop = up * resistance(a1, l1) / (resistance(a1, l1) + resistance(a2, l2))
+    return {"drops": Rule(up - drop, implementation=after_first)}
+
+
+@method(
+    equations={
+        "drops": r"\Delta n_i = (n_\mathrm{up} - n_\mathrm{down}) \frac{1 / (a_i^2 K_i)}{\sum_j 1 / (a_j^2 K_j)}, \qquad K_i = \frac{1}{1 + 3 l_i / (8 a_i)}",
+        "flow": r"Q = C_i\, \Delta n_i, \qquad C_i = \frac{\bar v}{4} \pi a_i^2 K_i",
+    },
+    assumptions=(
+        r"free-molecular flow through round apertures of radius $a_i$ and length $l_i$; one flow $Q$ through all of them, so the mean speed $\bar v$ cancels",
+        r"uniform density in the gaps between the grids (no pumping across them), linear through each aperture",
+        r"$K_i$ Dushman's approximation of Clausing's transmission probability",
+    ),
+    references=("S. Dushman, Scientific Foundations of Vacuum Technique (Wiley)",),
+    symbolic=_conductance_rules,
+)
 def conductance_profile(
     apertures: Sequence[tuple[float, float, float]],
     upstream: float,
@@ -144,6 +185,7 @@ def conductance_profile(
     resistance = 1.0 / (radii**2 * (1.0 / (1.0 + 3.0 * length / (8.0 * radii))))
     drops = (upstream - downstream) * resistance / resistance.sum()
     levels = upstream - np.concatenate([[0.0], np.cumsum(drops)])
+    levels[-1] = downstream  # exactly: the sum of the drops can round below it
     x = np.ravel(np.column_stack([starts, ends]))
     density = np.ravel(np.column_stack([levels[:-1], levels[1:]]))
     return AxialProfile(x.tolist(), density.tolist())
@@ -151,7 +193,7 @@ def conductance_profile(
 
 @dataclass
 class ChargeEvents:
-    """The outcome of sampling the analog events of one step (see :meth:`ChargeChanging.sample`).
+    """The outcome of sampling the analog events of one step (see `ChargeChanging.sample`).
 
     Rows ``N`` and up are new trajectories split off the row ``parent``.
 
@@ -176,14 +218,61 @@ class ChargeEvents:
     events: dict[tuple[str, str, str], tuple[np.ndarray, np.ndarray]]
 
 
+def _advance_problem() -> ConvergenceProblem:
+    """Fractions on a uniform gas, against the matrix exponential."""
+    from scipy.linalg import expm
+
+    cross_sections = {
+        ("-", "0"): 1.2,
+        ("-", "+"): 0.1,
+        ("0", "+"): 0.4,
+        ("+", "0"): 0.2,
+    }
+    transitions = ChargeStateTransitions(
+        {"gas": cross_sections}, states=("-", "0", "+")
+    )
+    model = ChargeChanging(transitions, {"gas": 1.0})
+    start = np.array([1.0, 0.0, 0.0])
+    exact = expm(2.0 * model.rate_matrix()) @ start
+
+    def error(step: float) -> float:
+        fractions = start[:, None]
+        for _ in range(round(2.0 / step)):
+            fractions = model.advance(fractions, {"gas": np.array([step])})
+        return float(np.max(np.abs(fractions[:, 0] - exact)))
+
+    return ConvergenceProblem(error, steps=[0.2, 0.1, 0.05, 0.025])
+
+
 @dataclass(frozen=True)
+@method(
+    equations={
+        "master": r"\frac{d\mathbf F}{ds} = \sum_t n_t(x)\, M_t\, \mathbf F, \qquad (M_t)_{js} = \sigma_t(s \to j), \quad (M_t)_{ss} = -\sum_{j \ne s} \sigma_t(s \to j)",
+        "force": r"\bar q = e \sum_s z_s F_s \ \text{(fractions)}, \qquad q = e\, z_s \ \text{(analog)}",
+        "current": r"N_k = \frac{|I_k|}{e} \ \text{in every state}, \qquad \Delta Q = N_k\, e \sum_s z_s \bar F_s\, \Delta t",
+    },
+    assumptions=(
+        r"$\mathbf F$ the fractions of a trajectory over the states $s$ of charge $z_s$ (default `-`, `0`, `+`), $s$ the path length, $M_t$ from `plasmacoll.ChargeStateTransitions`",
+        r"fractions mode: a trajectory feels the force of its mean charge, so states do not part where the field would separate them (fine in a weak field, as in a neutralizer; not in a residual-ion dump or inside an accelerator)",
+        r"analog mode: one state per trajectory, changed at sampled events; the mean over trajectories is the fractions mode",
+        r"a trajectory starting with $|z| \ne 1$ counts $N_k = |I_k| / e$ as if $|z| = 1$",
+    ),
+    references=(
+        "[plasmacoll](https://github.com/max-models/plasmacoll) `ChargeStateTransitions`, `charge_state_fractions`",
+    ),
+    components=(
+        "beamtracer.solver.charge_changing.ChargeChanging.advance",
+        "beamtracer.solver.charge_changing.ChargeChanging.sample",
+        "beamtracer.solver.charge_changing.ChargeTallies",
+    ),
+)
 class ChargeChanging:
     """The targets a beam changes charge on, and how its trajectories follow the changes.
 
     Attributes:
         transitions: Charge-changing cross sections per target (m^2).
         densities: Density of every target (m^-3), uniform or an
-            :class:`AxialProfile`.
+            `AxialProfile`.
         charges: The charge of every state in e.
         ionization: ``{target: {state: sigma}}``, cross sections (m^2) for
             ionizing the target, tallied only (they do not change the beam).
@@ -245,7 +334,7 @@ class ChargeChanging:
 
     @property
     def state_charges(self) -> np.ndarray:
-        """The charge of every state in C, in the order of :attr:`states`."""
+        """The charge of every state in C, in the order of `states`."""
         return np.array([self.charges[s] for s in self.states]) * constants.e
 
     def initial_states(self, charge: np.ndarray) -> np.ndarray:
@@ -294,6 +383,18 @@ class ChargeChanging:
             total += density * self.transitions.matrix(target)
         return total
 
+    @method(
+        equations={
+            "taylor": r"\mathbf F \leftarrow \mathbf F + M \mathbf F + \tfrac12 M^2 \mathbf F + \tfrac16 M^3 \mathbf F, \qquad M = \sum_t n_t(x_{1/2})\, \Delta s\, M_t",
+            "conservation": r"\sum_s (M_t)_{s j} = 0 \quad \Rightarrow \quad \sum_s F_s = \text{const}",
+        },
+        order=3,
+        assumptions=(
+            r"the third-order Taylor polynomial of $e^{M}$ per step; the densities at the step's midpoint, uniform over the step",
+            r"the order is in the line density per step $n \Delta s$",
+        ),
+        problem=_advance_problem,
+    )
     def advance(
         self, fractions: np.ndarray, lines: Mapping[str, np.ndarray]
     ) -> np.ndarray:
@@ -318,6 +419,19 @@ class ChargeChanging:
             if sigma > 0.0
         ]
 
+    @method(
+        equations={
+            "rate": r"\lambda_s(x) = \sum_t n_t(x) \sum_{j \ne s} \sigma_t(s \to j)",
+            "depth": r"\tau \sim \mathrm{Exp}(1), \qquad \tau \leftarrow \tau - \lambda_s \Delta s, \qquad \text{an event where } \tau \le 0, \text{ at the share } 1 + \frac{\tau}{\lambda_s \Delta s} \text{ of the step}",
+            "channel": r"P(t, j) = \frac{n_t\, \sigma_t(s \to j)}{\lambda_s}",
+            "splitting": r"\text{at each of the first events: } k \text{ trajectories of } I / k, \text{ drawing their new states independently}",
+        },
+        assumptions=(
+            r"the probability of no event over a path is $\exp(-\int \lambda_s\, ds)$, so the depth of the event is $\mathrm{Exp}(1)$ in $\int \lambda_s\, ds$",
+            r"several events per step followed in turn, each new state using up the rest of the step; the force changes from the next step on",
+            r"random numbers from `seed` and the MPI rank, afresh on every trace, so the Vlasov iteration has a fixed point",
+        ),
+    )
     def sample(
         self,
         rng: np.random.Generator,
@@ -422,6 +536,18 @@ class ChargeChanging:
 
 
 @dataclass
+@method(
+    equations={
+        "path": r"\text{path}_s = \sum_k N_k \int F_{s,k}\, ds",
+        "changes": r"\text{changes}_{t, s \to j} = \sigma_t(s \to j) \sum_k N_k \int F_{s,k}\, n_t\, ds",
+        "ionization": r"\text{ionization}_{t, s} = \sigma^\mathrm{ion}_{t, s} \sum_k N_k \int F_{s,k}\, n_t\, ds",
+    },
+    assumptions=(
+        r"in particles per second (per metre of depth in planar geometry); the integrals summed step by step with the mean fractions $\bar F$ of each step",
+        r"the ionization cross sections are tallied only: they do not change the beam",
+        r"analog mode also sums the sampled events, whose mean is `changes`",
+    ),
+)
 class ChargeTallies:
     """What the beam did to its targets, summed over trajectories (see the module docstring).
 

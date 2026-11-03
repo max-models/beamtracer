@@ -7,6 +7,22 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Method cards (methodcard) on the equations of the model: the mesh, Poisson's equation with
+  the Boltzmann plasma species and Newton's method, the staggered electric field, the
+  axisymmetric magnetic field and the solenoids, the surface field, the beam seeding, the
+  equations of motion, RK4 and the space-charge deposit, the charge changes (fractions,
+  analog events, tallies, target profiles and conductances), the Vlasov iteration and the
+  compensation, the beam moments and the mismatch, `BeamOptics`, the neutralizer coupling, the
+  beamline (markers, aperture grid, duct, Boris push, calorimeter and fits), the einzel lens
+  (thin lens, paraxial focus), the H- beamlet (Child-Langmuir, constraints) and the
+  differential evolution with its ranking, with their assumptions and references.
+  `test_method_cards.py` checks them: SymPy rules for six closed forms, the observed order of
+  seven discretisations, and the cards of the docs against those of the code. Adds the
+  `methodcard` dependency.
+- A Numerics section in the docs (header and sidebar): an overview of the model's equations
+  (`docs/src/content/docs/numerics/index.mdx`, with the main cards) and one page per module
+  in the order of the model, and a Numerics section on each method's API page
+  (starlight-theme 0.7.4, `methodcard: { pages: true }`).
 - The neutralizer example takes the plasma's rates from OpenCR (`wellbalanced.cr`); the `neutralizer`
   extra installs `wellbalanced[cr]`.
 - Trajectories that change state: `ChargeChangingParams(..., mode="analog")` puts every
@@ -88,6 +104,14 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `Result.repeats`; `Result.reused` now counts only the designs taken from a record.
   `optimize`'s `callback` takes either of SciPy's signatures. Records without generations
   still resume.
+
+### Fixed
+
+- `conductance_profile` ends exactly at `downstream`: the sum of the drops could round below
+  zero, which `AxialProfile` refused.
+- The math in the docstrings renders on the API pages: `$$` blocks instead of reST
+  `.. math::` and indented formulas (shown as code), and code spans instead of `:func:`,
+  `:class:`, `:mod:` and `:math:` roles.
 
 ### Changed
 

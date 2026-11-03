@@ -17,6 +17,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
+from methodcard import method
 
 #: Signature of an electrode: a vectorised ``inside(x, y) -> bool array`` test.
 InsideFunction = Callable[[np.ndarray, np.ndarray], np.ndarray]
@@ -62,12 +63,24 @@ class FaceCondition:
 
 
 @dataclass
+@method(
+    equations={
+        "nodes": r"x_i = x_0 + i h, \qquad y_j = y_0 + j h \quad (y = r \text{ in cylindrical geometry})",
+        "classes": r"\text{solid} \;(\phi = V_\mathrm{electrode}), \quad \text{Dirichlet face}, \quad \text{near solid} \;(\text{a solid neighbour along } \pm x, \pm y), \quad \text{free}",
+        "distance": r"d = \frac{s}{255}\, h, \quad s \in \{1, \dots, 255\}, \qquad s \text{ bracketed by 8 bisection steps of the electrode's inside test}",
+    },
+    assumptions=(
+        r"equal spacing $h$ on both axes; at least 3 nodes per axis",
+        r"cylindrical: the mesh starts on the axis $r = 0$, whose face is Neumann 0",
+        r"where electrodes overlap the first in the list owns the node; a Dirichlet face fixes only its non-solid nodes",
+    ),
+)
 class IonOpticsMesh:
     """A uniform 2D node mesh with electrodes, in planar or cylindrical geometry.
 
     ``shape`` is the number of nodes ``(nx, ny)``, ``origin`` the position of node ``(0, 0)``
     and ``h`` the node spacing. ``faces`` maps ``"x_min"``, ``"x_max"``, ``"y_min"`` and
-    ``"y_max"`` to a :class:`FaceCondition` (default: Neumann). In cylindrical geometry the
+    ``"y_max"`` to a `FaceCondition` (default: Neumann). In cylindrical geometry the
     ``y_min`` face is the symmetry axis and must be at ``r = 0``.
     """
 

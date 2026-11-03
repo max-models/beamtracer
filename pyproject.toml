@@ -27,6 +27,8 @@ dependencies = [
   "cunumpy>=0.7.0",
   # MPI only under an MPI launcher; a serial stand-in for mpi4py otherwise
   "maybempi>=0.1",
+  # the method cards of the numerical methods
+  "methodcard",
   # the potential and charge density on the nodes (Field)
   "mpifield>=0.1.0",
   "numpy",
@@ -64,7 +66,13 @@ optional-dependencies.docs = [
   # the figures of the tutorials
   "plasma-plots>=0.2.3",
 ]
-optional-dependencies.test = [ "beamtracer[neutralizer]", "pytest", "pytest-cov", "pyccel>2.0" ]
+optional-dependencies.test = [
+  "beamtracer[neutralizer]",
+  "methodcard[symbolic]",
+  "pyccel>2.0",
+  "pytest",
+  "pytest-cov",
+]
 urls.Source = "https://github.com/max-models/beamtracer"
 
 [project.entry-points."scope_profiler.opt_in_tags"]
@@ -100,6 +108,7 @@ typeCheckingMode = "standard"
 ini_options.pythonpath = [ "src" ]
 ini_options.testpaths = [ "src" ]
 ini_options.addopts = "-ra"
+ini_options.markers = [ "convergence: an order-of-accuracy test of a method card" ]
 
 [tool.coverage]
 run.omit = [ "*/tests/*" ]
@@ -112,6 +121,7 @@ report.show_missing = true
 # one entry per max-models package in [project], spelled exactly like this in every repo:
 cunumpy = { git = "https://github.com/max-models/cunumpy", branch = "devel" }
 maybempi = { git = "https://github.com/max-models/maybempi", branch = "devel" }
+methodcard = { git = "https://github.com/max-models/methodcard", branch = "devel" }
 mpifield = { git = "https://github.com/max-models/mpifield", branch = "devel" }
 opencr = { git = "https://github.com/max-models/opencr", branch = "devel" }
 plasma-plots = { git = "https://github.com/max-models/plasma-plots", branch = "devel" }

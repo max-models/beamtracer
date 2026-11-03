@@ -1,17 +1,17 @@
 """Searches over a design: SciPy's differential evolution, brute-force scans, and checks.
 
-:func:`recheck` evaluates the best designs of a search again with another evaluation:
+`recheck` evaluates the best designs of a search again with another evaluation:
 the second stage of a staged search, e.g. a finer mesh or a PIC model in user code.
 
 Both evaluate through the same machinery: the designs of a batch (a generation of the
 evolution, or a scan) that are already in the record are taken from it, the others are
 evaluated, serially or in a pool of ``workers`` processes, and recorded in the main
-process. A process pool pickles the :class:`~beamtracer.optimization.Problem` for
+process. A process pool pickles the `beamtracer.optimization.Problem` for
 every evaluation, so its ``design.build`` and ``function`` must be picklable and
 importable by the workers (defined in a module, not in a notebook or a script's
 ``__main__`` when the pool spawns its processes, the default on macOS and Windows).
 A crashed worker or an evaluation longer than ``timeout`` becomes a failed evaluation
-(see :mod:`beamtracer.optimization.pool`).
+(see `beamtracer.optimization.pool`).
 
 Constraints follow SciPy's rules for differential evolution (Lampinen's): a feasible
 design beats an infeasible one, two feasible ones compare by the objective, and two
@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from methodcard import method
 from scipy.optimize import NonlinearConstraint, OptimizeResult, differential_evolution
 
 from beamtracer.optimization.design import Evaluation, Problem
@@ -45,16 +46,16 @@ class Result:
     """The outcome of a search.
 
     ``best`` is the best evaluation of this search (see
-    :meth:`~beamtracer.optimization.Evaluation.rank`): feasible if any was, ``None``
+    `beamtracer.optimization.Evaluation.rank`): feasible if any was, ``None``
     without evaluations. ``evaluations`` are the designs the search asked for: for
-    :func:`optimize` each design once, in the order first asked for, with its
-    ``generation``; for :func:`scan` and :func:`recheck` in the order of the grid or the
+    `optimize` each design once, in the order first asked for, with its
+    ``generation``; for `scan` and `recheck` in the order of the grid or the
     ranking. ``evaluated`` counts the new evaluations, ``reused`` those taken from a
     record of an earlier search, and ``repeats`` the asks for a design this search had
     already asked for (SciPy checks the best design between generations), which are
     answered from memory and not listed again. ``path`` is the best evaluation after each
-    generation of :func:`optimize`, from the initial population (0) to the last (empty
-    for a scan). ``scipy`` is the :class:`~scipy.optimize.OptimizeResult` of
+    generation of `optimize`, from the initial population (0) to the last (empty
+    for a scan). ``scipy`` is the `scipy.optimize.OptimizeResult` of
     differential evolution (``None`` for a scan).
     """
 
@@ -83,13 +84,13 @@ class Result:
         return self.best.objectives[self.problem.objective]
 
     def to_dataset(self) -> Any:
-        """Return this search's evaluations as an :class:`xarray.Dataset`."""
+        """Return this search's evaluations as an `xarray.Dataset`."""
         return to_dataset(self.evaluations)
 
     def path_to_dataset(self) -> Any:
-        """Return :attr:`path` as an :class:`xarray.Dataset` along ``generation``.
+        """Return `path` as an `xarray.Dataset` along ``generation``.
 
-        The variables are those of :func:`~beamtracer.optimization.to_dataset`, the
+        The variables are those of `beamtracer.optimization.to_dataset`, the
         generation in which each best design was asked for renamed to ``found``.
         """
         data = to_dataset(self.path)
@@ -180,6 +181,22 @@ def _best(problem: Problem, evaluations: Sequence[Evaluation]) -> Evaluation | N
     return min(evaluations, key=lambda e: e.rank(problem.objective))
 
 
+@method(
+    equations={
+        "problem": r"\min_{\mathbf p \in [\mathbf l, \mathbf u]} f(\mathbf p) \quad \text{subject to} \quad g_i(\mathbf p) \le 0, \quad g_\mathrm{penalty}(\mathbf p) \le 0",
+        "seen": r"(f, g_1, \dots, g_m, g_\mathrm{penalty}) = \begin{cases} (f, g_1, \dots, g_m, 0) & \text{ok (a NaN } g_i \text{ read as } +\infty) \\ (+\infty, +\infty, \dots, +\infty, 1) & \text{failed or unconverged} \end{cases}",
+    },
+    assumptions=(
+        r"SciPy's differential evolution with Lampinen's constraint rules: a feasible design beats an infeasible one, two feasible ones compare by $f$, two infeasible ones by their violations",
+        r"one generation per batch (`updating='deferred'`, `vectorized=True`), evaluated in a process pool; no gradient polish",
+        r"every evaluation recorded under the key of its normalised parameters, so a rerun with the same seed resumes from the record",
+    ),
+    references=(
+        "[Storn and Price, J. Global Optim. 11, 341 (1997)](https://doi.org/10.1023/A:1008202821328)",
+        "[Lampinen, Proc. CEC'02, vol. 2, 1468 (2002)](https://ieeexplore.ieee.org/document/1004459)",
+    ),
+    components=("beamtracer.optimization.design.Evaluation.rank",),
+)
 def optimize(
     problem: Problem,
     *,
@@ -203,22 +220,22 @@ def optimize(
 
     The population of every generation is evaluated as one batch, in a pool of
     ``workers`` processes (``-1``: one per CPU) started with ``mp_context`` (see
-    :mod:`multiprocessing`; default forkserver, or spawn where there is none), each evaluation stopped after ``timeout`` seconds, and
+    `multiprocessing`; default forkserver, or spawn where there is none), each evaluation stopped after ``timeout`` seconds, and
     recorded. With a ``record`` path an existing record is
     resumed: with the same ``seed`` and settings the evolution proposes the same
     designs again and takes the recorded ones from the file, so an interrupted or
     extended search (a larger ``maxiter``) continues where it stopped. The problem's
-    constraints are SciPy :class:`~scipy.optimize.NonlinearConstraint` (``<= 0``), with
+    constraints are SciPy `scipy.optimize.NonlinearConstraint` (``<= 0``), with
     one more that is violated by failed and unconverged evaluations.
 
     Every evaluation carries the ``generation`` that asked for it (0 the initial
-    population), and :attr:`Result.path` holds the best design after each generation;
+    population), and `Result.path` holds the best design after each generation;
     a design asked for again (SciPy checks the best one between generations) is answered
-    from memory, counted in :attr:`Result.repeats` and not listed again.
+    from memory, counted in `Result.repeats` and not listed again.
 
     ``seed``, ``maxiter``, ``popsize``, ``tol``, ``atol``, ``mutation``,
     ``recombination``, ``init``, ``x0`` and ``callback`` are those of
-    :func:`scipy.optimize.differential_evolution` (``callback`` with either of SciPy's
+    `scipy.optimize.differential_evolution` (``callback`` with either of SciPy's
     signatures, ``callback(intermediate_result)`` or ``callback(x, convergence)``);
     further ``options`` are passed on,
     except ``polish``, ``updating``, ``vectorized`` and ``constraints``: the evolution
@@ -317,7 +334,7 @@ def scan(
     mp_context: Any = None,
     timeout: float | None = None,
 ) -> Result:
-    """Evaluate a grid of designs, with the evaluation and record of :func:`optimize`.
+    """Evaluate a grid of designs, with the evaluation and record of `optimize`.
 
     ``grid`` is ``{name: values}`` for every parameter (all combinations, the last
     parameter varying fastest) or an array of designs ``(S, N)``. The evaluations are
@@ -369,16 +386,16 @@ def recheck(
     The second stage of a staged search: a cheap model in the search, an expensive one
     (a finer mesh, a time-dependent PIC run of the source, a code beamtracer does not
     import) for the few best designs. The designs are the ``top`` best distinct ones of
-    ``result`` by :meth:`~beamtracer.optimization.Evaluation.rank`: feasible ones by the
+    ``result`` by `beamtracer.optimization.Evaluation.rank`: feasible ones by the
     objective, then infeasible ones by their constraint violation; failed and
     unconverged ones are never checked.
 
-    ``check`` is a :class:`~beamtracer.optimization.Problem` over the same parameters,
+    ``check`` is a `beamtracer.optimization.Problem` over the same parameters,
     with its own build, evaluation, objectives and constraints; or a function, which
     then evaluates the configuration ``result.problem.design`` builds and must return
     the objectives and constraints of ``result.problem``. The evaluations run like a
-    :func:`scan` (``workers``, ``mp_context``, ``timeout``), recorded in ``record``,
-    which a rerun resumes from. The returned :class:`Result` has the evaluations in the
+    `scan` (``workers``, ``mp_context``, ``timeout``), recorded in ``record``,
+    which a rerun resumes from. The returned `Result` has the evaluations in the
     order of the search's ranking, and its ``best`` is the best by the check.
     """
     if top < 1:

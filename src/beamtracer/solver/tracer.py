@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import scope_profiler
+from methodcard import ConvergenceProblem, Rule, method
 from scipy import constants
 
 from beamtracer._profiling import PROFILE_TAGS
@@ -87,6 +88,54 @@ def _gaussian_samples(num: int, sampling: str | np.random.Generator) -> np.ndarr
     return norm.ppf(sobol.random(num))
 
 
+def _beam_rules() -> dict:
+    """The SymPy rules of `beam_with_energy` (for the tests)."""
+    import sympy
+
+    j, energy, mass, length = sympy.symbols(
+        "current_density energy mass length", positive=True
+    )
+    e, u = sympy.Float(constants.e), sympy.Float(constants.atomic_mass)
+
+    def j_over_v(current_density, energy, mass):
+        beam = beam_with_energy(
+            1, current_density, 1.0, mass, energy, 0.0, 0.0, (0.0, 0.0), (0.0, 1.0),
+            cylindrical=False,
+        )  # fmt: skip
+        return beam[1]
+
+    def ring(current_density, length):
+        beam = beam_with_energy(
+            1, current_density, 1.0, 1.0, 1.0, 0.0, 0.0, (0.0, 0.0), (0.0, length),
+            cylindrical=True,
+        )  # fmt: skip
+        return beam[0].current[0]
+
+    return {
+        "speed": Rule(
+            j / sympy.sqrt(2 * energy * e / (mass * u)),
+            implementation=j_over_v,
+            ranges={"energy": (1.0, 1.0e4), "mass": (5.0e-4, 4.0)},
+        ),
+        # one ring at the middle of the line, r = s / 2
+        "ring": Rule(sympy.pi * j * length**2, implementation=ring),
+    }
+
+
+@method(
+    equations={
+        "positions": r"\mathbf x_k = \mathbf a + \frac{k + 1/2}{N} (\mathbf b - \mathbf a), \qquad k = 0, \dots, N - 1",
+        "velocities": r"\mathbf v = v_0 \hat{\mathbf n} + \sigma_\perp g_1 \hat{\mathbf t} + \sigma_\parallel g_2 \hat{\mathbf n} \ (+ \sigma_\perp g_3 \hat{\mathbf z} \text{ cylindrical}), \qquad \hat{\mathbf n} = (t_y, -t_x)",
+        "speed": r"v_0 = \sqrt{\frac{2 E e}{m}}, \qquad \sigma_{\parallel,\perp} = \sqrt{\frac{T_{\parallel,\perp}\, e}{m}}, \qquad \rho_0 = \frac{J}{v_0}",
+        "ring": r"I_k = \frac{2\pi J s\, r_k}{N} \text{ (cylindrical, a ring)}, \qquad I_k = \frac{J s}{N} \text{ [A/m] (planar)}",
+    },
+    assumptions=(
+        r"$s$ the length of the emission line from $\mathbf a$ to $\mathbf b$, $\hat{\mathbf t}$ its direction; the beam moves to its right",
+        r"$g_{1,2,3}$ standard normal: an unscrambled 3D Sobol sequence (origin skipped) through the inverse normal, the same beam on every call, so the Vlasov iteration has a fixed point",
+        r"the ring currents sum to $J \pi R^2$ up to the midpoint rule's $O(N^{-2})$ for a line along $r$",
+    ),
+    symbolic=_beam_rules,
+)
 def beam_with_energy(
     num_particles: int,
     current_density: float,
@@ -114,7 +163,7 @@ def beam_with_energy(
 
     ``sampling`` ``"sobol"`` draws the velocity spreads from a 3D Sobol sequence through the
     inverse Gaussian distribution: the same beam on every call, so the
-    Vlasov iteration reaches a fixed point. A :class:`numpy.random.Generator` draws them at
+    Vlasov iteration reaches a fixed point. A `numpy.random.Generator` draws them at
     random instead.
     """
     q = charge * constants.e
@@ -201,6 +250,37 @@ class TraceResult:
     tallies: ChargeTallies | None = None
 
 
+def _rk4_problem() -> ConvergenceProblem:
+    """A harmonic field ``E = -(x, y)``: a circle of unit radius, against ``cos t``."""
+    mesh = IonOpticsMesh((3, 3), (0.0, 0.0), 1.0, "planar")
+    tracer = BeamTracer(mesh, lambda x, y: (-x, -y))
+    qm = np.ones(1)
+
+    def error(dt: float) -> float:
+        x, v = np.array([[1.0], [0.0], [0.0]]), np.array([[0.0], [1.0], [0.0]])
+        steps = round(2.0 / dt)
+        for _ in range(steps):
+            x, v = tracer._rk4(x, v, tracer.acceleration(x, v, qm), dt, qm)
+        t = steps * dt
+        return float(np.hypot(x[0, 0] - np.cos(t), x[1, 0] - np.sin(t)))
+
+    return ConvergenceProblem(error, steps=[0.2, 0.1, 0.05, 0.025])
+
+
+@method(
+    equations={
+        "rk4": r"\mathbf y^{n+1} = \mathbf y^n + \frac{\Delta t}{6}(\mathbf k_1 + 2\mathbf k_2 + 2\mathbf k_3 + \mathbf k_4), \qquad \mathbf y = (\mathbf x, \mathbf v), \quad \dot{\mathbf y} = (\mathbf v, \mathbf a(\mathbf x, \mathbf v))",
+        "step": r"\Delta t = f \min\left(\frac{h}{|\mathbf v|}, \sqrt{\frac{2h}{|\mathbf a|}}\right), \qquad 0 < f \le 1",
+    },
+    order=4,
+    assumptions=(
+        r"$f$ = `step_fraction` (0.5 by default); a non-finite estimate (a particle at rest without force) falls back to $f h$",
+        r"each particle has its own step; the field at the stage points",
+        r"the order is that of the integrator in $\Delta t$; the plane crossings are interpolated linearly along a step",
+    ),
+    components=("beamtracer.solver.tracer.BeamTracer.acceleration",),
+    problem=_rk4_problem,
+)
 class BeamTracer:
     """Trace particles through a static electric (and magnetic) field.
 
@@ -230,7 +310,7 @@ class BeamTracer:
 
         ``charge_changing`` lets every trajectory carry charge-state fractions that
         change on the targets it crosses, or one state that changes at sampled
-        events (see :mod:`beamtracer.solver.charge_changing`).
+        events (see `beamtracer.solver.charge_changing`).
         """
         if magnetic is not None and not mesh.cylindrical:
             raise ValueError("a magnetic field needs a cylindrical mesh")
@@ -257,6 +337,19 @@ class BeamTracer:
 
     # -- fields -----------------------------------------------------------------------------
 
+    @method(
+        equations={
+            "motion": r"\frac{d\mathbf x}{dt} = \mathbf v, \qquad \frac{d\mathbf v}{dt} = \frac{q}{m}\left(\mathbf E + \mathbf v \times \mathbf B\right)",
+            "planar": r"\mathbf E = (E_x, E_y, 0)(x, y), \qquad \mathbf B = 0",
+            "cylindrical": r"r = \sqrt{y^2 + z^2}, \qquad \mathbf E = E_x \hat{\mathbf x} + E_r \hat{\mathbf r}, \qquad \mathbf B = B_z \hat{\mathbf x} + B_r \hat{\mathbf r}",
+            "mean_charge": r"q = \bar q = e \sum_s z_s F_s \quad \text{(charge changes in fractions mode)}",
+        },
+        assumptions=(
+            r"non-relativistic; 3D Cartesian motion in fields of $(x, y)$ or $(x, r)$, so a trajectory crossing the axis continues at negative $y$",
+            r"cylindrical: a trajectory stands for a ring of charge; on the axis $\hat{\mathbf r} = 0$, so $E_r$ and $B_r$ do not act there",
+            r"a magnetic field only in cylindrical geometry",
+        ),
+    )
     def acceleration(self, x: np.ndarray, v: np.ndarray, qm: np.ndarray) -> np.ndarray:
         """Return the acceleration ``(3, N)`` at positions ``x`` and velocities ``v``."""
         electric = self.electric
@@ -413,6 +506,25 @@ class BeamTracer:
 
     # -- tracing ----------------------------------------------------------------------------
 
+    @method(
+        equations={
+            "charge": r"\Delta Q = \operatorname{sign}(q)\, I\, \Delta t \quad \text{or, with charge changes,} \quad \Delta Q = N_k\, e \sum_s z_s \bar F_s\, \Delta t",
+            "midpoint": r"\mathbf x_{1/2} = \tfrac12 (\mathbf x + \mathbf x') + \frac{\Delta t}{8} (\mathbf v - \mathbf v')",
+            "weights": r"w_x = \frac{x - x_i}{h}, \qquad w_r = \frac{r^2 - r_j^2}{r_{j+1}^2 - r_j^2} \ \text{(cylindrical)}, \quad w_y = \frac{y - y_j}{h} \ \text{(planar)}",
+            "volumes": r"\rho_{ij} = \frac{Q_{ij}}{V_j}, \qquad V_j = h^2 \ \text{(planar)}, \quad V_j = \pi h (r_{j+1/2}^2 - r_{j-1/2}^2) = 2\pi r_j h^2, \quad V_0 = \pi h^3",
+            "path": r"\Delta s = \tfrac12 \Delta t\, (|\mathbf v| + |\mathbf v'|) \times \text{the share of the step inside the mesh}",
+        },
+        assumptions=(
+            r"a steady trajectory of current $I$ is a line charge $I / v$, so a step holds $I \Delta t$; currents are magnitudes, the sign is the charge's",
+            r"$\mathbf x_{1/2}$ the cubic Hermite interpolant at the half step; charge outside the mesh goes to the boundary nodes, whose densities are doubled (half cells)",
+            r"a trajectory ends transmitted ($x \ge x_\mathrm{max}$), backward ($x < x_\mathrm{min}$), on the wall, on an electrode (tested in the cells touching one) or after `max_steps`, tested at the end of each step",
+            r"$\bar F$ the mean of the fractions before and after the step; with MPI the node charges are summed over the ranks",
+        ),
+        components=(
+            "beamtracer.solver.tracer.BeamTracer",
+            "beamtracer.solver.charge_changing.ChargeChanging",
+        ),
+    )
     @scope_profiler.profile("beamtracer.trace", tags=PROFILE_TAGS)
     def trace(self, particles: BeamParticles) -> TraceResult:
         """Trace ``particles`` until they leave the mesh or hit an electrode."""

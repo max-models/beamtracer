@@ -1,12 +1,12 @@
 """The record of a search: every evaluation, one JSON line each, in the order evaluated.
 
-A line holds the design's key (see :meth:`~beamtracer.optimization.Design.key`), the
+A line holds the design's key (see `beamtracer.optimization.Design.key`), the
 parameters, objectives, constraints, flags, wall time, diagnostics and generation of one
-:class:`~beamtracer.optimization.Evaluation` (records written before the generation was
-recorded read as ``None``). Python's :mod:`json` writes a non-finite
+`beamtracer.optimization.Evaluation` (records written before the generation was
+recorded read as ``None``). Python's `json` writes a non-finite
 value as ``NaN`` or ``Infinity``, which it also reads. A search given an existing record
 resumes from it: designs already recorded are taken from the record instead of being
-evaluated again. :func:`load_record` reads a record as an :class:`xarray.Dataset` for
+evaluated again. `load_record` reads a record as an `xarray.Dataset` for
 plots.
 """
 
@@ -33,14 +33,14 @@ def _column(values: list[Any]) -> np.ndarray:
 
 
 def to_dataset(evaluations: Iterable[Evaluation]) -> Any:
-    """Return evaluations as an :class:`xarray.Dataset` along an ``evaluation`` dimension.
+    """Return evaluations as an `xarray.Dataset` along an ``evaluation`` dimension.
 
     The parameters, objectives, constraints and scalar diagnostics are variables under
     their own names (a name used twice gets its kind as a prefix, e.g.
     ``diagnostic_spot``), each with a ``kind`` attribute; ``converged``, ``ok``,
     ``feasible``, ``wall_time`` and ``failure`` (empty when none) are added, and
     ``generation`` when an evaluation has one (``-1`` for those without). For a
-    :class:`pandas.DataFrame` use the dataset's ``to_dataframe()``.
+    `pandas.DataFrame` use the dataset's ``to_dataframe()``.
     """
     import xarray as xr
 
@@ -147,7 +147,7 @@ class Record:
                 file.write("\n".join(lines) + "\n")
 
     def to_dataset(self) -> Any:
-        """Return the evaluations as an :class:`xarray.Dataset` (see :func:`to_dataset`)."""
+        """Return the evaluations as an `xarray.Dataset` (see `to_dataset`)."""
         return to_dataset(self._evaluations)
 
     def __iter__(self) -> Iterator[Evaluation]:
@@ -160,7 +160,7 @@ class Record:
 
 
 def load_record(path: str | Path) -> Any:
-    """Return the record at ``path`` as an :class:`xarray.Dataset` (see :func:`to_dataset`).
+    """Return the record at ``path`` as an `xarray.Dataset` (see `to_dataset`).
 
     The design is not needed: the evaluations are read as they were written.
     """

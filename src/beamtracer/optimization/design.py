@@ -1,14 +1,14 @@
 """Designs, evaluations and problems: what the search varies, measures and minimizes.
 
-A :class:`Design` is a set of named :class:`Parameter` with bounds; it turns parameter
+A `Design` is a set of named `Parameter` with bounds; it turns parameter
 values into a model configuration with a user-supplied ``build`` function. A
-:class:`Problem` pairs a design with an evaluation function, which takes that
-configuration and returns an :class:`Evaluation`: objectives, constraints, a converged
-flag and diagnostics. :meth:`Problem.evaluate` never raises: an exception becomes a
+`Problem` pairs a design with an evaluation function, which takes that
+configuration and returns an `Evaluation`: objectives, constraints, a converged
+flag and diagnostics. `Problem.evaluate` never raises: an exception becomes a
 failed evaluation, which the searches rank behind every successful one.
 
 Nothing here knows about a model: any picklable function of a configuration can be the
-evaluation, a :class:`~beamtracer.BeamOptics` run or a code beamtracer does not import.
+evaluation, a `beamtracer.BeamOptics` run or a code beamtracer does not import.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, TypeAlias
 
 import numpy as np
+from methodcard import method
 
 #: Parameter values: ``{name: value}``, or a sequence or array in the design's order.
 Values: TypeAlias = Mapping[str, float] | Sequence[float] | np.ndarray
@@ -58,9 +59,9 @@ class Design:
 
     ``build(values)`` receives the parameter values as a ``{name: value}`` dictionary and
     returns whatever the evaluation function takes, e.g. a
-    :class:`~beamtracer.BeamOpticsConfig`; without it the evaluation receives the values.
+    `beamtracer.BeamOpticsConfig`; without it the evaluation receives the values.
     For parallel searches ``build`` must be picklable: a module-level function, a
-    :func:`functools.partial` of one, or a method of a picklable (e.g. frozen dataclass)
+    `functools.partial` of one, or a method of a picklable (e.g. frozen dataclass)
     object, not a lambda or a function defined in a notebook.
     """
 
@@ -113,7 +114,7 @@ class Design:
         """Return the identity of a design in a record.
 
         A hash of the parameter names and of the normalized values rounded to
-        :data:`KEY_DECIMALS` digits: two designs closer than about ``1e-10`` of the
+        `KEY_DECIMALS` digits: two designs closer than about ``1e-10`` of the
         parameter ranges are the same.
         """
         rounded = np.round(self.normalized(x), KEY_DECIMALS) + 0.0  # no "-0.0"
@@ -153,7 +154,7 @@ class Evaluation:
     model's own verdict, ``failure`` the message of an exception, ``wall_time`` [s] the
     time of the evaluation and ``diagnostics`` anything else worth keeping (numbers,
     strings or flags, recorded with the evaluation). ``parameters`` are filled in by
-    :meth:`Problem.evaluate`, ``generation`` by :func:`~beamtracer.optimization.optimize`:
+    `Problem.evaluate`, ``generation`` by `beamtracer.optimization.optimize`:
     the generation of the evolution that asked for the design (0 the initial
     population; ``None`` outside a search).
     """
@@ -202,9 +203,18 @@ class Evaluation:
 
     @property
     def feasible(self) -> bool:
-        """Whether the evaluation is :attr:`ok` and satisfies every constraint."""
+        """Whether the evaluation is `ok` and satisfies every constraint."""
         return self.ok and self.violation == 0.0
 
+    @method(
+        equations={
+            "rank": r"\text{rank} = \begin{cases} (0, f) & \text{feasible} \\ (1, v) & \text{ok but infeasible} \\ (2, 0) & \text{failed or unconverged} \end{cases}, \qquad v = \sum_i \max(g_i, 0)",
+        },
+        assumptions=(
+            r"ok: converged, no failure, finite objectives; feasible: ok and every constraint $g_i \le 0$; a NaN constraint counts as $v = \infty$",
+            r"sorted lexicographically, lower is better: a penalised evaluation never ranks before a feasible one",
+        ),
+    )
     def rank(self, objective: str) -> tuple[int, float]:
         """Return the sort key of the searches: lower is better.
 
@@ -234,7 +244,7 @@ class Evaluation:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Evaluation:
-        """Return the evaluation of :meth:`to_dict`."""
+        """Return the evaluation of `to_dict`."""
         return cls(
             objectives=data["objectives"],
             constraints=data.get("constraints", {}),
@@ -251,7 +261,7 @@ class Evaluation:
 class Problem:
     """A design, the function that evaluates it, and what to minimize.
 
-    ``function(configuration)`` returns an :class:`Evaluation` for the configuration
+    ``function(configuration)`` returns an `Evaluation` for the configuration
     that ``design.build`` made. ``objectives`` names the objectives, the first being the
     one the searches minimize (several are kept for multi-objective searches later);
     ``constraints`` names the constraints the searches enforce, which every successful
@@ -284,7 +294,7 @@ class Problem:
         """Build and evaluate one design; never raise.
 
         An exception of the build or of the function, a result that is not an
-        :class:`Evaluation`, or a missing objective or constraint becomes a failed
+        `Evaluation`, or a missing objective or constraint becomes a failed
         evaluation (``failure`` holds the message, the objectives are NaN).
         """
         named = self.design.values(values)

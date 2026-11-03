@@ -1,4 +1,4 @@
-r"""An einzel lens: the first design problem of :mod:`beamtracer.optimization`.
+r"""An einzel lens: the first design problem of `beamtracer.optimization`.
 
 Three coaxial tubes in cylindrical ``(x, r)`` geometry, the beam axis along ``x``: the
 outer two at 0 V, the middle one at the design voltage ``V``, inside a grounded wall.
@@ -10,39 +10,45 @@ radius ``beam_radius``, and the objective is its rms size at the ``target`` plan
 downstream. Trajectories that hit an electrode are lost, and the lost fraction of the
 current is a constraint, as is the largest field on the electrode surfaces.
 
-:class:`EinzelLens` holds the fixed settings and makes the
-:class:`~beamtracer.optimization.Design` and
-:class:`~beamtracer.optimization.Problem` of any of the parameters ``voltage``,
-``gap`` and ``aperture``; :meth:`EinzelLens.thin_lens_voltage` and
-:meth:`EinzelLens.paraxial_voltage` are the voltages that focus at the target in the
+`EinzelLens` holds the fixed settings and makes the
+`beamtracer.optimization.Design` and
+`beamtracer.optimization.Problem` of any of the parameters ``voltage``,
+``gap`` and ``aperture``; `EinzelLens.thin_lens_voltage` and
+`EinzelLens.paraxial_voltage` are the voltages that focus at the target in the
 thin-lens and paraxial approximations.
 
 The thin lens
 -------------
-For a paraxial ray in an axially symmetric electrostatic field, with :math:`\phi(z)` the
+For a paraxial ray in an axially symmetric electrostatic field, with $\phi(z)$ the
 potential relative to the ions' zero of kinetic energy (the kinetic energy per charge,
-:math:`\phi = T / q = T_0 / q - V(z)` on the axis for ions starting at :math:`V = 0`),
+$\phi = T / q = T_0 / q - V(z)$ on the axis for ions starting at $V = 0$),
 the ray equation (non-relativistic)
 
-.. math:: r'' + \frac{\phi'}{2\phi} r' + \frac{\phi''}{4\phi} r = 0
+$$
+r'' + \frac{\phi'}{2\phi} r' + \frac{\phi''}{4\phi} r = 0
+$$
 
-becomes, with the Picht transformation :math:`R = r \phi^{1/4}`,
+becomes, with the Picht transformation $R = r \phi^{1/4}$,
 
-.. math:: R'' + \frac{3}{16} \left(\frac{\phi'}{\phi}\right)^2 R = 0 .
+$$
+R'' + \frac{3}{16} \left(\frac{\phi'}{\phi}\right)^2 R = 0 .
+$$
 
-An einzel lens has the same potential on both sides, so :math:`R` and :math:`r` agree up
-to a constant outside it; for a weak (thin) lens :math:`R` hardly changes inside it, and
-a parallel ray of radius :math:`r` leaves with the slope :math:`-r/f`,
+An einzel lens has the same potential on both sides, so $R$ and $r$ agree up
+to a constant outside it; for a weak (thin) lens $R$ hardly changes inside it, and
+a parallel ray of radius $r$ leaves with the slope $-r/f$,
 
-.. math:: \frac{1}{f} = \frac{3}{16} \int \left(\frac{\phi'}{\phi}\right)^2 dz .
+$$
+\frac{1}{f} = \frac{3}{16} \int \left(\frac{\phi'}{\phi}\right)^2 dz .
+$$
 
 See the paraxial ray equation and electrostatic lenses in M. Reiser, *Theory and Design
 of Charged Particle Beams* (Wiley, 2nd ed. 2008), S. Humphries, *Principles of Charged
 Particle Acceleration* (Wiley, 1986) and H. Wollnik, *Optics of Charged Particles*
 (Academic Press, 1987). It holds for paraxial rays and
-a lens short compared with ``f``; :math:`\phi` must stay positive (no ion is
+a lens short compared with ``f``; $\phi$ must stay positive (no ion is
 reflected). Here the thin lens sits at the middle electrode, and its focal length is the
-distance to the target. :meth:`EinzelLens.paraxial_voltage` integrates the Picht equation
+distance to the target. `EinzelLens.paraxial_voltage` integrates the Picht equation
 through the whole lens instead (thick, still paraxial and without aberrations).
 """
 
@@ -54,6 +60,7 @@ from dataclasses import dataclass, replace
 from typing import cast
 
 import numpy as np
+from methodcard import ConvergenceProblem, method
 from scipy.integrate import solve_ivp, trapezoid
 from scipy.optimize import brentq
 
@@ -78,7 +85,51 @@ ELECTRODES = ("upstream", "middle", "downstream")
 NEGLIGIBLE_CURRENT = 1e-9
 
 
+def _thin_lens_problem() -> ConvergenceProblem:
+    """A Gaussian on-axis potential, against the integral to quadrature accuracy."""
+    from scipy.integrate import quad
+
+    lens = EinzelLens(energy=1.0, charge=1.0)
+
+    def potential(x):
+        return 0.5 * np.exp(-(x**2))
+
+    def integrand(x):
+        return (2.0 * x * potential(x) / (1.0 - potential(x))) ** 2
+
+    exact = 16.0 / 3.0 / quad(integrand, -6.0, 6.0, epsabs=1e-14, epsrel=1e-13)[0]
+
+    def error(h: float) -> float:
+        x = np.linspace(-6.0, 6.0, round(12.0 / h) + 1)
+        return abs(lens.thin_lens_focal_length(x, potential(x)) - exact)
+
+    return ConvergenceProblem(error, steps=[0.2, 0.1, 0.05, 0.025])
+
+
 @dataclass(frozen=True)
+@method(
+    equations={
+        "ray": r"r'' + \frac{\phi'}{2\phi} r' + \frac{\phi''}{4\phi} r = 0, \qquad \phi(z) = \frac{E}{q} - V(z)",
+        "objective": r"\text{spot} = \sqrt{\tfrac12 \langle r^2 \rangle} \ \text{at the target plane}",
+        "constraints": r"\text{loss} = \max(0, 1 - T) - \text{max\_loss}, \qquad \text{surface\_field} = \frac{\max |E_\mathrm{surface}|}{\text{field\_limit}} - 1",
+        "transmission": r"T = \frac{I_\mathrm{target}}{\pi J R_b^2}",
+    },
+    assumptions=(
+        r"three coaxial tubes, the outer two grounded, the middle one at $V$, inside a grounded wall; a parallel beam launched upstream as rings",
+        r"without space charge (`current` 0) one field solve and trace is the solution, with $10^{-9}$ A as the weight of the moments",
+        r"a design that does not fit is a failed evaluation",
+    ),
+    references=(
+        "[Reiser, Theory and Design of Charged Particle Beams, 2nd ed. (2008)](https://doi.org/10.1002/9783527622047)",
+        "[Humphries, Principles of Charged Particle Acceleration (1986)](https://fieldp.com/cpa.html)",
+        "[Wollnik, Optics of Charged Particles (1987)](https://shop.elsevier.com/books/optics-of-charged-particles/wollnik/978-0-12-762130-2)",
+    ),
+    components=(
+        "beamtracer.model.BeamOptics",
+        "beamtracer.optimization.einzel.EinzelLens.thin_lens_focal_length",
+        "beamtracer.optimization.einzel.EinzelLens.paraxial_focus",
+    ),
+)
 class EinzelLens:
     """The fixed settings of an einzel lens, and its problems.
 
@@ -95,7 +146,7 @@ class EinzelLens:
     ``max_loss``. ``iterations``, ``tolerance`` [V] and ``relaxation`` set the Vlasov
     iteration with space charge; without it, one field solve and trace is the solution.
 
-    A frozen dataclass, so it pickles: its :meth:`config` and :meth:`evaluate` are the
+    A frozen dataclass, so it pickles: its `config` and `evaluate` are the
     build and evaluation functions of its problems, also in a process pool.
     """
 
@@ -188,10 +239,10 @@ class EinzelLens:
         return (self.centre - pitch, self.centre, self.centre + pitch)
 
     def config(self, values: Mapping[str, float] | None = None) -> BeamOpticsConfig:
-        """Return the :class:`~beamtracer.BeamOpticsConfig` of the lens.
+        """Return the `beamtracer.BeamOpticsConfig` of the lens.
 
         ``values`` are some of ``voltage``, ``gap`` and ``aperture``; the others are the
-        lens defaults. Raises :class:`ValueError` for a lens that does not fit between
+        lens defaults. Raises `ValueError` for a lens that does not fit between
         the start of the beam and the target.
         """
         v = self.values(values)
@@ -247,13 +298,13 @@ class EinzelLens:
         )
 
     def solve(self, values: Mapping[str, float] | None = None) -> BeamOptics:
-        """Return the solved :class:`~beamtracer.BeamOptics` of the lens."""
+        """Return the solved `beamtracer.BeamOptics` of the lens."""
         return BeamOptics(self.config(values)).run()
 
     # -- the evaluation -------------------------------------------------------------------
 
     def measure(self, model: BeamOptics) -> Evaluation:
-        """Return the :class:`~beamtracer.optimization.Evaluation` of a solved lens.
+        """Return the `beamtracer.optimization.Evaluation` of a solved lens.
 
         The objective ``spot`` is the rms size [m] at the target; the constraints are
         ``surface_field`` (the largest surface field over ``field_limit``, minus 1) and
@@ -315,7 +366,7 @@ class EinzelLens:
         return fields
 
     def evaluate(self, config: BeamOpticsConfig) -> Evaluation:
-        """Solve the lens of a configuration and return its :meth:`measure`."""
+        """Solve the lens of a configuration and return its `measure`."""
         return self.measure(BeamOptics(config).run())
 
     def design(self, bounds: Mapping[str, tuple[float, float]]) -> Design:
@@ -364,6 +415,20 @@ class EinzelLens:
         """Return the ions' kinetic energy per charge, ``phi`` [V], at a potential [V]."""
         return self.energy / self.charge - np.asarray(potential)
 
+    @method(
+        equations={
+            "thin_lens": r"\frac{1}{f} = \frac{3}{16} \int \left(\frac{\phi'}{\phi}\right)^2 dz",
+            "discrete": r"\phi' \text{ by central differences}, \qquad \int \text{ by the trapezoidal rule on the mesh nodes}",
+            "voltage": r"\frac{1}{f(V)} = \frac{1}{x_\mathrm{target} - x_\mathrm{centre}} \quad \text{(Brent's method)}",
+        },
+        order=2,
+        assumptions=(
+            r"paraxial rays, a lens short compared with $f$, the same potential on both sides; $\phi > 0$ everywhere (NaN if an ion is stopped), $\infty$ without a lens",
+            r"the on-axis potential per volt from one vacuum solve at 1 kV on the middle tube",
+            r"the order is in the node spacing",
+        ),
+        problem=_thin_lens_problem,
+    )
     def thin_lens_focal_length(self, x: np.ndarray, potential: np.ndarray) -> float:
         """Return the thin-lens focal length [m] of the on-axis ``potential`` [V].
 
@@ -395,7 +460,7 @@ class EinzelLens:
 
         The voltage has the sign of the lens default ``voltage`` (for positive ions,
         positive decelerates them and negative accelerates them), at the geometry of
-        ``values``. Raises :class:`ValueError` if no voltage of that sign focuses there.
+        ``values``. Raises `ValueError` if no voltage of that sign focuses there.
         """
         x, unit = self.axis_potential(values)
         distance = self.target - self.centre
@@ -411,6 +476,16 @@ class EinzelLens:
             float, brentq(mismatch, 1e-9 * upper, upper, xtol=1e-6 * upper)
         )
 
+    @method(
+        equations={
+            "picht": r"R'' + \frac{3}{16}\left(\frac{\phi'}{\phi}\right)^2 R = 0, \qquad R = r\, \phi^{1/4}, \qquad R(z_0) = 1, \ R'(z_0) = 0",
+            "focus": r"z_f: R(z_f) = 0, \qquad \text{or } z_\mathrm{end} - R / R' \text{ for a ray still off the axis at the end}",
+        },
+        assumptions=(
+            r"a thick lens, paraxial and without aberrations; integrated by `solve_ivp` (rtol $10^{-9}$, at most one cell per step), the coefficient interpolated linearly",
+            r"$\infty$ for a diverging ray; the voltage that focuses on the target by Brent's method",
+        ),
+    )
     def paraxial_focus(self, x: np.ndarray, potential: np.ndarray) -> float:
         """Return where a paraxial ray, parallel at the start, crosses the axis [m].
 
@@ -448,8 +523,8 @@ class EinzelLens:
     def paraxial_voltage(self, values: Mapping[str, float] | None = None) -> float:
         """Return the voltage whose paraxial (thick-lens) focus is on the target.
 
-        Like :meth:`thin_lens_voltage`, but integrating the paraxial ray through the
-        lens (:meth:`paraxial_focus`).
+        Like `thin_lens_voltage`, but integrating the paraxial ray through the
+        lens (`paraxial_focus`).
         """
         x, unit = self.axis_potential(values)
         sign, upper = self._branch(unit)

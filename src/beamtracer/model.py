@@ -4,9 +4,9 @@ The model solves the beam once: a Vlasov iteration of field solve (with Boltzman
 electrons for positive-ion extraction, Boltzmann plasma ions for negative-ion
 extraction), trajectory tracing through the electric and solenoid fields, and
 space-charge deposition, until the potential stops changing. See
-:mod:`beamtracer.solver` for the numerics.
+`beamtracer.solver` for the numerics.
 
-Run it with :meth:`BeamOptics.run`::
+Run it with `BeamOptics.run`::
 
     model = BeamOptics(config).run()
     model.beam_moments(x_exit)
@@ -22,6 +22,7 @@ import cunumpy as xp
 import numpy as np
 import scope_profiler as sp
 from maybempi import MPI
+from methodcard import method
 from mpifield import Field
 from scipy import constants
 
@@ -58,7 +59,7 @@ _FACES = {
 
 
 def _electrode(name: str, params: ObjectParams) -> Electrode:
-    """Return the :class:`Electrode` of an object with a Dirichlet potential."""
+    """Return the `Electrode` of an object with a Dirichlet potential."""
     if params.bc_type != "dirichlet" or params.bc_value is None:
         raise ValueError("BeamOptics electrodes need a Dirichlet potential")
     obj = params.build()
@@ -71,13 +72,35 @@ def _electrode(name: str, params: ObjectParams) -> Electrode:
     return Electrode(inside, float(params.bc_value), name)
 
 
+@method(
+    equations={
+        "poisson": r"\nabla^2 \phi = -\frac{\rho_b + \rho_p}{\varepsilon_0}",
+        "plasma": r"\rho_p = s\, \rho_0\, e^{-s (\phi - U_p) / T}, \qquad \rho_0 = \sum_\mathrm{beams} \frac{J}{v_0}",
+        "motion": r"\frac{d\mathbf x}{dt} = \mathbf v, \qquad \frac{d\mathbf v}{dt} = \frac{q}{m}\left(\mathbf E + \mathbf v \times \mathbf B\right), \qquad \mathbf E = -\nabla\phi",
+        "space_charge": r"\rho_b = \frac{1}{V_\mathrm{node}} \sum_\text{steps} \operatorname{sign}(q)\, I\, \Delta t \times (1 - f)",
+    },
+    assumptions=(
+        r"steady: the beam is the fixed point of field solve, trace and deposit (`time` is always 0)",
+        r"planar $(x, y)$ per unit depth or cylindrically symmetric $(x, r)$; the magnetic field (solenoids, a measured axial profile) only in cylindrical geometry",
+        r"a Boltzmann plasma species: electrons ($s = -1$) for positive-ion extraction, positive ions ($s = +1$) for negative-ion extraction; the extracted species are traced beams",
+        r"configuration in e, u and eV, converted to C, kg and J; with MPI the trajectories are shared between the ranks and every rank solves the field",
+    ),
+    components=(
+        "beamtracer.solver.mesh.IonOpticsMesh",
+        "beamtracer.solver.vlasov.vlasov_iterate",
+        "beamtracer.solver.tracer.beam_with_energy",
+        "beamtracer.solver.fields.AxisymmetricMagneticField",
+        "beamtracer.solver.fields.solenoid_on_axis",
+        "beamtracer.solver.diagnostics.plane_moments",
+    ),
+)
 class BeamOptics:
     """Steady ion beams in planar or cylindrical geometry.
 
     Extraction of positive or negative ions from a plasma, transport through electrodes
     and solenoids.
 
-    :meth:`run` is the self-consistent beam solve. With MPI the trajectories are shared
+    `run` is the self-consistent beam solve. With MPI the trajectories are shared
     between the ranks, and every rank solves the field.
     """
 
@@ -137,7 +160,7 @@ class BeamOptics:
     ) -> None:
         """Build the mesh, the magnetic field and the tracer.
 
-        ``settings`` are fields of :class:`BeamOpticsConfig`: without ``config`` they
+        ``settings`` are fields of `BeamOpticsConfig`: without ``config`` they
         build it, with it they replace its fields. ``comm`` defaults to
         ``MPI.COMM_WORLD``.
         """
@@ -286,7 +309,7 @@ class BeamOptics:
         """Run the Vlasov iteration to convergence (once); return the model.
 
         ``callback(iteration, state)`` is called after every iteration with its
-        :class:`~beamtracer.solver.VlasovState` (with MPI, this rank's share of the
+        `beamtracer.solver.VlasovState` (with MPI, this rank's share of the
         trajectories), e.g. to follow a beam moment from iteration to iteration.
         """
         if self._is_finished:
@@ -355,7 +378,7 @@ class BeamOptics:
         """Return the largest ``|E|`` [V/m] on the surface of every electrode, by name.
 
         From the solved potential at the free nodes next to each electrode (see
-        :func:`~beamtracer.solver.surface_field`); for voltage holding, e.g. a limit of
+        `beamtracer.solver.surface_field`); for voltage holding, e.g. a limit of
         some kV/mm. The field at a sharp corner is singular and grows as the mesh is
         refined: round the edges whose field matters.
         """
@@ -377,7 +400,7 @@ class BeamOptics:
 
     @property
     def potential_field(self) -> Field:
-        """Return the potential [V] as a :class:`mpifield.Field` on the nodes.
+        """Return the potential [V] as a `mpifield.Field` on the nodes.
 
         It is zero before the run.
         """
@@ -388,7 +411,7 @@ class BeamOptics:
     def charge_density(self) -> Field:
         """Return the beam's (compensated) charge density [C/m^3].
 
-        A :class:`mpifield.Field` on the nodes, zero before the run.
+        A `mpifield.Field` on the nodes, zero before the run.
         """
         data = (
             np.zeros(self.mesh.shape)
@@ -428,7 +451,7 @@ class BeamOptics:
     def charge_tallies(self):
         """Return what the beam did to its targets with charge changes, else ``None``.
 
-        See :class:`~beamtracer.solver.charge_changing.ChargeTallies`.
+        See `beamtracer.solver.charge_changing.ChargeTallies`.
         """
         return self.state.trace.tallies
 

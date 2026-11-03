@@ -24,7 +24,7 @@ from cunumpy.kernels import metal_available
 __all__ = ["KERNELS", "KERNEL_NAMES", "METAL_KERNEL_NAMES", "metal_kernel"]
 
 #: The kernels, by name: the staggered electric field at points and the space-charge
-#: deposit along the trajectories (:mod:`beamtracer.solver`).
+#: deposit along the trajectories (`beamtracer.solver`).
 KERNEL_NAMES = ("staggered_field_2d", "deposit_trajectories_2d")
 
 _PACKAGE = __name__.rpartition(".")[0]
