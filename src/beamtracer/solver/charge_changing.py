@@ -58,6 +58,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from methodcard import ConvergenceProblem, Rule, method
 from plasmacoll import ChargeStateTransitions
+from plasmacoll.units import convert_units, to_unit, unit_field
 from scipy import constants
 
 __all__ = [
@@ -88,14 +89,16 @@ MODES = ("fractions", "analog")
 class AxialProfile:
     """A target density (m^-3) along ``x`` (m), linear between the points.
 
-    Held at the end values beyond the points.
+    Held at the end values beyond the points. Both take Quantities or strings too
+    (``x=points * u.mm``, ``density=["1e19 m-3", "1e18 m-3"]``).
     """
 
-    x: Sequence[float]
-    density: Sequence[float]
+    x: Sequence[float] = unit_field("m")
+    density: Sequence[float] = unit_field("m-3")
 
     def __post_init__(self) -> None:
-        """Check the table."""
+        """Convert the units and check the table."""
+        convert_units(self)
         x = np.asarray(self.x, dtype=float)
         density = np.asarray(self.density, dtype=float)
         if x.ndim != 1 or x.shape != density.shape or x.size < 2:
@@ -171,9 +174,14 @@ def conductance_profile(
     Args:
         apertures: ``(x_start, x_end, radius)`` (m) of every aperture, along
             the beam, not overlapping.
-        upstream: The density before the first aperture.
-        downstream: The density after the last one.
+        upstream: The density before the first aperture (m^-3).
+        downstream: The density after the last one (m^-3).
+
+    Each takes Quantities or strings too (``"1 mm"``, ``"1e19 m-3"``).
     """
+    apertures = to_unit(apertures, "m", "apertures")
+    upstream = to_unit(upstream, "m-3", "upstream")
+    downstream = to_unit(downstream, "m-3", "downstream")
     if not apertures:
         raise ValueError("at least one aperture is needed")
     starts = np.array([a[0] for a in apertures], dtype=float)

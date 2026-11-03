@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from methodcard import method
+from plasmacoll.units import convert_units, to_unit, unit_field
 from scipy import constants
 
 from beamtracer.config import (
@@ -134,12 +135,15 @@ class NeutralizerChannel:
         splitting: In analog mode, the trajectories an event splits one into.
         seed: In analog mode, the seed of the random numbers.
         settings: Entries of the ``BeamOptics`` configuration to override.
+
+    ``beam_width``, ``divergence`` and ``cell`` take Quantities or strings too
+    (``"10 mm"``, ``5 * u.mrad``).
     """
 
     neutralizer: Neutralizer
-    beam_width: float
-    divergence: float = 0.0
-    cell: float = 5.0e-3
+    beam_width: float = unit_field("m")
+    divergence: float = unit_field("rad", 0.0)
+    cell: float = unit_field("m", 5.0e-3)
     num_particles: int = 200
     compensation: float = 1.0
     relaxation: float = 0.7
@@ -152,7 +156,8 @@ class NeutralizerChannel:
     settings: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Validate the beam against the channel."""
+        """Convert the units and validate the beam against the channel."""
+        convert_units(self)
         if not 0.0 < self.beam_width <= self.neutralizer.width:
             raise ValueError(
                 "the beam must fit in the channel: 0 < beam_width <= width"
@@ -170,7 +175,12 @@ class NeutralizerChannel:
     def beam_config(
         self, gas_density: float, plasma_density: float
     ) -> BeamOpticsConfig:
-        """The ``BeamOptics`` case of the channel at the given target densities (m^-3)."""
+        """The ``BeamOptics`` case of the channel at the given target densities (m^-3).
+
+        The densities take Quantities or strings too.
+        """
+        gas_density = to_unit(gas_density, "m-3", "gas_density")
+        plasma_density = to_unit(plasma_density, "m-3", "plasma_density")
         n = self.neutralizer
         beam = n.beam
         cells_x = round(n.length / self.cell)

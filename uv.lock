@@ -287,6 +287,8 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "astropy", version = "6.1.7", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "astropy", version = "8.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "griffe" },
     { name = "ipykernel", version = "7.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "ipykernel", version = "7.4.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -329,6 +331,8 @@ neutralizer = [
     { name = "wellbalanced", extra = ["cr"] },
 ]
 test = [
+    { name = "astropy", version = "6.1.7", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "astropy", version = "8.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "methodcard", extra = ["symbolic"] },
     { name = "opencr" },
     { name = "pyccel" },
@@ -340,6 +344,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "astropy" },
+    { name = "astropy", marker = "extra == 'test'" },
     { name = "beamtracer", extras = ["docs", "examples", "test"], marker = "extra == 'dev'" },
     { name = "beamtracer", extras = ["neutralizer"], marker = "extra == 'test'" },
     { name = "cunumpy", git = "https://github.com/max-models/cunumpy?branch=devel" },
@@ -1095,8 +1100,8 @@ toml = [
 
 [[package]]
 name = "cunumpy"
-version = "0.7.1"
-source = { git = "https://github.com/max-models/cunumpy?branch=devel#92b38a5a0e00d7ccf03aa39849d6c7eaee946859" }
+version = "0.7.2"
+source = { git = "https://github.com/max-models/cunumpy?branch=devel#bf29d235349c31a6371c1950eecce19849a2299a" }
 dependencies = [
     { name = "array-api-compat" },
     { name = "maybempi" },
@@ -3197,10 +3202,11 @@ dependencies = [
 
 [[package]]
 name = "plasmacoll"
-version = "0.4.0"
-source = { git = "https://github.com/max-models/plasmacoll?branch=devel#949d9ca4f1819dab5a87eaf4f70469cc3d4e4b80" }
+version = "0.5.0"
+source = { git = "https://github.com/max-models/plasmacoll?branch=devel#5bb8606089002fe172e8334bf2e7b7a250aa46e9" }
 dependencies = [
     { name = "cunumpy" },
+    { name = "methodcard" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },

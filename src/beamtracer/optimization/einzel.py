@@ -61,6 +61,7 @@ from typing import cast
 
 import numpy as np
 from methodcard import ConvergenceProblem, method
+from plasmacoll.units import convert_units, unit_field
 from scipy.integrate import solve_ivp, trapezoid
 from scipy.optimize import brentq
 
@@ -145,35 +146,41 @@ class EinzelLens:
     ``field_limit`` [V/m], minus 1, and the lost fraction of the current minus
     ``max_loss``. ``iterations``, ``tolerance`` [V] and ``relaxation`` set the Vlasov
     iteration with space charge; without it, one field solve and trace is the solution.
+    Every physical setting takes an astropy Quantity or a string too (``"30 keV"``,
+    ``4 * u.mm``), converted to these units.
 
     A frozen dataclass, so it pickles: its `config` and `evaluate` are the
     build and evaluation functions of its problems, also in a process pool.
     """
 
-    energy: float = 30e3
+    energy: float = unit_field("eV", 30e3)
     charge: float = 1.0
-    mass: float = 1.007276
-    current: float = 0.0
-    beam_radius: float = 2e-3
+    mass: float = unit_field("u", 1.007276)
+    current: float = unit_field("A", 0.0)
+    beam_radius: float = unit_field("m", 2e-3)
     num_particles: int = 60
-    start: float = 1e-3
-    voltage: float = 15e3
-    gap: float = 4e-3
-    aperture: float = 5e-3
-    electrode_length: float = 8e-3
-    thickness: float = 2e-3
+    start: float = unit_field("m", 1e-3)
+    voltage: float = unit_field("V", 15e3)
+    gap: float = unit_field("m", 4e-3)
+    aperture: float = unit_field("m", 5e-3)
+    electrode_length: float = unit_field("m", 8e-3)
+    thickness: float = unit_field("m", 2e-3)
     rounded: bool = True
-    centre: float = 40e-3
-    target: float = 120e-3
-    length: float = 130e-3
-    radius: float = 20e-3
-    cell: float = 0.5e-3
-    field_limit: float = 5e6
+    centre: float = unit_field("m", 40e-3)
+    target: float = unit_field("m", 120e-3)
+    length: float = unit_field("m", 130e-3)
+    radius: float = unit_field("m", 20e-3)
+    cell: float = unit_field("m", 0.5e-3)
+    field_limit: float = unit_field("V/m", 5e6)
     max_loss: float = 0.0
     iterations: int = 40
-    tolerance: float = 1e-2
+    tolerance: float = unit_field("V", 1e-2)
     relaxation: float = 0.8
     save_trajectories: int = 0
+
+    def __post_init__(self) -> None:
+        """Convert the units."""
+        convert_units(self)
 
     # -- the configuration ----------------------------------------------------------------
 

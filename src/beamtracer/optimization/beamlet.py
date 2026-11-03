@@ -61,6 +61,7 @@ from typing import Any
 
 import numpy as np
 from methodcard import Rule, method
+from plasmacoll.units import convert_units, unit_field
 from scipy import constants
 
 from beamtracer.config import (
@@ -183,45 +184,51 @@ class NegativeIonBeamlet:
 
     The limits of the constraints: ``max_loss`` (fraction of the H- current),
     ``field_limit`` [V/m] (on the surfaces), ``gap_field_limit`` [V/m] (the mean
-    field of a gap) and ``divergence_limit`` [rad]. A frozen dataclass, so it
+    field of a gap) and ``divergence_limit`` [rad]. Every physical setting takes an
+    astropy Quantity or a string too (``"5 kV"``, ``4 * u.mm``), converted to these
+    units. A frozen dataclass, so it
     pickles: its `config` and `evaluate` are the build and evaluation
     functions of its problems, also in a process pool.
     """
 
-    pg_radius: float = 4.0e-3
-    eg_radius: float = 3.0e-3
-    gg_radius: float = 3.5e-3
-    pg_thickness: float = 1.0e-3
-    eg_thickness: float = 2.0e-3
-    gg_thickness: float = 2.0e-3
-    pg_front: float = 1.0e-3
-    gap: float = 4.0e-3
-    acceleration_gap: float = 8.0e-3
-    drift: float = 6.0e-3
-    radius: float = 6.0e-3
+    pg_radius: float = unit_field("m", 4.0e-3)
+    eg_radius: float = unit_field("m", 3.0e-3)
+    gg_radius: float = unit_field("m", 3.5e-3)
+    pg_thickness: float = unit_field("m", 1.0e-3)
+    eg_thickness: float = unit_field("m", 2.0e-3)
+    gg_thickness: float = unit_field("m", 2.0e-3)
+    pg_front: float = unit_field("m", 1.0e-3)
+    gap: float = unit_field("m", 4.0e-3)
+    acceleration_gap: float = unit_field("m", 8.0e-3)
+    drift: float = unit_field("m", 6.0e-3)
+    radius: float = unit_field("m", 6.0e-3)
     chamfer: bool = True
     rounded: bool = True
-    extraction_voltage: float = 5.0e3
-    grounded_grid_voltage: float = 20.0e3
-    plasma_potential: float = -1.0
-    current_density: float = 300.0
+    extraction_voltage: float = unit_field("V", 5.0e3)
+    grounded_grid_voltage: float = unit_field("V", 20.0e3)
+    plasma_potential: float = unit_field("V", -1.0)
+    current_density: float = unit_field("A/m2", 300.0)
     electron_ratio: float = 1.0
-    h_minus_energy: float = 1.0
-    h_minus_temperature: float = 1.0
-    electron_energy: float = 1.0
-    electron_temperature: float = 2.0
-    ion_temperature: float = 1.0
-    emission_margin: float = 0.2e-3
-    cell: float = 0.1e-3
+    h_minus_energy: float = unit_field("eV", 1.0)
+    h_minus_temperature: float = unit_field("eV", 1.0)
+    electron_energy: float = unit_field("eV", 1.0)
+    electron_temperature: float = unit_field("eV", 2.0)
+    ion_temperature: float = unit_field("eV", 1.0)
+    emission_margin: float = unit_field("m", 0.2e-3)
+    cell: float = unit_field("m", 0.1e-3)
     num_particles: int = 300
     iterations: int = 40
-    tolerance: float = 1.0e-2
+    tolerance: float = unit_field("V", 1.0e-2)
     relaxation: float = 0.5
     max_loss: float = 0.01
-    field_limit: float = 5.0e6
-    gap_field_limit: float = 3.0e6
-    divergence_limit: float = 7.0e-3
+    field_limit: float = unit_field("V/m", 5.0e6)
+    gap_field_limit: float = unit_field("V/m", 3.0e6)
+    divergence_limit: float = unit_field("rad", 7.0e-3)
     save_trajectories: int = 0
+
+    def __post_init__(self) -> None:
+        """Convert the units."""
+        convert_units(self)
 
     # -- the geometry ---------------------------------------------------------------------
 
