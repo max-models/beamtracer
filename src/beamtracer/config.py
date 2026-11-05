@@ -1,7 +1,7 @@
 """The configuration of a beam: `BeamOpticsConfig` and its sections.
 
-The sections are the beams, the plasma, the solenoids, the space-charge compensation and
-the charge changes; the grid, the walls and the electrodes are in
+The sections are the beams, the plasma, the solenoids, a field map, the space-charge
+compensation and the charge changes; the grid, the walls and the electrodes are in
 `beamtracer.sections`. All values are SI, except charges in elementary charges,
 masses in atomic mass units (u) and energies and temperatures in eV. Every physical
 setting also takes an astropy Quantity (``5 * u.keV``) or a string astropy parses
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, replace
+from pathlib import Path
 from typing import Any, ClassVar
 
 from plasmacoll.units import (
@@ -24,6 +25,7 @@ from plasmacoll.units import (
     with_unit,
 )
 
+from beamtracer.field_map import OUTSIDE, FieldMap
 from beamtracer.sections import (
     ConfigDict,
     FieldBCs,
@@ -325,6 +327,31 @@ class AxialField:
 
 
 @dataclass(frozen=True)
+class FieldMapParams:
+    """An imposed E and/or B from a field map file (`beamtracer.field_map`).
+
+    ``file`` is a netCDF field map in the shared layout (as picnic writes them), its
+    ``frame`` that of the grid (``"cartesian"`` planar, ``"cylindrical"`` for
+    ``(x, r)``) and its dims in ``(x, y)``. Its ``e_field_*`` add to the solved
+    field, its ``b_field_*`` to the solenoids; ``outside`` is what the field is beyond
+    the map: ``"clip"`` (the boundary value), ``"zero"`` or ``"error"``.
+    """
+
+    file: str
+    outside: str = "clip"
+
+    def __post_init__(self) -> None:
+        """Store the file as a string and check ``outside``."""
+        object.__setattr__(self, "file", str(self.file))
+        if self.outside not in OUTSIDE:
+            raise ValueError(f"outside must be one of {OUTSIDE}, got {self.outside!r}")
+
+    def read(self) -> FieldMap:
+        """Read the map."""
+        return FieldMap.read(self.file, outside=self.outside)
+
+
+@dataclass(frozen=True)
 class SpaceChargeCompensation:
     """The beam's space charge is reduced by ``fraction`` between ``x_min`` and ``x_max``.
 
@@ -419,7 +446,8 @@ class BeamOpticsConfig:
     for positive-ion extraction (`ExtractionPlasma`), positive ions for negative-ion
     extraction (`NegativeExtractionPlasma`, the negative ions and electrons being
     beams), ``solenoids`` and ``axial_field`` an axisymmetric magnetic field expanded
-    off the axis to ``field_order``, ``compensation`` reduces the beam's space charge in
+    off the axis to ``field_order``, ``field_map`` an imposed E and/or B from a field
+    map file (`FieldMapParams`, a path or its mapping), ``compensation`` reduces the beam's space charge in
     regions of ``x``. ``charge_changing`` lets the beam change charge state on
     uniform targets (a gas, a plasma), every trajectory carrying the fractions of its
     particles in each state. The Vlasov iteration runs ``iterations`` times or until the
@@ -444,6 +472,7 @@ class BeamOpticsConfig:
     solenoids: list[Solenoid] = field(default_factory=list)
     axial_field: AxialField | None = None
     field_order: int = 3
+    field_map: FieldMapParams | None = None
     compensation: list[SpaceChargeCompensation] = field(default_factory=list)
     charge_changing: ChargeChangingParams | None = None
     iterations: int = 20
@@ -478,6 +507,9 @@ class BeamOpticsConfig:
         self.plasma = plasma_from_value(self.plasma)
         self.solenoids = [coerce(Solenoid, s) for s in self.solenoids]
         self.axial_field = coerce(AxialField, self.axial_field)
+        if isinstance(self.field_map, (str, Path)):
+            self.field_map = FieldMapParams(str(self.field_map))
+        self.field_map = coerce(FieldMapParams, self.field_map)
         self.compensation = [
             coerce(SpaceChargeCompensation, c) for c in self.compensation
         ]
@@ -513,6 +545,9 @@ class BeamOpticsConfig:
         params["solenoids"] = [dataclass_to_dict(s) for s in self.solenoids]
         params["axial_field"] = (
             None if self.axial_field is None else dataclass_to_dict(self.axial_field)
+        )
+        params["field_map"] = (
+            None if self.field_map is None else dataclass_to_dict(self.field_map)
         )
         params["compensation"] = [dataclass_to_dict(c) for c in self.compensation]
         params["charge_changing"] = (

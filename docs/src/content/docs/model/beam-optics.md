@@ -25,6 +25,12 @@ repeat). The geometry is planar (per unit depth) or cylindrically symmetric `(x,
   trajectories from another simulation.
 - **Magnetic field**: `solenoids` or a measured `axial_field`, expanded off the axis to
   `field_order`.
+- **Field maps**: `field_map={"file": "magnets.nc"}` adds an imposed E and/or B from a
+  netCDF field map (`beamtracer.FieldMap`) to the solved field and the solenoids, in
+  planar or cylindrical geometry. The layout (`b_field_<i>` in T, `e_field_<i>` in V/m on
+  `x, y` in m, `Conventions = "max-models-field-map-1.0"`) is the one picnic reads and
+  writes, so a map from either code, or one sampled from an NGSolve or FEniCSx solution,
+  serves both; `FieldRegion` takes a map as its `electric` or `magnetic` field too.
 - **Charge changes**: `charge_changing=ChargeChangingParams(cross_sections, densities)` lets
   a fast beam change charge state on uniform targets (a gas, a plasma), as in a neutralizer:
   every trajectory carries the fractions of its particles in each state, advanced along its

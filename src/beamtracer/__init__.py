@@ -3,7 +3,8 @@
 `BeamOptics` traces a beam self-consistently (a Vlasov iteration of field
 solve, trajectory tracing and space-charge deposition) in planar or cylindrical
 geometry, from the plasma it is extracted from through electrodes and solenoids;
-`BeamOpticsConfig` describes the run. `beamtracer.neutralizer` couples the
+`BeamOpticsConfig` describes the run. `FieldMap` reads and writes the shared
+netCDF field maps of imposed E and B fields. `beamtracer.neutralizer` couples the
 traced beam to the plasma of a neutralizer, and `beamtracer.solver` holds the
 numerics.
 """
@@ -19,11 +20,13 @@ from beamtracer.config import (
     BeamSpecies,
     ChargeChangingParams,
     ExtractionPlasma,
+    FieldMapParams,
     NegativeExtractionPlasma,
     ParticleBeam,
     Solenoid,
     SpaceChargeCompensation,
 )
+from beamtracer.field_map import FieldMap
 from beamtracer.model import BeamOptics
 from beamtracer.sections import (
     FieldBCs,
@@ -51,6 +54,8 @@ __all__ = [
     "ExtractionPlasma",
     "FieldBCs",
     "FieldBoundaryCondition",
+    "FieldMap",
+    "FieldMapParams",
     "GridParams",
     "NegativeExtractionPlasma",
     "ObjectParams",

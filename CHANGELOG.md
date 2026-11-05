@@ -7,6 +7,13 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Field maps (`beamtracer.FieldMap`): gridded E and B as netCDF/xarray in the field-map
+  layout shared with picnic (`max-models-field-map-1.0`), read, written, checked
+  (`validate_field_map`) and interpolated multilinearly, with the field outside the map
+  clipped, zero or an error. `BeamOpticsConfig(field_map=...)` adds a map's E and/or B to
+  the solved field and the solenoids; `FieldRegion` takes a map as its `electric` or
+  `magnetic` field. The tracer takes a magnetic field in planar geometry too, and an
+  azimuthal component in cylindrical geometry.
 - Every physical setting of the setup (`BeamOpticsConfig` and its sections, the beamline,
   `NeutralizerChannel`, `EinzelLens`, `NegativeIonBeamlet`, `Parameter`, `AxialProfile`,
   `conductance_profile`) takes an astropy Quantity or a quantity string (`"5 mm"`) as well as
