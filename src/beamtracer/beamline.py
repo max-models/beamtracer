@@ -51,6 +51,7 @@ from plasmacoll.units import convert_units, to_array, to_unit, unit_field
 from scipy import constants
 from simgeometry.crossings import crossings
 
+from beamtracer.field_map import FieldMap
 from beamtracer.solver.charge_changing import AxialProfile, Density
 from beamtracer.solver.tracer import PlaneHits
 
@@ -893,9 +894,10 @@ class FieldRegion:
         walls: The solid walls, simgeometry 3D shapes.
         exit: The plane ``x = exit`` (m) where the region ends.
         mass: The mass of the beam particles (kg).
-        electric: ``E(points)``, ``(3, N)`` in V/m at ``(3, N)`` points; none if absent.
-        magnetic: ``B(points)`` in T, the same way; `box_field` and
-            `profile_field` make simple ones.
+        electric: ``E(points)``, ``(3, N)`` in V/m at ``(3, N)`` points, or a
+            `beamtracer.field_map.FieldMap` with ``e_field_*``; none if absent.
+        magnetic: ``B(points)`` in T, the same way (a map with ``b_field_*``);
+            `box_field` and `profile_field` make simple ones.
         charges: The charge of each state, in e.
         step: The path length per step (m).
         max_steps: The steps after which a marker counts as lost.
@@ -916,11 +918,23 @@ class FieldRegion:
     save: int = 0
     samples: int = 16
 
+    def _map_field(self, which: Any, kind: str) -> Any:
+        """A field map as the function of its ``kind`` of field, else ``which``."""
+        if not isinstance(which, FieldMap):
+            return which
+        if which.frame != "cartesian":
+            raise ValueError(
+                f"a FieldRegion needs a 'cartesian' field map, got {which.frame!r}"
+            )
+        return which.points_function(kind)
+
     def __post_init__(self) -> None:
         """Convert the units and fill in the charges."""
         convert_units(self)
         self.walls = list(self.walls)
         self._charges = dict(self.charges or {"-": -1.0, "0": 0.0, "+": 1.0})
+        self._electric = self._map_field(self.electric, "electric")
+        self._magnetic = self._map_field(self.magnetic, "magnetic")
         if self.step <= 0.0:
             raise ValueError("step must be positive")
 
@@ -934,8 +948,8 @@ class FieldRegion:
     ) -> np.ndarray:
         """The velocity after ``dt`` in the fields at ``x`` (the Boris rotation)."""
         half = 0.5 * qm * dt
-        e = self._field(self.electric, x)
-        b = self._field(self.magnetic, x)
+        e = self._field(self._electric, x)
+        b = self._field(self._magnetic, x)
         minus = v + half * e
         t = half * b
         s = 2.0 * t / (1.0 + np.sum(t * t, axis=0))

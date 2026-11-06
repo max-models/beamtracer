@@ -30,6 +30,22 @@ TRANSMITTED, BACKWARD, WALL, ELECTRODE, MAX_STEPS = 0, 1, 2, 3, 4
 STATUS_NAMES = ("transmitted", "backward", "wall", "electrode", "max_steps")
 
 
+def _cartesian(
+    components: tuple[np.ndarray, ...], cy: np.ndarray, cz: np.ndarray
+) -> np.ndarray:
+    """``(3, N)`` Cartesian vectors from their ``(x, r[, theta])`` components.
+
+    ``(cy, cz)`` is the radial unit vector in ``(y, z)``; the azimuthal one is
+    ``(-cz, cy)``, so that ``x, r, theta`` are right-handed.
+    """
+    axial, radial = components[0], components[1]
+    out = np.stack([axial, radial * cy, radial * cz], axis=0)
+    if len(components) > 2:
+        out[1] -= components[2] * cz
+        out[2] += components[2] * cy
+    return out
+
+
 @dataclass
 class BeamParticles:
     """Particle starting states.
@@ -285,9 +301,12 @@ class BeamTracer:
     """Trace particles through a static electric (and magnetic) field.
 
     ``electric`` returns ``(E_x, E_y)`` at ``(x, y)`` (``y`` is the radius in cylindrical
-    geometry), ``magnetic`` (cylindrical only) ``(B_z, B_r)`` at ``(x, r)``. The step of each
-    particle is ``step_fraction`` times the estimate ``min(h / |v|, sqrt(2 h / |a|))``,
-    integrated with the classical Runge--Kutta method.
+    geometry). ``magnetic`` returns ``(B_x, B_r)`` or ``(B_x, B_r, B_theta)`` at
+    ``(x, r)`` in cylindrical geometry, ``(B_x, B_y, B_z)`` at ``(x, y)`` in planar
+    geometry. ``imposed_electric`` is an external field added to ``electric``, three
+    components the same way (e.g. from a `beamtracer.field_map.FieldMap`). The step of
+    each particle is ``step_fraction`` times the estimate
+    ``min(h / |v|, sqrt(2 h / |a|))``, integrated with the classical Runge--Kutta method.
     """
 
     def __init__(
@@ -296,10 +315,12 @@ class BeamTracer:
         electric: (
             Callable[[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]] | None
         ),
-        magnetic: (
-            Callable[[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]] | None
-        ) = None,
+        magnetic: Callable[[np.ndarray, np.ndarray], tuple[np.ndarray, ...]]
+        | None = None,
         *,
+        imposed_electric: (
+            Callable[[np.ndarray, np.ndarray], tuple[np.ndarray, ...]] | None
+        ) = None,
         step_fraction: float = 0.5,
         max_steps: int = 100_000,
         planes: Sequence[float] = (),
@@ -312,13 +333,12 @@ class BeamTracer:
         change on the targets it crosses, or one state that changes at sampled
         events (see `beamtracer.solver.charge_changing`).
         """
-        if magnetic is not None and not mesh.cylindrical:
-            raise ValueError("a magnetic field needs a cylindrical mesh")
         if not 0.0 < step_fraction <= 1.0:
             raise ValueError(f"step_fraction must be in (0, 1], got {step_fraction}")
         self.mesh = mesh
         self.electric = electric
         self.magnetic = magnetic
+        self.imposed_electric = imposed_electric
         self.step_fraction = float(step_fraction)
         self.max_steps = int(max_steps)
         self.planes = tuple(float(p) for p in planes)
@@ -340,14 +360,14 @@ class BeamTracer:
     @method(
         equations={
             "motion": r"\frac{d\mathbf x}{dt} = \mathbf v, \qquad \frac{d\mathbf v}{dt} = \frac{q}{m}\left(\mathbf E + \mathbf v \times \mathbf B\right)",
-            "planar": r"\mathbf E = (E_x, E_y, 0)(x, y), \qquad \mathbf B = 0",
-            "cylindrical": r"r = \sqrt{y^2 + z^2}, \qquad \mathbf E = E_x \hat{\mathbf x} + E_r \hat{\mathbf r}, \qquad \mathbf B = B_z \hat{\mathbf x} + B_r \hat{\mathbf r}",
+            "planar": r"\mathbf E = (E_x, E_y, 0)(x, y) + \mathbf E_\mathrm{imp}(x, y), \qquad \mathbf B = \mathbf B(x, y)",
+            "cylindrical": r"r = \sqrt{y^2 + z^2}, \qquad \mathbf E = E_x \hat{\mathbf x} + E_r \hat{\mathbf r} + \mathbf E_\mathrm{imp}, \qquad \mathbf B = B_x \hat{\mathbf x} + B_r \hat{\mathbf r} + B_\theta \hat{\boldsymbol\theta}, \qquad \hat{\boldsymbol\theta} = \hat{\mathbf x} \times \hat{\mathbf r}",
             "mean_charge": r"q = \bar q = e \sum_s z_s F_s \quad \text{(charge changes in fractions mode)}",
         },
         assumptions=(
             r"non-relativistic; 3D Cartesian motion in fields of $(x, y)$ or $(x, r)$, so a trajectory crossing the axis continues at negative $y$",
             r"cylindrical: a trajectory stands for a ring of charge; on the axis $\hat{\mathbf r} = 0$, so $E_r$ and $B_r$ do not act there",
-            r"a magnetic field only in cylindrical geometry",
+            r"the imposed $\mathbf E_\mathrm{imp}$ and $\mathbf B$ (solenoids, a field map) are static and given in the plane: ``(x, y)`` or ``(x, r)``, the cylindrical ones axial, radial (and azimuthal)",
         ),
     )
     def acceleration(self, x: np.ndarray, v: np.ndarray, qm: np.ndarray) -> np.ndarray:
@@ -357,17 +377,23 @@ class BeamTracer:
             raise RuntimeError("the tracer has no electric field yet")
         if not self.mesh.cylindrical:
             ex, ey = electric(x[0], x[1])
-            return qm * np.stack([ex, ey, np.zeros_like(ex)], axis=0)
+            force = np.stack([ex, ey, np.zeros_like(ex)], axis=0)
+            if self.imposed_electric is not None:
+                force += np.stack(self.imposed_electric(x[0], x[1]), axis=0)
+            if self.magnetic is not None:
+                b = np.stack(self.magnetic(x[0], x[1]), axis=0)
+                force += np.cross(v, b, axis=0)
+            return qm * force
         r = np.hypot(x[1], x[2])
         with np.errstate(invalid="ignore", divide="ignore"):
             cy = np.where(r > 0.0, x[1] / r, 0.0)
             cz = np.where(r > 0.0, x[2] / r, 0.0)
         ex, er = electric(x[0], r)
-        force = np.stack([ex, er * cy, er * cz], axis=0)
+        force = _cartesian((ex, er), cy, cz)
+        if self.imposed_electric is not None:
+            force += _cartesian(self.imposed_electric(x[0], r), cy, cz)
         if self.magnetic is not None:
-            bx, br = self.magnetic(x[0], r)
-            b = np.stack([bx, br * cy, br * cz], axis=0)
-            force += np.cross(v, b, axis=0)
+            force += np.cross(v, _cartesian(self.magnetic(x[0], r), cy, cz), axis=0)
         return qm * force
 
     def _rk4(self, x, v, a, dt, qm):

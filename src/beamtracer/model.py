@@ -28,6 +28,7 @@ from scipy import constants
 
 from beamtracer._profiling import PROFILE_TAGS
 from beamtracer.config import BeamOpticsConfig, BeamSpecies, NegativeExtractionPlasma
+from beamtracer.field_map import FieldMap
 from beamtracer.sections import ObjectParams
 from beamtracer.solver import (
     STATUS_NAMES,
@@ -81,7 +82,8 @@ def _electrode(name: str, params: ObjectParams) -> Electrode:
     },
     assumptions=(
         r"steady: the beam is the fixed point of field solve, trace and deposit (`time` is always 0)",
-        r"planar $(x, y)$ per unit depth or cylindrically symmetric $(x, r)$; the magnetic field (solenoids, a measured axial profile) only in cylindrical geometry",
+        r"planar $(x, y)$ per unit depth or cylindrically symmetric $(x, r)$; the solenoids and a measured axial profile only in cylindrical geometry",
+        r"an imposed static $\mathbf E$ and/or $\mathbf B$ from a field map (`beamtracer.field_map`) in the frame of the grid, added to the solved field and the solenoids",
         r"a Boltzmann plasma species: electrons ($s = -1$) for positive-ion extraction, positive ions ($s = +1$) for negative-ion extraction; the extracted species are traced beams",
         r"configuration in e, u and eV, converted to C, kg and J; with MPI the trajectories are shared between the ranks and every rank solves the field",
     ),
@@ -91,6 +93,7 @@ def _electrode(name: str, params: ObjectParams) -> Electrode:
         "beamtracer.solver.tracer.beam_with_energy",
         "beamtracer.solver.fields.AxisymmetricMagneticField",
         "beamtracer.solver.fields.solenoid_on_axis",
+        "beamtracer.field_map.FieldMap",
         "beamtracer.solver.diagnostics.plane_moments",
     ),
 )
@@ -149,6 +152,52 @@ class BeamOptics:
             )
         return AxisymmetricMagneticField(z0, dz, bz, order=config.field_order)
 
+    def _field_map(self) -> FieldMap | None:
+        """Read the field map of the configuration and check it fits the grid."""
+        params = self.config.field_map
+        if params is None:
+            return None
+        field_map = params.read()
+        frame = "cylindrical" if self.mesh.cylindrical else "cartesian"
+        if field_map.frame != frame:
+            raise ValueError(
+                f"the field map {params.file} is in the {field_map.frame!r} frame; "
+                f"this grid needs {frame!r}"
+            )
+        if "z" in field_map.dims:
+            raise ValueError(
+                f"the field map {params.file} is on {field_map.dims}; "
+                "BeamOptics needs one on (x[, y])"
+            )
+        return field_map
+
+    def _imposed_fields(self) -> tuple[Callable | None, Callable | None]:
+        """The imposed E of the field map and the B of the solenoids and the map.
+
+        As the tracer takes them: functions of ``(x, y)`` or ``(x, r)``.
+        """
+        field_map = self.field_map
+        axial = self.axial_magnetic_field
+        if field_map is None:
+            return None, axial
+        electric = (
+            field_map.plane_function("electric")
+            if field_map.components("electric")
+            else None
+        )
+        if not field_map.components("magnetic"):
+            return electric, axial
+        mapped = field_map.plane_function("magnetic")
+        if axial is None:
+            return electric, mapped
+
+        def magnetic(x: np.ndarray, r: np.ndarray) -> tuple[np.ndarray, ...]:
+            bx, br, btheta = mapped(x, r)
+            sx, sr = axial(x, r)
+            return bx + sx, br + sr, btheta
+
+        return electric, magnetic
+
     def __init__(
         self,
         config: BeamOpticsConfig | None = None,
@@ -158,7 +207,7 @@ class BeamOptics:
         verbose: bool = False,
         **settings: object,
     ) -> None:
-        """Build the mesh, the magnetic field and the tracer.
+        """Build the mesh, the imposed fields (solenoids, a field map) and the tracer.
 
         ``settings`` are fields of `BeamOpticsConfig`: without ``config`` they
         build it, with it they replace its fields. ``comm`` defaults to
@@ -187,10 +236,13 @@ class BeamOptics:
             faces=self._faces(),
         )
         self.axial_magnetic_field = self._magnetic_field()
+        self.field_map = self._field_map()
+        imposed_electric, magnetic = self._imposed_fields()
         self.tracer = BeamTracer(
             self.mesh,
             None,
-            self.axial_magnetic_field,
+            magnetic,
+            imposed_electric=imposed_electric,
             step_fraction=config.step_fraction,
             max_steps=config.max_steps,
             planes=config.diagnostic_planes,

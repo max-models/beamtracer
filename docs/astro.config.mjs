@@ -22,6 +22,7 @@ export default defineDocs({
 			'beamtracer.solver.charge_changing': 'Charge changes',
 			'beamtracer.solver.vlasov': 'Vlasov iteration',
 			'beamtracer.solver.diagnostics': 'Beam moments',
+			'beamtracer.field_map': 'Field maps',
 			'beamtracer.neutralizer': 'Neutralizer',
 			'beamtracer.beamline': 'Beamline',
 			'beamtracer.optimization.einzel': 'Einzel lens',
