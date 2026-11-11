@@ -39,4 +39,6 @@ jobs:
         model/beam-optics/index.html
         numerics/index.html
         numerics/solver-vlasov/index.html
+        example-scripts/einzel-lens-design-map/plot-2.plotly.json
         example-scripts/einzel-lens-design-map/plot-2.png
+        examples/beamline/1.plotly.json

@@ -119,6 +119,12 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `optimize`'s `callback` takes either of SciPy's signatures. Records without generations
   still resume.
 
+### Changed
+
+- The figures of the docs are interactive Plotly figures in the site's colours, drawn with
+  plasma-plots, one figure per plot and with their formulas typeset as LaTeX; the example
+  scripts' figures are converted to web figures with posters (`docs/tools/examples.py`).
+
 ### Fixed
 
 - `conductance_profile` ends exactly at `downstream`: the sum of the drops could round below
