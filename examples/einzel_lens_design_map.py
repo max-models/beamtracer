@@ -36,28 +36,15 @@ import os
 from dataclasses import replace
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import numpy as np
+import plasma_plots as pp
 from matplotlib.colors import LogNorm
 
 from beamtracer.optimization import optimize, scan
 from beamtracer.optimization.einzel import EinzelLens
 
-BLUE, ORANGE, AQUA = "#2a78d6", "#eb6834", "#1baf7a"
-INK, MUTED, ELECTRODE = "#2b2a26", "#8a897f", "#b9b8b0"
-plt.rcParams.update(
-    {
-        "figure.dpi": 110,
-        "axes.edgecolor": MUTED,
-        "axes.labelcolor": INK,
-        "xtick.color": MUTED,
-        "ytick.color": MUTED,
-        "legend.frameon": False,
-        "lines.linewidth": 2,
-        "hatch.color": MUTED,
-        "hatch.linewidth": 0.6,
-    }
-)
+# the theme's data colours (palette slots) and its ink; the electrodes in grey
+ORANGE, AQUA, INK, ELECTRODE = "C1", "C2", "k", "0.7"
 # Processes for the evaluations that are not in the record (1: none, in this process).
 WORKERS = int(os.environ.get("WORKERS", "1"))
 RECORD = Path(__file__).resolve().parent / "data" / "einzel_lens_design_map.jsonl"
@@ -115,123 +102,137 @@ def main() -> None:
     )
 
     # The map and the path.
-    fig, (ax, conv) = plt.subplots(
-        1, 2, figsize=(11, 4.4), gridspec_kw={"width_ratios": [2.2, 1]}
-    )
-    mesh = ax.pcolormesh(
-        voltages / 1e3,
-        gaps * 1e3,
-        spot.T * 1e6,
-        norm=LogNorm(vmin=np.nanmin(spot) * 1e6, vmax=np.nanmax(spot) * 1e6),
-        cmap="Blues_r",
-        shading="nearest",
-        rasterized=True,
-    )
-    fig.colorbar(mesh, ax=ax, label="rms spot at the target [µm]", pad=0.01)
-    ax.contourf(
-        voltages / 1e3,
-        gaps * 1e3,
-        field.T,
-        levels=[lens.field_limit, np.inf],
-        colors="none",
-        hatches=["//"],
-    )
-    limit = ax.contour(
-        voltages / 1e3,
-        gaps * 1e3,
-        field.T,
-        levels=[lens.field_limit],
-        colors=INK,
-        linewidths=1.2,
-    )
-    ax.clabel(limit, fmt={lens.field_limit: "5 MV/m"}, fontsize=8)
-    v = np.array([e.parameters["voltage"] for e in search.evaluations]) / 1e3
-    g = np.array([e.parameters["gap"] for e in search.evaluations]) * 1e3
-    ax.scatter(v, g, s=8, color=ORANGE, alpha=0.45, lw=0, label="the search's designs")
-    pv = np.array([e.parameters["voltage"] for e in path]) / 1e3
-    pg = np.array([e.parameters["gap"] for e in path]) * 1e3
-    ax.plot(pv, pg, color=ORANGE, lw=1.6, marker="o", ms=4, mec="white", mew=0.6)
-    ax.plot([], [], color=ORANGE, marker="o", ms=4, label="best of each generation")
-    ax.scatter(
-        voltages[free[0]] / 1e3,
-        gaps[free[1]] * 1e3,
-        s=110,
-        marker="D",
-        color=AQUA,
-        edgecolor="white",
-        zorder=4,
-        label="scan's minimum, no field limit",
-    )
-    ax.scatter(
-        pv[-1],
-        pg[-1],
-        s=260,
-        marker="*",
-        color=ORANGE,
-        edgecolor="white",
-        zorder=5,
-        label="optimum within 5 MV/m",
-    )
-    ax.set_xlabel("middle voltage [kV]")
-    ax.set_ylabel("gap between the tubes [mm]")
-    ax.set_title(
-        "the objective (scan) and the optimiser's path; hatched: field above the limit",
-        color=INK,
-        fontsize=10,
-    )
-    ax.legend(fontsize=8, loc="lower right", frameon=True, framealpha=0.9)
+    with pp.figure(
+        title="The objective (scan) and the optimiser's path; shaded: field above the limit"
+    ) as fig:
+        ax = fig[0]
+        mesh = ax.pcolormesh(
+            voltages / 1e3,
+            gaps * 1e3,
+            spot.T * 1e6,
+            norm=LogNorm(vmin=np.nanmin(spot) * 1e6, vmax=np.nanmax(spot) * 1e6),
+            cmap="Blues_r",
+            shading="nearest",
+        )
+        ax.figure.colorbar(mesh, ax=ax, label="rms spot at the target [µm]", pad=0.01)
+        ax.contourf(
+            voltages / 1e3,
+            gaps * 1e3,
+            field.T,
+            levels=[lens.field_limit, np.inf],
+            colors=[ELECTRODE],
+            alpha=0.5,
+        )
+        limit = ax.contour(
+            voltages / 1e3,
+            gaps * 1e3,
+            field.T,
+            levels=[lens.field_limit],
+            colors=INK,
+            linewidths=1.2,
+        )
+        ax.clabel(limit, fmt={lens.field_limit: "5 MV/m"}, fontsize=8)
+        v = np.array([e.parameters["voltage"] for e in search.evaluations]) / 1e3
+        g = np.array([e.parameters["gap"] for e in search.evaluations]) * 1e3
+        ax.scatter(
+            v, g, s=8, color=ORANGE, alpha=0.45, lw=0, label="the search's designs"
+        )
+        pv = np.array([e.parameters["voltage"] for e in path]) / 1e3
+        pg = np.array([e.parameters["gap"] for e in path]) * 1e3
+        ax.plot(
+            pv,
+            pg,
+            color=ORANGE,
+            lw=1.6,
+            marker="o",
+            ms=4,
+            mec="white",
+            mew=0.6,
+            label="best of each generation",
+        )
+        ax.scatter(
+            voltages[free[0]] / 1e3,
+            gaps[free[1]] * 1e3,
+            s=110,
+            marker="D",
+            color=AQUA,
+            edgecolor="white",
+            zorder=4,
+            label="scan's minimum, no field limit",
+        )
+        ax.scatter(
+            pv[-1],
+            pg[-1],
+            s=260,
+            marker="*",
+            color=ORANGE,
+            edgecolor="white",
+            zorder=5,
+            label="optimum within 5 MV/m",
+        )
+        ax.set_xlabel("middle voltage $V$ [kV]")
+        ax.set_ylabel("gap between the tubes [mm]")
+        ax.legend(loc="lower right")
 
     spots = np.array([e.objectives["spot"] for e in path]) * 1e6
-    conv.plot(np.arange(generations), spots, color=ORANGE, marker="o", ms=4)
-    conv.axhline(spot[free] * 1e6, color=AQUA, ls="--", lw=1.5, label="no field limit")
-    conv.set_yscale("log")
-    conv.set_xlabel("generation")
-    conv.set_ylabel("best feasible spot [µm]")
-    conv.set_title("convergence", color=INK, fontsize=10)
-    conv.grid(True, color="#e4e3dd", lw=0.6)
-    conv.legend(fontsize=8)
-    fig.tight_layout()
+    with pp.figure(title="Convergence of the search") as fig:
+        ax = fig[0]
+        ax.plot(
+            np.arange(generations),
+            spots,
+            color=ORANGE,
+            marker="o",
+            ms=4,
+            label="optimum within 5 MV/m",
+        )
+        ax.axhline(
+            spot[free] * 1e6, color=AQUA, ls="--", lw=1.5, label="no field limit"
+        )
+        ax.set_yscale("log")
+        ax.set_xlabel("generation")
+        ax.set_ylabel("best feasible spot [µm]")
+        ax.legend()
 
     # The lens the search found, and the scan's minimum without the field limit.
-    fig, axes = plt.subplots(2, 1, figsize=(11, 6.4), sharex=True)
     designs = (
         ("within 5 MV/m", search.x),
         ("without the limit", {"voltage": voltages[free[0]], "gap": gaps[free[1]]}),
     )
-    for ax, (name, x) in zip(axes, designs, strict=True):
+    for name, x in designs:
         model = replace(lens, save_trajectories=3).solve(x)
         found = lens.measure(model)
         potential = model.potential_field.evaluate()
-        mesh = ax.pcolormesh(
-            potential.x * 1e3,
-            potential.y * 1e3,
-            potential.T / 1e3,
-            cmap="Blues",
-            vmin=0.0,
-            vmax=BOUNDS["voltage"][1] / 1e3,
-            shading="auto",
-            rasterized=True,
+        title = (
+            f"{name[0].upper()}{name[1:]}: V = {x['voltage'] / 1e3:.2f} kV, "
+            f"gap {x['gap'] * 1e3:.2f} mm, spot {found.objectives['spot'] * 1e6:.0f} µm, "
+            f"surface field {found.diagnostics['field'] / 1e6:.2f} MV/m"
         )
-        for params in model.config.objects.values():  # a tube: rectangle, two circles
-            for loop in params.build().outlines():
-                ax.fill(loop[0] * 1e3, loop[1] * 1e3, color=ELECTRODE, lw=0)
-        for trajectory in model.trajectories:
-            ax.plot(
-                trajectory[:, 0] * 1e3, trajectory[:, 1] * 1e3, color=ORANGE, lw=0.7
+        with pp.figure(figsize=(9, 3.6), title=title) as fig:
+            ax = fig[0]
+            mesh = ax.pcolormesh(
+                potential.x * 1e3,
+                potential.y * 1e3,
+                potential.T / 1e3,
+                cmap="Blues",
+                vmin=0.0,
+                vmax=BOUNDS["voltage"][1] / 1e3,
+                shading="auto",
             )
-        ax.axvline(lens.target * 1e3, color=INK, ls="--", lw=1)
-        ax.text(lens.target * 1e3 + 1, 10.5, "target", color=INK, fontsize=9)
-        ax.set_ylim(0, 12)
-        ax.set_ylabel("r [mm]")
-        ax.set_title(
-            f"{name}: V = {x['voltage'] / 1e3:.2f} kV, gap {x['gap'] * 1e3:.2f} mm, "
-            f"spot {found.objectives['spot'] * 1e6:.0f} µm, "
-            f"surface field {found.diagnostics['field'] / 1e6:.2f} MV/m",
-            color=INK,
-            fontsize=10,
-        )
-    axes[-1].set_xlabel("x [mm]  (every 3rd trajectory)")
-    fig.colorbar(mesh, ax=axes, label="potential [kV]", pad=0.01)
+            ax.figure.colorbar(mesh, ax=ax, label="potential [kV]", pad=0.01)
+            for (
+                params
+            ) in model.config.objects.values():  # a tube: rectangle, two circles
+                for loop in params.build().outlines():
+                    ax.fill(loop[0] * 1e3, loop[1] * 1e3, color=ELECTRODE, lw=0)
+            for trajectory in model.trajectories:
+                ax.plot(
+                    trajectory[:, 0] * 1e3, trajectory[:, 1] * 1e3, color=ORANGE, lw=0.7
+                )
+            ax.axvline(lens.target * 1e3, color=INK, ls="--", lw=1)
+            ax.text(lens.target * 1e3 + 1, 10.5, "target", color=INK, fontsize=9)
+            ax.set_ylim(0, 12)
+            ax.set_xlabel("$x$ [mm]  (every 3rd trajectory)")
+            ax.set_ylabel("$r$ [mm]")
 
 
 if __name__ == "__main__":
