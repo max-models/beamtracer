@@ -47,6 +47,7 @@ import cunumpy as xp
 import numpy as np
 import xarray as xr
 from methodcard import ConvergenceProblem, method
+from mpiparticles import boris_velocity
 from plasmacoll.units import convert_units, to_array, to_unit, unit_field
 from scipy import constants
 from simgeometry.crossings import crossings
@@ -946,15 +947,20 @@ class FieldRegion:
     def _boris(
         self, x: np.ndarray, v: np.ndarray, qm: np.ndarray, dt: np.ndarray
     ) -> np.ndarray:
-        """The velocity after ``dt`` in the fields at ``x`` (the Boris rotation)."""
-        half = 0.5 * qm * dt
-        e = self._field(self._electric, x)
-        b = self._field(self._magnetic, x)
-        minus = v + half * e
-        t = half * b
-        s = 2.0 * t / (1.0 + np.sum(t * t, axis=0))
-        prime = minus + np.cross(minus, t, axis=0)
-        return minus + np.cross(prime, s, axis=0) + half * e
+        """The velocity after ``dt`` in the fields at ``x`` (the Boris rotation).
+
+        The compiled `mpiparticles.boris_velocity`, with a charge over mass and a time
+        step per marker; ``v`` is not changed.
+        """
+        velocity = np.array(v, dtype=float, order="C")
+        boris_velocity(
+            velocity,
+            self._field(self._electric, x),
+            self._field(self._magnetic, x),
+            dt,
+            qm,
+        )
+        return velocity
 
     def trace(self, markers: Markers) -> RegionResult:
         """Push the ``markers`` until each hits a wall or crosses the exit plane."""

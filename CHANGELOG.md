@@ -121,6 +121,9 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `FieldRegion` pushes its markers with mpiparticles' compiled Boris velocity update
+  (`mpiparticles.boris_velocity`, a charge and a step per marker) instead of its own NumPy
+  copy of the scheme; mpiparticles is a dependency now.
 - The figures of the docs are interactive Plotly figures in the site's colours, drawn with
   plasma-plots, one figure per plot and with their formulas typeset as LaTeX; the example
   scripts' figures are converted to web figures with posters (`docs/tools/examples.py`).
