@@ -39,6 +39,7 @@ astropy parses too (``"5 mm"``, ``2 * u.mrad``), converted with `plasmacoll.unit
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -48,7 +49,7 @@ import numpy as np
 import xarray as xr
 from methodcard import ConvergenceProblem, method
 from mpiparticles import boris_velocity
-from plasmacoll.units import convert_units, to_array, to_unit, unit_field
+from plasmacoll.units import convert_units, to_array, to_unit, unit_field, unit_metadata
 from scipy import constants
 from simgeometry.crossings import crossings
 
@@ -464,18 +465,16 @@ class ApertureGrid:
     Each takes a Quantity (or a string) too.
     """
 
-    centres: np.ndarray
+    centres: np.ndarray = dataclasses.field(metadata=unit_metadata("m", array=True))
     focal_length: tuple[float, float] = (np.inf, np.inf)
-    steering: np.ndarray | None = None
+    steering: np.ndarray | None = unit_field("rad", None, array=True)
 
     def __post_init__(self) -> None:
         """Convert the units and check the shapes."""
-        centres = to_array(self.centres, "m", "centres")
-        self.centres = np.asarray(centres, dtype=float).reshape(2, -1)
+        convert_units(self)
+        self.centres = np.asarray(self.centres, dtype=float).reshape(2, -1)
         steering = (
-            np.zeros_like(self.centres)
-            if self.steering is None
-            else to_array(self.steering, "rad", "steering")
+            np.zeros_like(self.centres) if self.steering is None else self.steering
         )
         self.steering = np.broadcast_to(
             np.asarray(steering, dtype=float), self.centres.shape
@@ -621,7 +620,7 @@ class Duct:
     """
 
     walls: Sequence[Any]
-    port: float = unit_field("m")
+    port: float = dataclasses.field(metadata=unit_metadata("m"))
     transitions: Any = None
     gas: Mapping[str, Density] | None = None
     samples: int = 64
@@ -909,8 +908,8 @@ class FieldRegion:
     """
 
     walls: Sequence[Any]
-    exit: float = unit_field("m")
-    mass: float = unit_field("kg")
+    exit: float = dataclasses.field(metadata=unit_metadata("m"))
+    mass: float = dataclasses.field(metadata=unit_metadata("kg"))
     electric: Any = None
     magnetic: Any = None
     charges: Mapping[str, float] | None = None
@@ -1072,8 +1071,10 @@ class Calorimeter:
     ``position`` and ``extent`` take Quantities or strings too.
     """
 
-    position: float = unit_field("m")
-    extent: tuple[float, float, float, float] = unit_field("m")
+    position: float = dataclasses.field(metadata=unit_metadata("m"))
+    extent: tuple[float, float, float, float] = dataclasses.field(
+        metadata=unit_metadata("m")
+    )
     tiles: tuple[int, int] = (40, 40)
 
     def __post_init__(self) -> None:

@@ -58,7 +58,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from methodcard import ConvergenceProblem, Rule, method
 from plasmacoll import ChargeStateTransitions
-from plasmacoll.units import convert_units, to_unit, unit_field
+from plasmacoll.units import convert_units, to_unit, unit_metadata
 from scipy import constants
 
 __all__ = [
@@ -93,8 +93,8 @@ class AxialProfile:
     (``x=points * u.mm``, ``density=["1e19 m-3", "1e18 m-3"]``).
     """
 
-    x: Sequence[float] = unit_field("m")
-    density: Sequence[float] = unit_field("m-3")
+    x: Sequence[float] = field(metadata=unit_metadata("m"))
+    density: Sequence[float] = field(metadata=unit_metadata("m-3"))
 
     def __post_init__(self) -> None:
         """Convert the units and check the table."""

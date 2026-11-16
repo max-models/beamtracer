@@ -35,6 +35,7 @@ from beamtracer.beamline import (
     gaussian_beam,
     profile_field,
 )
+from beamtracer.config import beam_from_value, beam_to_dict
 from beamtracer.optimization import Parameter
 from beamtracer.optimization.beamlet import NegativeIonBeamlet
 from beamtracer.optimization.einzel import EinzelLens
@@ -197,6 +198,19 @@ def test_a_particle_beam_takes_quantity_arrays() -> None:
         ParticleBeam("H+", position, position, [1, 2] * u.V)
 
 
+def test_a_particle_beam_round_trips_with_units() -> None:
+    beam = ParticleBeam(
+        "H+",
+        [[1.0, 0.0, 0.0], [2.0, 1.0, 0.0]] * u.mm,
+        [[1.0, 0.0, 0.0], [1.0, 0.1, 0.0]] * u.km / u.s,
+        "[1, 2] mA",
+    )
+    params = json.loads(json.dumps(beam_to_dict(beam)))
+    assert params["position"][1] == ["0.002 m", "0.001 m", "0 m"]
+    assert params["current"] == ["0.001 A", "0.002 A"]
+    assert beam_from_value(params) == beam
+
+
 def test_the_plasmas_take_quantities() -> None:
     plasma = ExtractionPlasma("2 eV", 20 * u.V, "1 mm", rho_e="1e-3 C/m3")
     assert (plasma.electron_temperature, plasma.plasma_potential) == (2.0, 20.0)
@@ -284,6 +298,9 @@ def test_the_configuration_round_trips_with_units() -> None:
     assert params["charge_changing"]["cross_sections"] == {
         "gas": {"-": {"0": "1e-20 m2"}}
     }
+    assert params["beams"][1]["position"] == [["0 m", "0.001 m", "0 m"]]
+    assert params["beams"][1]["velocity"] == [["100000 m/s", "0 m/s", "0 m/s"]]
+    assert params["beams"][1]["current"] == ["0.001 A"]
     again = _round_trip(config)
     assert again.to_dict() == params
     assert again.beams == config.beams
