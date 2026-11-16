@@ -31,6 +31,8 @@ dependencies = [
   "methodcard",
   # the potential and charge density on the nodes (Field)
   "mpifield>=0.1.0",
+  # the Boris velocity update of FieldRegion (compiled)
+  "mpiparticles>=0.1.0",
   "numpy",
   # the charge-state transitions of a fast beam (ChargeChanging)
   "plasmacoll>=0.5.0",
@@ -125,6 +127,7 @@ cunumpy = { git = "https://github.com/max-models/cunumpy", branch = "devel" }
 maybempi = { git = "https://github.com/max-models/maybempi", branch = "devel" }
 methodcard = { git = "https://github.com/max-models/methodcard", branch = "devel" }
 mpifield = { git = "https://github.com/max-models/mpifield", branch = "devel" }
+mpiparticles = { git = "https://github.com/max-models/mpiparticles", branch = "devel" }
 opencr = { git = "https://github.com/max-models/opencr", branch = "devel" }
 plasma-plots = { git = "https://github.com/max-models/plasma-plots", branch = "devel" }
 plasmacoll = { git = "https://github.com/max-models/plasmacoll", branch = "devel" }
