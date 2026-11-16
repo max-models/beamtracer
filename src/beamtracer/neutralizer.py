@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from methodcard import method
-from plasmacoll.units import convert_units, to_unit, unit_field
+from plasmacoll.units import convert_units, to_unit, unit_field, unit_metadata
 from scipy import constants
 
 from beamtracer.config import (
@@ -141,7 +141,7 @@ class NeutralizerChannel:
     """
 
     neutralizer: Neutralizer
-    beam_width: float = unit_field("m")
+    beam_width: float = field(metadata=unit_metadata("m"))
     divergence: float = unit_field("rad", 0.0)
     cell: float = unit_field("m", 5.0e-3)
     num_particles: int = 200

@@ -19,9 +19,9 @@ from typing import Any, ClassVar
 from plasmacoll.units import (
     convert_units,
     dataclass_to_dict,
-    to_array,
     to_unit,
     unit_field,
+    unit_metadata,
     with_unit,
 )
 
@@ -47,9 +47,9 @@ class BeamSpecies:
     """
 
     name: str
-    current_density: float = unit_field("A/m2")
-    start: tuple[float, float] = unit_field("m")
-    end: tuple[float, float] = unit_field("m")
+    current_density: float = field(metadata=unit_metadata("A/m2"))
+    start: tuple[float, float] = field(metadata=unit_metadata("m"))
+    end: tuple[float, float] = field(metadata=unit_metadata("m"))
     charge: float = 1.0
     mass: float = unit_field("u", 1.007276)
     energy: float = unit_field("eV", 5.0)
@@ -80,9 +80,9 @@ class ParticleBeam:
     """
 
     name: str
-    position: tuple
-    velocity: tuple
-    current: tuple
+    position: tuple = field(metadata=unit_metadata("m", array=True))
+    velocity: tuple = field(metadata=unit_metadata("m/s", array=True))
+    current: tuple = field(metadata=unit_metadata("A", array=True))
     charge: float = 1.0
     mass: float = unit_field("u", 1.007276)
 
@@ -91,12 +91,9 @@ class ParticleBeam:
         import numpy as np
 
         convert_units(self)
-        position = to_array(self.position, "m", "position")
-        velocity = to_array(self.velocity, "m/s", "velocity")
-        current = to_array(self.current, "A", "current")
-        position = np.asarray(position, dtype=float).reshape(-1, 3)
-        velocity = np.asarray(velocity, dtype=float).reshape(-1, 3)
-        current = np.asarray(current, dtype=float).ravel()
+        position = np.asarray(self.position, dtype=float).reshape(-1, 3)
+        velocity = np.asarray(self.velocity, dtype=float).reshape(-1, 3)
+        current = np.asarray(self.current, dtype=float).ravel()
         if not position.shape[0] == velocity.shape[0] == current.size:
             raise ValueError(
                 "position, velocity and current need one row per trajectory"
@@ -121,9 +118,9 @@ class ExtractionPlasma:
     (``sum J / v``). Each takes a Quantity or a string too (``"2 eV"``, ``"20000 K"``).
     """
 
-    electron_temperature: float = unit_field("eV")
-    plasma_potential: float = unit_field("V")
-    initial_plasma_x: float = unit_field("m")
+    electron_temperature: float = field(metadata=unit_metadata("eV"))
+    plasma_potential: float = field(metadata=unit_metadata("V"))
+    initial_plasma_x: float = field(metadata=unit_metadata("m"))
     rho_e: float | None = unit_field("C/m3", None)
 
     def __post_init__(self) -> None:
@@ -143,9 +140,9 @@ class NegativeExtractionPlasma:
     [m] are held at ``plasma_potential`` [V]. Each takes a Quantity or a string too.
     """
 
-    ion_temperature: float = unit_field("eV")
-    plasma_potential: float = unit_field("V")
-    initial_plasma_x: float = unit_field("m")
+    ion_temperature: float = field(metadata=unit_metadata("eV"))
+    plasma_potential: float = field(metadata=unit_metadata("V"))
+    initial_plasma_x: float = field(metadata=unit_metadata("m"))
     rho_p: float | None = unit_field("C/m3", None)
 
     def __post_init__(self) -> None:
@@ -300,10 +297,10 @@ class Solenoid:
     takes a Quantity or a string too (``"50 mm"``, ``"0.1 T"``).
     """
 
-    centre: float = unit_field("m")
-    length: float = unit_field("m")
-    radius: float = unit_field("m")
-    peak: float = unit_field("T")
+    centre: float = field(metadata=unit_metadata("m"))
+    length: float = field(metadata=unit_metadata("m"))
+    radius: float = field(metadata=unit_metadata("m"))
+    peak: float = field(metadata=unit_metadata("T"))
 
     def __post_init__(self) -> None:
         """Convert the units."""
@@ -317,9 +314,9 @@ class AxialField:
     Each takes a Quantity or a string too (``bz=samples * u.mT``).
     """
 
-    z0: float = unit_field("m")
-    dz: float = unit_field("m")
-    bz: tuple = unit_field("T")
+    z0: float = field(metadata=unit_metadata("m"))
+    dz: float = field(metadata=unit_metadata("m"))
+    bz: tuple = field(metadata=unit_metadata("T"))
 
     def __post_init__(self) -> None:
         """Convert the units; store the samples as a tuple."""
@@ -358,10 +355,9 @@ class SpaceChargeCompensation:
     ``x_min`` and ``x_max`` in m, or Quantities or strings such as ``"10 mm"``.
     """
 
-    x_min: float = unit_field("m")
-    x_max: float = unit_field("m")
-    # required: pyright takes the unit fields for fields with defaults
-    fraction: float  # pyright: ignore[reportGeneralTypeIssues]
+    x_min: float = field(metadata=unit_metadata("m"))
+    x_max: float = field(metadata=unit_metadata("m"))
+    fraction: float
 
     def __post_init__(self) -> None:
         """Convert the units and check the fraction."""
