@@ -29,6 +29,8 @@ magnets, and this model has solenoid fields only. The electron current is an inp
 a result: the ratio of electrons to H$^-$ is set by the source plasma and needs a PIC model
 of the source.
 
+This example is also a study in the [max-models gallery](https://max-models.github.io/gallery/studies/negative-ion-extraction/), with its cached results and what it verifies.
+
 Install::
 
     pip install "beamtracer[examples] @ git+https://github.com/max-models/beamtracer"

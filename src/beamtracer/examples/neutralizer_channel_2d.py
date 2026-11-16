@@ -20,6 +20,8 @@ illustrative placeholders, not data
 (`wellbalanced.neutralizer.illustrative_deuterium_neutralizer`): the figures show
 what the coupled models compute, not what a neutralizer achieves.
 
+This example is also a study in the [max-models gallery](https://max-models.github.io/gallery/studies/neutralizer-channel/), with its cached results and what it verifies.
+
 Install::
 
     pip install "beamtracer[examples] @ git+https://github.com/max-models/beamtracer"
