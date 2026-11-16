@@ -127,7 +127,7 @@ cunumpy = { git = "https://github.com/max-models/cunumpy", branch = "devel" }
 maybempi = { git = "https://github.com/max-models/maybempi", branch = "devel" }
 methodcard = { git = "https://github.com/max-models/methodcard", branch = "devel" }
 mpifield = { git = "https://github.com/max-models/mpifield", branch = "devel" }
-mpiparticles = { git = "https://github.com/max-models/mpiparticles", branch = "claude/spokes3d-boris-push-inconsistency-srpncn" }
+mpiparticles = { git = "https://github.com/max-models/mpiparticles", branch = "devel" }
 opencr = { git = "https://github.com/max-models/opencr", branch = "devel" }
 plasma-plots = { git = "https://github.com/max-models/plasma-plots", branch = "devel" }
 plasmacoll = { git = "https://github.com/max-models/plasmacoll", branch = "devel" }

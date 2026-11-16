@@ -361,7 +361,7 @@ requires-dist = [
     { name = "methodcard", git = "https://github.com/max-models/methodcard?branch=devel" },
     { name = "methodcard", extras = ["symbolic"], marker = "extra == 'test'", git = "https://github.com/max-models/methodcard?branch=devel" },
     { name = "mpifield", git = "https://github.com/max-models/mpifield?branch=devel" },
-    { name = "mpiparticles", git = "https://github.com/max-models/mpiparticles?branch=claude%2Fspokes3d-boris-push-inconsistency-srpncn" },
+    { name = "mpiparticles", git = "https://github.com/max-models/mpiparticles?branch=devel" },
     { name = "nbclient", marker = "extra == 'docs'", specifier = ">=0.11" },
     { name = "nbformat", marker = "extra == 'docs'", specifier = ">=5.11.1" },
     { name = "numpy" },
@@ -2613,7 +2613,7 @@ dependencies = [
 [[package]]
 name = "mpiparticles"
 version = "0.1.0"
-source = { git = "https://github.com/max-models/mpiparticles?branch=claude%2Fspokes3d-boris-push-inconsistency-srpncn#ffe3150e114a81845aeb3ca4482b99ac18cf09e0" }
+source = { git = "https://github.com/max-models/mpiparticles?branch=devel#95e0619c662a3f8d2f4f8dd9c656857d31058a56" }
 dependencies = [
     { name = "cunumpy" },
     { name = "maybempi" },
