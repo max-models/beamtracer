@@ -11,6 +11,7 @@ on:
     branches: ["main", "devel"]
   pull_request:
     branches: ["main", "devel"]
+  workflow_dispatch:
 
 permissions:
   contents: read
