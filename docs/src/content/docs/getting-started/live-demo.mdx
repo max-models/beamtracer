@@ -1,0 +1,31 @@
+---
+title: Live demo
+description: Focus a proton beam with an einzel lens, computed by beamtracer in your browser.
+---
+
+import PyodideDemo from '@max-models/starlight-theme/components/PyodideDemo.astro';
+import code from '../../../components/beamtracer_demo.py?raw';
+
+This demo runs beamtracer in your browser with [Pyodide](https://pyodide.org) (Python compiled
+to WebAssembly): nothing is installed and nothing is sent to a server. Move the sliders to solve
+the lens again.
+
+<PyodideDemo
+	code={code}
+	controls={[
+		{ name: 'voltage', label: 'Middle tube', min: -30, max: 25, step: 1, value: 15, unit: 'kV' },
+		{ name: 'energy', label: 'Proton energy', min: 10, max: 60, step: 1, value: 30, unit: 'keV' },
+		{ name: 'beam_radius', label: 'Beam radius', min: 0.5, max: 4, step: 0.25, value: 2, unit: 'mm' },
+		{ name: 'aperture', label: 'Aperture', min: 3, max: 8, step: 0.5, value: 5, unit: 'mm' },
+	]}
+	caption="Proton trajectories through the three tubes of an einzel lens (grey), mirrored at the axis, with the thin-lens and paraxial foci on the axis and the target plane (dashed)."
+/>
+
+Each move solves the vacuum potential of the lens of
+`beamtracer.optimization.einzel.EinzelLens` on a coarse mesh (1 mm) and traces twelve rays
+of a parallel beam through it, without space charge. A positive voltage decelerates the protons,
+a negative one accelerates them; both focus, the decelerating lens more strongly at the same
+voltage, and a voltage close to the energy stops the protons. The numbers compare the traced
+rays with the thin-lens focal length and the paraxial ray of the same on-axis potential: the
+outer rays cross the axis before the paraxial focus (spherical aberration), and rays wider than
+the aperture are lost on the tubes.

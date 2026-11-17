@@ -123,6 +123,12 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `Result.repeats`; `Result.reused` now counts only the designs taken from a record.
   `optimize`'s `callback` takes either of SciPy's signatures. Records without generations
   still resume.
+- A live demo in the docs (Getting started, "Live demo"): the einzel lens of
+  `beamtracer.optimization.einzel`, solved and traced in the reader's browser with Pyodide
+  (`docs/src/components/beamtracer_demo.py`), with sliders for the voltage, the energy, the
+  beam radius and the aperture, and the thin-lens and paraxial foci. The docs workflow
+  builds the wheels it installs (`pyodide: true`), and a Pyodide workflow checks that every
+  module imports and the demo runs in Pyodide (starlight-theme's reusable check).
 
 ### Changed
 
