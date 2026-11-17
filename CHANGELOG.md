@@ -46,6 +46,14 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `BeamOpticsConfig(field_backend="petsc")`: under MPI the ranks share the field solve
+  (patchwork's distributed backend: Krylov with algebraic multigrid, needs petsc4py) instead
+  of each factorising the whole mesh; the Boltzmann Newton steps too. On IBSimu's `vlasov2d`
+  case at 961 x 401 nodes the average field solve of a 5-iteration run goes from 0.49 s (LU on
+  4 ranks, each factorising) to 0.16 s; a single later solve is still faster with the cached
+  LU (0.03 s against 0.05 s), so `"lu"` stays the default. `vlasov_iterate` and
+  `IonOpticsPoisson` take the backend and the communicator.
+
 - `BeamOpticsConfig(mixing="anderson")`: Anderson acceleration of the Vlasov iteration's
   fixed point in place of the relaxation (`beamtracer.solver.AndersonMixer`, over
   `anderson_depth` previous iterations, 5 by default). It reaches the same beam in fewer
