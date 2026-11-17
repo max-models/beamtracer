@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import scope_profiler
 from methodcard import ConvergenceProblem, Rule, method
+from mpiparticles import boris_velocity
 from scipy import constants
 
 from beamtracer._profiling import PROFILE_TAGS
@@ -484,12 +485,13 @@ class BeamTracer:
 
     @staticmethod
     def _kick(v, e, b, tau, qm):
-        """Advance ``v`` by ``tau`` in the fields ``e``, ``b``: Boris's half kick, rotation, half kick."""
-        v = v + 0.5 * tau * qm * e
-        t = 0.5 * tau * qm * b
-        s = 2.0 * t / (1.0 + np.sum(t * t, axis=0))
-        v = v + np.cross(v + np.cross(v, t, axis=0), s, axis=0)
-        return v + 0.5 * tau * qm * e
+        """Advance ``v`` by ``tau`` in the fields ``e``, ``b``: Boris's half kick, rotation, half kick.
+
+        The compiled `mpiparticles.boris_velocity`; ``v`` is not changed.
+        """
+        velocity = np.array(v, dtype=float, order="C")
+        boris_velocity(velocity, e, b, tau, qm)
+        return velocity
 
     @method(
         equations={
