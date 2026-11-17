@@ -73,21 +73,36 @@ def test_the_volumes_fill_the_domain(geometry) -> None:
         refined.from_base(np.zeros(mesh.shape))
 
 
-def test_a_uniform_charge_between_plates_is_exact_on_refined_boxes() -> None:
-    """-phi'' = rho / eps0 with phi = 0 at x = 0, L: a parabola, exact for the stencil."""
-    mesh = _plates()
+def test_a_uniform_charge_between_plates_on_refined_boxes() -> None:
+    """-phi'' = rho / eps0 with phi = 0 at x = 0, L: a parabola.
+
+    Exact for the stencil on a uniform mesh; on refined boxes patchwork's composite scheme
+    has a first-order truncation error on the coarse–fine nodes (largest at a box's inner
+    corner), so the error is small and halves with the cells.
+    """
     rho = 1e-6
-    solver = IonOpticsPoisson(
-        mesh,
-        refinement=[
-            Refinement(1, (4e-3, 0.0), (14e-3, 6e-3)),
-            Refinement(2, (6e-3, 0.0), (10e-3, 4e-3)),
-        ],
-    )
-    layout = solver.layout
-    phi = solver.solve(np.full(layout.size, rho))
-    exact = rho / (2 * epsilon_0) * layout.x * (20e-3 - layout.x)
-    np.testing.assert_allclose(phi, exact, rtol=0, atol=1e-9 * exact.max())
+    errors = []
+    for n in (21, 41):
+        faces = {
+            "x_min": FaceCondition("dirichlet", 0.0),
+            "x_max": FaceCondition("dirichlet", 0.0),
+        }
+        mesh = IonOpticsMesh(
+            (n, (n + 1) // 2), (0.0, 0.0), 20e-3 / (n - 1), faces=faces
+        )
+        solver = IonOpticsPoisson(
+            mesh,
+            refinement=[
+                Refinement(1, (4e-3, 0.0), (14e-3, 6e-3)),
+                Refinement(2, (6e-3, 0.0), (10e-3, 4e-3)),
+            ],
+        )
+        layout = solver.layout
+        phi = solver.solve(np.full(layout.size, rho))
+        exact = rho / (2 * epsilon_0) * layout.x * (20e-3 - layout.x)
+        errors.append(np.abs(phi - exact).max() / exact.max())
+    assert errors[0] < 1e-2
+    assert errors[1] < 0.6 * errors[0]
 
 
 def _refined(config, boxes):
