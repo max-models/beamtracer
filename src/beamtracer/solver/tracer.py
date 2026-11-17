@@ -371,6 +371,9 @@ class BeamTracer:
         #: it applies (None).
         self.compiled = compiled
         self._lookup: tuple[np.ndarray, np.ndarray] | None = None
+        #: Crossings per plane and trajectory the compiled tracer's buffer holds; grown
+        #: when a trace needs more.
+        self._capacity = 4
         #: Sums the node charges over MPI ranks that each trace a share of the beam.
         self.reduce: Callable[[np.ndarray], np.ndarray] | None = None
         #: The random stream of analog charge changes, e.g. the MPI rank.
@@ -821,7 +824,8 @@ class BeamTracer:
         The trajectories kept for plotting take the NumPy path. Those stopped in a
         sub-cell cut by an electrode surface are tested with the electrodes' own test,
         and the ones outside resume. A trace that records more crossings of a plane per
-        trajectory than its buffer holds is repeated with a larger buffer.
+        trajectory than its buffer holds is repeated with a larger buffer, which the
+        tracer keeps for the next traces.
         """
         mesh = self.mesh
         nx, ny = mesh.shape
@@ -853,9 +857,9 @@ class BeamTracer:
         # Pyccel takes no empty arrays: without planes one that is never crossed (NaN)
         planes = np.array(self.planes or (np.nan,), dtype=float)
         threads = max(1, min(_num_threads(), start.size))
-        capacity = 4
         initial = (x.copy(), v.copy(), status.copy(), electrode.copy())
         while True:
+            capacity = self._capacity
             charge = np.zeros((threads, nx, ny))
             hits = np.zeros((n, planes.size, capacity, 8))
             counts = np.zeros((n, planes.size), dtype=np.int64)
@@ -879,7 +883,7 @@ class BeamTracer:
             most = int(counts.max()) if counts.size else 0
             if most <= capacity:
                 break
-            capacity = most
+            self._capacity = most
             x, v, status, electrode = (a.copy() for a in initial)
             steps[:] = 0
         charge = charge.sum(axis=0)
