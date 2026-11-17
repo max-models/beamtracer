@@ -125,10 +125,28 @@ def test_planar_extraction_agrees_with_the_numpy_tracer() -> None:
     assert stats["electrode"] > 0 and stats["transmitted"] > 0
 
 
-def _cylindrical() -> BeamOpticsConfig:
-    config = _extraction(1.0)
-    config.iterations = 4
-    return config
+def _cylindrical(**settings) -> BeamOpticsConfig:
+    return _extraction(1.0).replace(iterations=4, **settings)
+
+
+@pytest.mark.parametrize("config", [_planar, _cylindrical])
+def test_boris_agrees_with_the_numpy_tracer(config) -> None:
+    compiled = _run(config(integrator="boris"), True)
+    _assert_same(compiled, _run(config(integrator="boris"), False))
+
+
+@pytest.mark.parametrize("config", [_planar, _cylindrical])
+def test_boris_is_close_to_rk4(config) -> None:
+    """Second order against fourth, at the same step: the beam differs by little."""
+    boris = _run(config(integrator="boris"), True)
+    rk4 = _run(config(), True)
+    plane = boris.config.diagnostic_planes[-1]
+    a, b = boris.beam_moments(plane), rk4.beam_moments(plane)
+    assert a.current == pytest.approx(b.current, rel=0.02)
+    assert a.rms_size == pytest.approx(b.rms_size, rel=0.02)
+    assert a.emittance == pytest.approx(b.emittance, rel=0.1)
+    scale = np.abs(rk4.potential).max()
+    assert np.abs(boris.potential - rk4.potential).max() < 1e-3 * scale
 
 
 def test_cylindrical_extraction_agrees_with_the_numpy_tracer() -> None:
@@ -220,7 +238,7 @@ def test_compiled_needs_the_solved_field_alone() -> None:
     assert tracer.trace(particles).status[0] == 0
 
 
-def _kernel_case(cylindrical: int) -> list:
+def _kernel_case(cylindrical: int, integrator: int = 0) -> list:
     rng = np.random.default_rng(7)
     n, nx, ny, h = 40, 30, 12, 1e-3
     fx = rng.normal(size=(nx + 1, ny)) * 1e4 + 3e5
@@ -240,7 +258,7 @@ def _kernel_case(cylindrical: int) -> list:
         np.arange(n, dtype=np.int64), x, v, np.full(n, 9.6e7), np.ones(n),
         np.zeros(n, dtype=np.int64), np.full(n, -1, dtype=np.int64),
         np.full(n, -1, dtype=np.int64), fx, fy, 0.0, 0.0, h, (nx - 1) * h,
-        (ny - 1) * h, cylindrical, 0.5, 400, cells, subcells, 8,
+        (ny - 1) * h, cylindrical, integrator, 0.5, 400, cells, subcells, 8,
         np.array([5e-3, 15e-3]), np.zeros((n, 2, 3, 8)), np.zeros((n, 2), dtype=np.int64),
         2, np.zeros((2, nx, ny)),
     ]  # fmt: skip
@@ -252,30 +270,63 @@ def _call(function, args) -> list:
     return args
 
 
-OUTPUTS = (1, 2, 5, 6, 7, 22, 23)
+OUTPUTS = (1, 2, 5, 6, 7, 23, 24)
+CHARGE = 26
 
 
+@pytest.mark.parametrize("integrator", [0, 1])
 @pytest.mark.parametrize("cylindrical", [0, 1])
-def test_kernel_versions_agree(cylindrical) -> None:
-    args = _kernel_case(cylindrical)
+def test_kernel_versions_agree(cylindrical, integrator) -> None:
+    args = _kernel_case(cylindrical, integrator)
     expected = _call(kernel.host_kernel.kernel.python, args)
     result = _call(kernel, args)
     assert set(np.unique(expected[6])) >= {-2, 0}  # stopped at surfaces and transmitted
     for i in OUTPUTS:
         np.testing.assert_allclose(result[i], expected[i], rtol=1e-12, atol=1e-12)
-    np.testing.assert_allclose(result[25].sum(0), expected[25].sum(0), rtol=1e-12)
+    np.testing.assert_allclose(
+        result[CHARGE].sum(0), expected[CHARGE].sum(0), rtol=1e-12
+    )
 
 
 @pytest.mark.skipif(emulation_compiler() is None, reason="no C++ compiler")
+@pytest.mark.parametrize("integrator", [0, 1])
 @pytest.mark.parametrize("cylindrical", [0, 1])
-def test_cuda_version_agrees(cylindrical) -> None:
-    args = _kernel_case(cylindrical)
+def test_cuda_version_agrees(cylindrical, integrator) -> None:
+    args = _kernel_case(cylindrical, integrator)
     expected = _call(kernel.host_kernel.kernel.python, args)
     result = [a.copy() if isinstance(a, np.ndarray) else a for a in args]
-    result[25] = np.zeros_like(result[25][:1])  # the GPU deposits into one slab
+    result[CHARGE] = np.zeros_like(result[CHARGE][:1])  # the GPU deposits into one slab
     emulate_cuda_kernel(kernel.cuda_kernel, *result, n_threads=args[0].shape[-1])
     for i in OUTPUTS:
         np.testing.assert_allclose(result[i], expected[i], rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(
-        result[25][0], expected[25].sum(0), rtol=1e-10, atol=1e-18
+        result[CHARGE][0], expected[CHARGE].sum(0), rtol=1e-10, atol=1e-18
     )
+
+
+def test_boris_in_a_solenoid_keeps_the_speed_and_follows_rk4() -> None:
+    """The rotation of Boris's step keeps |v| in a magnetic field (NumPy tracer)."""
+    mesh = IonOpticsMesh(shape=(201, 21), origin=(0.0, 0.0), h=1e-3)
+    zero = StaggeredElectricField(mesh, np.zeros(mesh.shape))
+    bz = 0.3 * np.exp(-((((np.arange(201) * 1e-3) - 0.1) / 0.03) ** 2))
+    magnet = AxisymmetricMagneticField(0.0, 1e-3, bz)
+    n = 20
+    position = np.stack([np.zeros(n), np.linspace(1e-3, 8e-3, n), np.zeros(n)])
+    velocity = np.stack([np.full(n, 1e6), np.zeros(n), np.zeros(n)])
+    particles = BeamParticles(
+        position, velocity, np.full(n, 1.602e-19), np.full(n, 1.67e-27),
+        np.full(n, 1e-3), np.zeros(n, dtype=np.int32),
+    )  # fmt: skip
+    ends = {}
+    for integrator in ("rk4", "boris"):
+        tracer = BeamTracer(
+            mesh, zero, magnet, integrator=integrator, planes=[0.19], step_fraction=0.25
+        )
+        hits = tracer.trace(particles).planes[0]
+        ends[integrator] = hits
+    speed = np.linalg.norm(ends["boris"].velocity, axis=0)
+    np.testing.assert_allclose(speed, 1e6, rtol=1e-12)
+    np.testing.assert_allclose(
+        ends["boris"].point[1], ends["rk4"].point[1], rtol=0, atol=2e-5
+    )
+    assert np.abs(ends["boris"].point[1] - position[1]).max() > 1e-4  # it focuses

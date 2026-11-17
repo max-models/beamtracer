@@ -37,6 +37,8 @@ STATUS_NAMES = ("transmitted", "backward", "wall", "electrode", "max_steps")
 _ALIVE, _PAUSED = -1, -2
 #: Sub-cells per cell side of the electrode lookup of the compiled tracer.
 SUBCELLS = 8
+#: The integrators of `BeamTracer`, numbered as in the compiled tracer.
+INTEGRATORS = ("rk4", "boris")
 
 
 def _num_threads() -> int:
@@ -286,6 +288,23 @@ class TraceResult:
     tallies: ChargeTallies | None = None
 
 
+def _boris_problem() -> ConvergenceProblem:
+    """The harmonic field of `_rk4_problem`, with Boris's kick--drift--kick."""
+    mesh = IonOpticsMesh((3, 3), (0.0, 0.0), 1.0, "planar")
+    tracer = BeamTracer(mesh, lambda x, y: (-x, -y), integrator="boris")
+    qm = np.ones(1)
+
+    def error(dt: float) -> float:
+        x, v = np.array([[1.0], [0.0], [0.0]]), np.array([[0.0], [1.0], [0.0]])
+        steps = round(2.0 / dt)
+        for _ in range(steps):
+            x, v = tracer._boris(x, v, None, dt, qm)
+        t = steps * dt
+        return float(np.hypot(x[0, 0] - np.cos(t), x[1, 0] - np.sin(t)))
+
+    return ConvergenceProblem(error, steps=[0.2, 0.1, 0.05, 0.025])
+
+
 def _rk4_problem() -> ConvergenceProblem:
     """A harmonic field ``E = -(x, y)``: a circle of unit radius, against ``cos t``."""
     mesh = IonOpticsMesh((3, 3), (0.0, 0.0), 1.0, "planar")
@@ -347,6 +366,7 @@ class BeamTracer:
         save_trajectories: int = 0,
         charge_changing: ChargeChanging | None = None,
         compiled: bool | None = None,
+        integrator: str = "rk4",
     ) -> None:
         """Set up the tracer; ``save_trajectories`` keeps every n-th trajectory (0: none).
 
@@ -354,7 +374,8 @@ class BeamTracer:
         change on the targets it crosses, or one state that changes at sampled
         events (see `beamtracer.solver.charge_changing`). ``compiled`` chooses the
         compiled tracer (`compiled_available`) or the NumPy one; ``None`` takes the
-        compiled one where it applies.
+        compiled one where it applies. ``integrator`` is ``"rk4"`` (`_rk4`, four field
+        evaluations a step) or ``"boris"`` (`_boris`, one).
         """
         if not 0.0 < step_fraction <= 1.0:
             raise ValueError(f"step_fraction must be in (0, 1], got {step_fraction}")
@@ -363,6 +384,11 @@ class BeamTracer:
         self.magnetic = magnetic
         self.imposed_electric = imposed_electric
         self.step_fraction = float(step_fraction)
+        if integrator not in INTEGRATORS:
+            raise ValueError(
+                f"integrator must be one of {INTEGRATORS}, got {integrator!r}"
+            )
+        self.integrator = integrator
         self.max_steps = int(max_steps)
         self.planes = tuple(float(p) for p in planes)
         self.save_trajectories = int(save_trajectories)
@@ -399,29 +425,36 @@ class BeamTracer:
     )
     def acceleration(self, x: np.ndarray, v: np.ndarray, qm: np.ndarray) -> np.ndarray:
         """Return the acceleration ``(3, N)`` at positions ``x`` and velocities ``v``."""
+        electric, magnetic = self.fields(x)
+        force = electric
+        if magnetic is not None:
+            force += np.cross(v, magnetic, axis=0)
+        return qm * force
+
+    def fields(self, x: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
+        """Return the Cartesian ``E`` and ``B`` ``(3, N)`` at positions ``x`` (``B`` or None)."""
         electric = self.electric
         if electric is None:
             raise RuntimeError("the tracer has no electric field yet")
         if not self.mesh.cylindrical:
             ex, ey = electric(x[0], x[1])
-            force = np.stack([ex, ey, np.zeros_like(ex)], axis=0)
+            e = np.stack([ex, ey, np.zeros_like(ex)], axis=0)
             if self.imposed_electric is not None:
-                force += np.stack(self.imposed_electric(x[0], x[1]), axis=0)
-            if self.magnetic is not None:
-                b = np.stack(self.magnetic(x[0], x[1]), axis=0)
-                force += np.cross(v, b, axis=0)
-            return qm * force
+                e += np.stack(self.imposed_electric(x[0], x[1]), axis=0)
+            if self.magnetic is None:
+                return e, None
+            return e, np.stack(self.magnetic(x[0], x[1]), axis=0)
         r = np.hypot(x[1], x[2])
         with np.errstate(invalid="ignore", divide="ignore"):
             cy = np.where(r > 0.0, x[1] / r, 0.0)
             cz = np.where(r > 0.0, x[2] / r, 0.0)
         ex, er = electric(x[0], r)
-        force = _cartesian((ex, er), cy, cz)
+        e = _cartesian((ex, er), cy, cz)
         if self.imposed_electric is not None:
-            force += _cartesian(self.imposed_electric(x[0], r), cy, cz)
-        if self.magnetic is not None:
-            force += np.cross(v, _cartesian(self.magnetic(x[0], r), cy, cz), axis=0)
-        return qm * force
+            e += _cartesian(self.imposed_electric(x[0], r), cy, cz)
+        if self.magnetic is None:
+            return e, None
+        return e, _cartesian(self.magnetic(x[0], r), cy, cz)
 
     def _rk4(self, x, v, a, dt, qm):
         """One classical Runge--Kutta step of ``dx/dt = v, dv/dt = a(x, v)``."""
@@ -436,6 +469,48 @@ class BeamTracer:
         x_new = x + d / 6.0 * (k1x + 2.0 * k2x + 2.0 * k3x + k4x)
         v_new = v + d / 6.0 * (k1v + 2.0 * k2v + 2.0 * k3v + k4v)
         return x_new, v_new
+
+    @staticmethod
+    def _kick(v, e, b, tau, qm):
+        """Advance ``v`` by ``tau`` in the fields ``e``, ``b``: Boris's half kick, rotation, half kick."""
+        v = v + 0.5 * tau * qm * e
+        t = 0.5 * tau * qm * b
+        s = 2.0 * t / (1.0 + np.sum(t * t, axis=0))
+        v = v + np.cross(v + np.cross(v, t, axis=0), s, axis=0)
+        return v + 0.5 * tau * qm * e
+
+    @method(
+        equations={
+            "kick": r"\mathbf v^{n+1/2} = \mathcal B_{\Delta t/2}(\mathbf x^n)\, \mathbf v^n, \qquad \mathbf x^{n+1} = \mathbf x^n + \Delta t\, \mathbf v^{n+1/2}, \qquad \mathbf v^{n+1} = \mathcal B_{\Delta t/2}(\mathbf x^{n+1})\, \mathbf v^{n+1/2}",
+            "boris": r"\mathcal B_\tau \mathbf v: \ \mathbf v^- = \mathbf v + \tfrac{\tau}{2} \tfrac{q}{m}\mathbf E, \ \mathbf t = \tfrac{\tau}{2}\tfrac{q}{m}\mathbf B, \ \mathbf v^+ = \mathbf v^- + (\mathbf v^- + \mathbf v^- \times \mathbf t) \times \frac{2\mathbf t}{1 + t^2}, \ \mathcal B_\tau \mathbf v = \mathbf v^+ + \tfrac{\tau}{2}\tfrac{q}{m}\mathbf E",
+        },
+        order=2,
+        assumptions=(
+            r"kick--drift--kick with the velocity at whole steps, so the step may change from one step to the next; the field at the end of a step is that of the start of the next, one evaluation a step",
+            r"without $\mathbf B$ it is the velocity Verlet method; the rotation keeps $|\mathbf v|$ in a pure $\mathbf B$",
+            r"the same step $\Delta t$ as `rk4`; second order against its fourth, while the interpolated field is itself second order in $h$",
+        ),
+        components=("beamtracer.solver.tracer.BeamTracer.acceleration",),
+        problem=_boris_problem,
+    )
+    def _boris(self, x, v, a, dt, qm):
+        """One kick--drift--kick step of Boris's method from ``x``, ``v``.
+
+        ``a`` is the acceleration at the start (or None); without a magnetic field the
+        kicks are ``tau a``, as in the compiled tracer.
+        """
+        tau = 0.5 * dt
+        if self.magnetic is None:
+            if a is None:
+                a = self.acceleration(x, v, qm)
+            half = v + tau * a
+            x_new = x + dt * half
+            return x_new, half + tau * self.acceleration(x_new, half, qm)
+        e, b = self.fields(x)
+        half = self._kick(v, e, b, tau, qm)
+        x_new = x + dt * half
+        e, b = self.fields(x_new)
+        return x_new, self._kick(half, e, b, tau, qm)
 
     def _project(self, x: np.ndarray) -> np.ndarray:
         """Return the mesh coordinates ``(x, y)`` or ``(x, r)`` of Cartesian points."""
@@ -630,7 +705,8 @@ class BeamTracer:
             with np.errstate(divide="ignore"):
                 dt = np.minimum(h / speed, np.sqrt(2.0 * h / accel))
             dt = self.step_fraction * np.where(np.isfinite(dt), dt, h)
-            x_new, v_new = self._rk4(x, v, a, dt, qm[index])
+            advance = self._rk4 if self.integrator == "rk4" else self._boris
+            x_new, v_new = advance(x, v, a, dt, qm[index])
 
             # Space charge: I dt at the (Hermite) midpoint of the step.
             mid = 0.5 * (x + x_new) + dt * (v - v_new) / 8.0
@@ -864,7 +940,8 @@ class BeamTracer:
                 trace_trajectories_2d(
                     active, x, v, qm, dq, steps, status, electrode, fx, fy,
                     *map(float, mesh.origin), mesh.h, *map(float, mesh.upper),
-                    int(mesh.cylindrical), self.step_fraction, self.max_steps,
+                    int(mesh.cylindrical), INTEGRATORS.index(self.integrator),
+                    self.step_fraction, self.max_steps,
                     cells, subcells, SUBCELLS, planes, hits, counts, threads, charge,
                 )  # fmt: skip
                 paused = active[status[active] == _PAUSED]
