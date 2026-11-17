@@ -31,6 +31,7 @@ def trace_trajectories_2d(
     upper_x: float,
     upper_y: float,
     cylindrical: int,
+    integrator: int,
     step_fraction: float,
     max_steps: int,
     cells: "int[:,:]",
@@ -46,8 +47,9 @@ def trace_trajectories_2d(
 
     ``x``, ``v`` ``(3, N)`` are the states (updated in place), ``qm`` the charge over
     mass, ``dq`` the signed current deposited per unit time, ``steps`` the steps
-    taken so far. A step is the Runge--Kutta step of `BeamTracer` through the edge
-    fields ``fx``, ``fy`` (as ``staggered_field_2d``); it deposits ``dq dt`` at its
+    taken so far. A step is that of `BeamTracer`, the Runge--Kutta step (``integrator``
+    0) or Boris's kick--drift--kick (1, one field evaluation a step: the end's is the next
+    start's), through the edge fields ``fx``, ``fy`` (as ``staggered_field_2d``); it deposits ``dq dt`` at its
     Hermite midpoint (as ``deposit_trajectories_2d``) into ``charge[t]``, one slab per
     thread ``t < num_threads``, and records every crossing of the ``planes`` in
     ``hits[k, plane, c]`` (point, velocity, direction, step) for the first
@@ -65,7 +67,7 @@ def trace_trajectories_2d(
     n_planes = planes.shape[0]
     capacity = hits.shape[2]
     # fmt: off
-    #$ omp parallel for schedule(static, 1) num_threads(num_threads) private(t, m, k, x0, x1, x2, v0, v1, v2, qmk, ns, st, stage, q0, q1, q2, qy, r, cy, cz, sx, sy, s, w, u, i, j, low, high, ex, ey, g0, g1, g2, a0, a1, a2, kx0, kx1, kx2, sx0, sx1, sx2, sv0, sv1, sv2, speed, accel, dt, d2, hdt, dt6, y0, y1, y2, w0, w1, w2, m0, m1, m2, deposit, p, xp, before, after, c, px, py, cell, si, sj, e)
+    #$ omp parallel for schedule(static, 1) num_threads(num_threads) private(t, m, k, nstage, have, ca0, ca1, ca2, x0, x1, x2, v0, v1, v2, qmk, ns, st, stage, q0, q1, q2, qy, r, cy, cz, sx, sy, s, w, u, i, j, low, high, ex, ey, g0, g1, g2, a0, a1, a2, kx0, kx1, kx2, sx0, sx1, sx2, sv0, sv1, sv2, speed, accel, dt, d2, hdt, dt6, y0, y1, y2, w0, w1, w2, m0, m1, m2, deposit, p, xp, before, after, c, px, py, cell, si, sj, e)
     # fmt: on
     for t in range(num_threads):
         m = t
@@ -84,6 +86,11 @@ def trace_trajectories_2d(
             dt = 0.0
             hdt = 0.0
             dt6 = 0.0
+            nstage = 4 if integrator == 0 else 2
+            have = 0
+            ca0 = 0.0
+            ca1 = 0.0
+            ca2 = 0.0
             while ns < max_steps:
                 # classical Runge--Kutta as BeamTracer._rk4: stage s samples the field at
                 # q, its velocity is kx; sx and sv sum the stages with weights 1, 2, 2, 1
@@ -93,59 +100,65 @@ def trace_trajectories_2d(
                 kx0 = v0
                 kx1 = v1
                 kx2 = v2
-                for stage in range(4):
-                    # the acceleration at q (planar E(x, y), cylindrical E(x, r))
-                    qy = q1
-                    cy = 0.0
-                    cz = 0.0
-                    if cylindrical != 0:
-                        r = hypot(q1, q2)
-                        if r > 0.0:
-                            cy = q1 / r
-                            cz = q2 / r
-                        qy = r
-                    sx = (q0 - origin_x) / h
-                    sy = (qy - origin_y) / h
-                    s = sx + 0.5
-                    i = floor(s)
-                    if i < 0:
-                        i = 0
-                    elif i > nx - 1:
-                        i = nx - 1
-                    j = floor(sy)
-                    if j < 0:
-                        j = 0
-                    elif j > ny - 2:
-                        j = ny - 2
-                    u = s - i
-                    w = sy - j
-                    low = fx[i, j] + w * (fx[i, j + 1] - fx[i, j])
-                    high = fx[i + 1, j] + w * (fx[i + 1, j + 1] - fx[i + 1, j])
-                    ex = low + u * (high - low)
-                    s = sy + 0.5
-                    i = floor(sx)
-                    if i < 0:
-                        i = 0
-                    elif i > nx - 2:
-                        i = nx - 2
-                    j = floor(s)
-                    if j < 0:
-                        j = 0
-                    elif j > ny - 1:
-                        j = ny - 1
-                    u = sx - i
-                    w = s - j
-                    low = fy[i, j] + w * (fy[i, j + 1] - fy[i, j])
-                    high = fy[i + 1, j] + w * (fy[i + 1, j + 1] - fy[i + 1, j])
-                    ey = low + u * (high - low)
-                    if cylindrical != 0:
-                        g0 = qmk * ex
-                        g1 = qmk * (ey * cy)
-                        g2 = qmk * (ey * cz)
+                for stage in range(nstage):
+                    # the acceleration at q (planar E(x, y), cylindrical E(x, r)), or for
+                    # Boris at the start that of the last step's end
+                    if stage == 0 and have != 0:
+                        g0 = ca0
+                        g1 = ca1
+                        g2 = ca2
                     else:
-                        g0 = qmk * ex
-                        g1 = qmk * ey
-                        g2 = qmk * 0.0
+                        qy = q1
+                        cy = 0.0
+                        cz = 0.0
+                        if cylindrical != 0:
+                            r = hypot(q1, q2)
+                            if r > 0.0:
+                                cy = q1 / r
+                                cz = q2 / r
+                            qy = r
+                        sx = (q0 - origin_x) / h
+                        sy = (qy - origin_y) / h
+                        s = sx + 0.5
+                        i = floor(s)
+                        if i < 0:
+                            i = 0
+                        elif i > nx - 1:
+                            i = nx - 1
+                        j = floor(sy)
+                        if j < 0:
+                            j = 0
+                        elif j > ny - 2:
+                            j = ny - 2
+                        u = s - i
+                        w = sy - j
+                        low = fx[i, j] + w * (fx[i, j + 1] - fx[i, j])
+                        high = fx[i + 1, j] + w * (fx[i + 1, j + 1] - fx[i + 1, j])
+                        ex = low + u * (high - low)
+                        s = sy + 0.5
+                        i = floor(sx)
+                        if i < 0:
+                            i = 0
+                        elif i > nx - 2:
+                            i = nx - 2
+                        j = floor(s)
+                        if j < 0:
+                            j = 0
+                        elif j > ny - 1:
+                            j = ny - 1
+                        u = sx - i
+                        w = s - j
+                        low = fy[i, j] + w * (fy[i, j + 1] - fy[i, j])
+                        high = fy[i + 1, j] + w * (fy[i + 1, j + 1] - fy[i + 1, j])
+                        ey = low + u * (high - low)
+                        if cylindrical != 0:
+                            g0 = qmk * ex
+                            g1 = qmk * (ey * cy)
+                            g2 = qmk * (ey * cz)
+                        else:
+                            g0 = qmk * ex
+                            g1 = qmk * ey
+                            g2 = qmk * 0.0
                     if stage == 0:
                         a0 = g0
                         a1 = g1
@@ -164,6 +177,15 @@ def trace_trajectories_2d(
                         dt = step_fraction * dt
                         hdt = 0.5 * dt
                         dt6 = dt / 6.0
+                        if integrator != 0:
+                            # Boris: the half kick, then the drift to the end of the step
+                            kx0 = v0 + hdt * a0
+                            kx1 = v1 + hdt * a1
+                            kx2 = v2 + hdt * a2
+                            q0 = x0 + dt * kx0
+                            q1 = x1 + dt * kx1
+                            q2 = x2 + dt * kx2
+                            continue
                         sx0 = v0
                         sx1 = v1
                         sx2 = v2
@@ -176,6 +198,15 @@ def trace_trajectories_2d(
                         kx0 = v0 + hdt * a0
                         kx1 = v1 + hdt * a1
                         kx2 = v2 + hdt * a2
+                    elif integrator != 0:
+                        # Boris: the second half kick at the end of the step
+                        w0 = kx0 + hdt * g0
+                        w1 = kx1 + hdt * g1
+                        w2 = kx2 + hdt * g2
+                        ca0 = g0
+                        ca1 = g1
+                        ca2 = g2
+                        have = 1
                     elif stage == 1:
                         sx0 = sx0 + 2.0 * kx0
                         sx1 = sx1 + 2.0 * kx1
@@ -209,12 +240,17 @@ def trace_trajectories_2d(
                         sv0 = sv0 + g0
                         sv1 = sv1 + g1
                         sv2 = sv2 + g2
-                y0 = x0 + dt6 * sx0
-                y1 = x1 + dt6 * sx1
-                y2 = x2 + dt6 * sx2
-                w0 = v0 + dt6 * sv0
-                w1 = v1 + dt6 * sv1
-                w2 = v2 + dt6 * sv2
+                if integrator == 0:
+                    y0 = x0 + dt6 * sx0
+                    y1 = x1 + dt6 * sx1
+                    y2 = x2 + dt6 * sx2
+                    w0 = v0 + dt6 * sv0
+                    w1 = v1 + dt6 * sv1
+                    w2 = v2 + dt6 * sv2
+                else:
+                    y0 = q0
+                    y1 = q1
+                    y2 = q2
 
                 # space charge: dq dt at the Hermite midpoint, area-weighted
                 m0 = 0.5 * (x0 + y0) + dt * (v0 - w0) / 8.0

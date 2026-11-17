@@ -23,6 +23,12 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `BeamOpticsConfig(integrator="boris")` (and `BeamTracer(integrator=...)`): Boris's
+  kick--drift--kick step, second order with one field evaluation a step against the four
+  of the default `"rk4"`, in the NumPy and the compiled tracer (the field at the end of a
+  step is reused at the start of the next). With a magnetic field (NumPy tracer) the
+  Boris rotation keeps the speed. On IBSimu's `vlasov2d` case it halves the time of the
+  trace, and the beam at the exit differs from RK4's by about 1e-5.
 - Field maps (`beamtracer.FieldMap`): gridded E and B as netCDF/xarray in the field-map
   layout shared with picnic (`max-models-field-map-1.0`), read, written, checked
   (`validate_field_map`) and interpolated multilinearly, with the field outside the map

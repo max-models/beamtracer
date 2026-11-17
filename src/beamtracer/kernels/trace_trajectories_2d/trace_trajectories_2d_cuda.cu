@@ -112,6 +112,7 @@ void trace_trajectories_2d(
     double upper_x,
     double upper_y,
     long long cylindrical,
+    long long integrator,
     double step_fraction,
     long long max_steps,
     Array2D<long long> cells,
@@ -136,9 +137,12 @@ void trace_trajectories_2d(
     const double dqk = dq(k);
     long long ns = steps(k);
     long long st = -1;
+    bool have = false;  // Boris: the acceleration at the start is the last step's end's
+    double a0 = 0.0, a1 = 0.0, a2 = 0.0;
     while (ns < max_steps) {
-        double a0, a1, a2;
-        acceleration_2d(x0, x1, x2, qmk, fx, fy, origin_x, origin_y, h, cylindrical, &a0, &a1, &a2);
+        if (!have) {
+            acceleration_2d(x0, x1, x2, qmk, fx, fy, origin_x, origin_y, h, cylindrical, &a0, &a1, &a2);
+        }
         const double speed = sqrt(v0 * v0 + v1 * v1 + v2 * v2);
         const double accel = sqrt(a0 * a0 + a1 * a1 + a2 * a2);
         double dt = -1.0;
@@ -149,6 +153,24 @@ void trace_trajectories_2d(
         }
         if (dt < 0.0) dt = h;
         dt = step_fraction * dt;
+        double y0, y1, y2, w0, w1, w2;
+        if (integrator != 0) {
+            // Boris's kick--drift--kick, as BeamTracer._boris without a magnetic field
+            const double hdt = 0.5 * dt;
+            const double kx0 = v0 + hdt * a0;
+            const double kx1 = v1 + hdt * a1;
+            const double kx2 = v2 + hdt * a2;
+            y0 = x0 + dt * kx0;
+            y1 = x1 + dt * kx1;
+            y2 = x2 + dt * kx2;
+            double g0, g1, g2;
+            acceleration_2d(y0, y1, y2, qmk, fx, fy, origin_x, origin_y, h, cylindrical, &g0, &g1, &g2);
+            w0 = kx0 + hdt * g0;
+            w1 = kx1 + hdt * g1;
+            w2 = kx2 + hdt * g2;
+            a0 = g0; a1 = g1; a2 = g2;
+            have = true;
+        } else {
         const double k2x0 = v0 + 0.5 * dt * a0;
         const double k2x1 = v1 + 0.5 * dt * a1;
         const double k2x2 = v2 + 0.5 * dt * a2;
@@ -167,12 +189,13 @@ void trace_trajectories_2d(
         double k4v0, k4v1, k4v2;
         acceleration_2d(x0 + dt * k3x0, x1 + dt * k3x1, x2 + dt * k3x2, qmk, fx, fy,
                         origin_x, origin_y, h, cylindrical, &k4v0, &k4v1, &k4v2);
-        const double y0 = x0 + dt / 6.0 * (v0 + 2.0 * k2x0 + 2.0 * k3x0 + k4x0);
-        const double y1 = x1 + dt / 6.0 * (v1 + 2.0 * k2x1 + 2.0 * k3x1 + k4x1);
-        const double y2 = x2 + dt / 6.0 * (v2 + 2.0 * k2x2 + 2.0 * k3x2 + k4x2);
-        const double w0 = v0 + dt / 6.0 * (a0 + 2.0 * k2v0 + 2.0 * k3v0 + k4v0);
-        const double w1 = v1 + dt / 6.0 * (a1 + 2.0 * k2v1 + 2.0 * k3v1 + k4v1);
-        const double w2 = v2 + dt / 6.0 * (a2 + 2.0 * k2v2 + 2.0 * k3v2 + k4v2);
+        y0 = x0 + dt / 6.0 * (v0 + 2.0 * k2x0 + 2.0 * k3x0 + k4x0);
+        y1 = x1 + dt / 6.0 * (v1 + 2.0 * k2x1 + 2.0 * k3x1 + k4x1);
+        y2 = x2 + dt / 6.0 * (v2 + 2.0 * k2x2 + 2.0 * k3x2 + k4x2);
+        w0 = v0 + dt / 6.0 * (a0 + 2.0 * k2v0 + 2.0 * k3v0 + k4v0);
+        w1 = v1 + dt / 6.0 * (a1 + 2.0 * k2v1 + 2.0 * k3v1 + k4v1);
+        w2 = v2 + dt / 6.0 * (a2 + 2.0 * k2v2 + 2.0 * k3v2 + k4v2);
+        }
         const double m0 = 0.5 * (x0 + y0) + dt * (v0 - w0) / 8.0;
         const double m1 = 0.5 * (x1 + y1) + dt * (v1 - w1) / 8.0;
         const double m2 = 0.5 * (x2 + y2) + dt * (v2 - w2) / 8.0;

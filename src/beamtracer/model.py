@@ -244,6 +244,7 @@ class BeamOptics:
             magnetic,
             imposed_electric=imposed_electric,
             step_fraction=config.step_fraction,
+            integrator=config.integrator,
             max_steps=config.max_steps,
             planes=config.diagnostic_planes,
             save_trajectories=config.save_trajectories,

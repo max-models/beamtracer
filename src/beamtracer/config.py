@@ -450,7 +450,9 @@ class BeamOpticsConfig:
     largest potential change is below ``tolerance`` [V]; ``relaxation`` mixes the new
     charge density with the previous one. Each trajectory moves ``step_fraction`` of
     the step estimate ``min(h / |v|, sqrt(2 h / |a|))`` per Runge--Kutta step, for at most
-    ``max_steps`` steps.
+    ``max_steps`` steps. ``integrator`` is ``"rk4"`` (the classical Runge--Kutta
+    method, four field evaluations a step) or ``"boris"`` (Boris's kick--drift--kick,
+    second order with one evaluation a step).
     ``diagnostic_planes`` [m] record the trajectories crossing ``x = const``;
     ``save_trajectories`` keeps every n-th trajectory for plotting (0: none).
     ``tolerance`` and ``diagnostic_planes`` take Quantities or strings too, like the
@@ -476,6 +478,7 @@ class BeamOpticsConfig:
     relaxation: float = 1.0
     step_fraction: float = 0.5
     max_steps: int = 100_000
+    integrator: str = "rk4"
     diagnostic_planes: list[float] = unit_field("m", default_factory=list)
     save_trajectories: int = 0
 
@@ -519,6 +522,10 @@ class BeamOpticsConfig:
             raise ValueError(f"relaxation must be in (0, 1], got {self.relaxation}")
         if self.iterations < 1:
             raise ValueError("iterations must be at least 1")
+        if self.integrator not in ("rk4", "boris"):
+            raise ValueError(
+                f"integrator must be 'rk4' or 'boris', got {self.integrator!r}"
+            )
 
     def replace(self, **changes: Any) -> BeamOpticsConfig:
         """Return a copy with ``changes`` applied (and checked again)."""
