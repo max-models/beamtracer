@@ -7,6 +7,9 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `BeamTracer`'s Boris step (`integrator="boris"`) rotates with the compiled
+  `mpiparticles.boris_velocity` instead of its own NumPy copy of the scheme, as `FieldRegion`
+  already does (the same velocities to 1e-16).
 - The field is solved with patchwork's `NodalPoisson`, the ecosystem's solver that picnic uses
   too, instead of beamtracer's own finite differences: the cylindrical metric in r–z, the
   electrodes as embedded bodies with the distances the mesh brackets, the initial plasma as a
