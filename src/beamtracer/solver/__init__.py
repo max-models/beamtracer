@@ -38,6 +38,7 @@ from beamtracer.solver.tracer import (
     beam_with_energy,
 )
 from beamtracer.solver.vlasov import (
+    AndersonMixer,
     Compensation,
     NegativeIonPlasmaModel,
     PlasmaModel,
@@ -47,6 +48,7 @@ from beamtracer.solver.vlasov import (
 )
 
 __all__ = [
+    "AndersonMixer",
     "STATUS_NAMES",
     "AxialProfile",
     "AxisymmetricMagneticField",
