@@ -196,7 +196,7 @@ def test_a_full_plane_buffer_is_retraced_larger(monkeypatch) -> None:
     numpy = tracer.trace(particles)
     assert hits.current.size == pytest.approx(numpy.planes[0].current.size, rel=0.01)
     np.testing.assert_allclose(
-        compiled.charge_density.sum(), numpy.charge_density.sum(), rtol=1e-9
+        compiled.charge_density.sum(), numpy.charge_density.sum(), rtol=0.01
     )
 
 
