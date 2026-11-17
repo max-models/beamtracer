@@ -14,8 +14,8 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   as the NumPy tracer and agrees with it to rounding, about 2.5 times faster on one core and
   about 10 times faster on four on IBSimu's `vlasov2d` case. It applies to the solved
   electric field alone (no magnetic or imposed field, no charge changes) and where Pyccel is
-  installed; the NumPy tracer runs otherwise, and for the trajectories kept for plotting.
-  `BeamTracer(compiled=...)` chooses. Electrodes are looked up in sub-cells of `h/8`, and
+  installed; the NumPy tracer runs otherwise. The kernel records the trajectories kept for
+  plotting itself. `BeamTracer(compiled=...)` chooses. Electrodes are looked up in sub-cells of `h/8`, and
   tested with their own `inside` function only where a surface cuts the sub-cell.
 
 - `neutralizer_channel_2d` traces a gas neutralizer as in ITER's injectors (no cusps); the docs

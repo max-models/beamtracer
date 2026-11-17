@@ -40,6 +40,9 @@ def trace_trajectories_2d(
     planes: "float[:]",
     hits: "float[:,:,:,:]",
     counts: "int[:,:]",
+    path_slot: "int[:]",
+    paths: "float[:,:,:]",
+    path_count: "int[:]",
     num_threads: int,
     charge: "float[:,:,:]",
 ) -> None:
@@ -58,16 +61,19 @@ def trace_trajectories_2d(
     in a sub-cell of ``subcells`` that an electrode surface cuts: the caller decides
     those with the electrodes' own test and resumes the others. ``cells`` gives each
     cell its block of ``refine**2`` sub-cells (-1: no electrode near), whose entry is
-    the electrode containing the sub-cell, -1 for none or -2. Thread ``t`` traces every
-    ``num_threads``-th active trajectory.
+    the electrode containing the sub-cell, -1 for none or -2. A trajectory with
+    ``path_slot[k] >= 0`` appends the mesh coordinates ``(x, y)`` or ``(x, r)`` of every
+    step's end to ``paths[slot]``, as far as it holds, counting all in
+    ``path_count[slot]``. Thread ``t`` traces every ``num_threads``-th active trajectory.
     """
     nx = fy.shape[0]
     ny = fx.shape[1]
     n_active = active.shape[0]
     n_planes = planes.shape[0]
     capacity = hits.shape[2]
+    path_capacity = paths.shape[1]
     # fmt: off
-    #$ omp parallel for schedule(static, 1) num_threads(num_threads) private(t, m, k, nstage, have, ca0, ca1, ca2, x0, x1, x2, v0, v1, v2, qmk, ns, st, stage, q0, q1, q2, qy, r, cy, cz, sx, sy, s, w, u, i, j, low, high, ex, ey, g0, g1, g2, a0, a1, a2, kx0, kx1, kx2, sx0, sx1, sx2, sv0, sv1, sv2, speed, accel, dt, d2, hdt, dt6, y0, y1, y2, w0, w1, w2, m0, m1, m2, deposit, p, xp, before, after, c, px, py, cell, si, sj, e)
+    #$ omp parallel for schedule(static, 1) num_threads(num_threads) private(t, m, k, slot, nstage, have, ca0, ca1, ca2, x0, x1, x2, v0, v1, v2, qmk, ns, st, stage, q0, q1, q2, qy, r, cy, cz, sx, sy, s, w, u, i, j, low, high, ex, ey, g0, g1, g2, a0, a1, a2, kx0, kx1, kx2, sx0, sx1, sx2, sv0, sv1, sv2, speed, accel, dt, d2, hdt, dt6, y0, y1, y2, w0, w1, w2, m0, m1, m2, deposit, p, xp, before, after, c, px, py, cell, si, sj, e)
     # fmt: on
     for t in range(num_threads):
         m = t
@@ -81,6 +87,7 @@ def trace_trajectories_2d(
             v1 = v[1, k]
             v2 = v[2, k]
             qmk = qm[k]
+            slot = path_slot[k]
             ns = steps[k]
             st = -1
             dt = 0.0
@@ -315,6 +322,12 @@ def trace_trajectories_2d(
                 py = x1
                 if cylindrical != 0:
                     py = hypot(x1, x2)
+                if slot >= 0:
+                    c = path_count[slot]
+                    if c < path_capacity:
+                        paths[slot, c, 0] = px
+                        paths[slot, c, 1] = py
+                    path_count[slot] = c + 1
                 if px >= upper_x:
                     st = 0
                 elif px < origin_x:

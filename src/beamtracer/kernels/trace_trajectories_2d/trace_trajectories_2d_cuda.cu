@@ -121,6 +121,9 @@ void trace_trajectories_2d(
     Array1D<double> planes,
     Array4D<double> hits,
     Array2D<long long> counts,
+    Array1D<long long> path_slot,
+    Array3D<double> paths,
+    Array1D<long long> path_count,
     long long num_threads,
     Array3D<double> charge
 ) {
@@ -131,6 +134,8 @@ void trace_trajectories_2d(
     const long long n_planes = planes.shape[0];
     const long long capacity = hits.shape[2];
     const long long k = active(m);
+    const long long slot = path_slot(k);
+    const long long path_capacity = paths.shape[1];
     double x0 = x(0, k), x1 = x(1, k), x2 = x(2, k);
     double v0 = v(0, k), v1 = v(1, k), v2 = v(2, k);
     const double qmk = qm(k);
@@ -226,6 +231,14 @@ void trace_trajectories_2d(
         v0 = w0; v1 = w1; v2 = w2;
         const double px = x0;
         const double py = cylindrical != 0 ? hypot(x1, x2) : x1;
+        if (slot >= 0) {
+            const long long c = path_count(slot);
+            if (c < path_capacity) {
+                paths(slot, c, 0) = px;
+                paths(slot, c, 1) = py;
+            }
+            path_count(slot) = c + 1;
+        }
         if (px >= upper_x) {
             st = 0;
         } else if (px < origin_x) {

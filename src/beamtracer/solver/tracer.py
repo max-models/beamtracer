@@ -397,9 +397,9 @@ class BeamTracer:
         #: it applies (None).
         self.compiled = compiled
         self._lookup: tuple[np.ndarray, np.ndarray] | None = None
-        #: Crossings per plane and trajectory the compiled tracer's buffer holds; grown
-        #: when a trace needs more.
-        self._capacity = 4
+        #: Buffer sizes of the compiled tracer: crossings per plane and trajectory,
+        #: points per kept trajectory; grown when a trace needs more.
+        self._capacity = (4, 1024)
         #: Sums the node charges over MPI ranks that each trace a share of the beam.
         self.reduce: Callable[[np.ndarray], np.ndarray] | None = None
         #: The random stream of analog charge changes, e.g. the MPI rank.
@@ -897,11 +897,10 @@ class BeamTracer:
     def _trace_compiled(self, particles: BeamParticles) -> TraceResult:
         """Trace with the compiled kernel, every trajectory from start to end; the node charges.
 
-        The trajectories kept for plotting take the NumPy path. Those stopped in a
-        sub-cell cut by an electrode surface are tested with the electrodes' own test,
-        and the ones outside resume. A trace that records more crossings of a plane per
-        trajectory than its buffer holds is repeated with a larger buffer, which the
-        tracer keeps for the next traces.
+        Those stopped in a sub-cell cut by an electrode surface are tested with the
+        electrodes' own test, and the ones outside resume. A trace that records more
+        crossings of a plane, or more points of a kept trajectory, than its buffers hold
+        is repeated with larger ones, which the tracer keeps for the next traces.
         """
         mesh = self.mesh
         nx, ny = mesh.shape
@@ -920,25 +919,30 @@ class BeamTracer:
             dead = hit >= 0
             status[dead] = ELECTRODE
             electrode[dead] = hit[dead]
+        start = np.flatnonzero(status == _ALIVE).astype(np.int64)
         save = self.save_trajectories
         saved_ids = np.arange(0, n, save) if save else np.zeros(0, int)
-        traced = np.ones(n, dtype=bool)
-        traced[saved_ids] = False
-        start = np.flatnonzero(traced & (status == _ALIVE)).astype(np.int64)
+        # Pyccel takes no empty arrays: at least one path slot
+        path_slot = np.full(n, -1, dtype=np.int64)
+        path_slot[saved_ids] = np.arange(saved_ids.size)
+        first = self._project(x[:, saved_ids])
 
         assert isinstance(self.electric, StaggeredElectricField)
         fx = np.ascontiguousarray(self.electric.fx, dtype=float)
         fy = np.ascontiguousarray(self.electric.fy, dtype=float)
         cells, subcells = self._electrode_lookup()
-        # Pyccel takes no empty arrays: without planes one that is never crossed (NaN)
+        # without planes one that is never crossed (NaN)
         planes = np.array(self.planes or (np.nan,), dtype=float)
         threads = max(1, min(_num_threads(), start.size))
         initial = (x.copy(), v.copy(), status.copy(), electrode.copy())
         while True:
-            capacity = self._capacity
+            capacity, path_capacity = self._capacity
             charge = np.zeros((threads, nx, ny))
             hits = np.zeros((n, planes.size, capacity, 8))
             counts = np.zeros((n, planes.size), dtype=np.int64)
+            paths = np.zeros((max(saved_ids.size, 1), path_capacity, 2))
+            path_count = np.ones(max(saved_ids.size, 1), dtype=np.int64)
+            paths[: saved_ids.size, 0] = first.T  # the start
             active = start
             while active.size:
                 trace_trajectories_2d(
@@ -946,7 +950,8 @@ class BeamTracer:
                     *map(float, mesh.origin), mesh.h, *map(float, mesh.upper),
                     int(mesh.cylindrical), INTEGRATORS.index(self.integrator),
                     self.step_fraction, self.max_steps,
-                    cells, subcells, SUBCELLS, planes, hits, counts, threads, charge,
+                    cells, subcells, SUBCELLS, planes, hits, counts,
+                    path_slot, paths, path_count, threads, charge,
                 )  # fmt: skip
                 paused = active[status[active] == _PAUSED]
                 if not paused.size:
@@ -958,9 +963,10 @@ class BeamTracer:
                 active = paused[~inside]
                 status[active] = _ALIVE
             most = int(counts.max()) if counts.size else 0
-            if most <= capacity:
+            longest = int(path_count.max())
+            if most <= capacity and longest <= path_capacity:
                 break
-            self._capacity = most
+            self._capacity = (max(capacity, most), max(path_capacity, longest))
             x, v, status, electrode = (a.copy() for a in initial)
             steps[:] = 0
         charge = charge.sum(axis=0)
@@ -981,33 +987,16 @@ class BeamTracer:
                 record[:, 6].astype(np.int8),
             )
             hit_planes.append(plane)
-
-        most_steps = int(steps.max()) if n else 0
-        trajectories: list[np.ndarray] = []
-        trajectory_species = species[saved_ids]
-        if saved_ids.size:
-            kept = self._trace_numpy(particles.subset(saved_ids), 1)
-            charge += kept.charge_density
-            status[saved_ids] = kept.status
-            electrode[saved_ids] = kept.electrode
-            for plane, more in zip(hit_planes, kept.planes, strict=True):
-                plane.append(
-                    more.point,
-                    more.velocity,
-                    more.current,
-                    more.species,
-                    more.direction,
-                )
-            trajectories = kept.trajectories
-            most_steps = max(most_steps, kept.steps)
         return TraceResult(
             charge_density=charge,
             status=status.astype(np.int8),
             electrode=electrode.astype(np.int32),
             planes=hit_planes,
-            trajectories=trajectories,
-            trajectory_species=trajectory_species,
-            steps=most_steps,
+            trajectories=[
+                paths[i, : path_count[i]].copy() for i in range(saved_ids.size)
+            ],
+            trajectory_species=species[saved_ids],
+            steps=int(steps.max()) if n else 0,
         )
 
     # -- tracing ----------------------------------------------------------------------------
