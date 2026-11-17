@@ -1,9 +1,10 @@
 r"""Poisson's equation on an `IonOpticsMesh`, with a Boltzmann plasma species.
 
-The finite differences are the 5-point Laplacian, in
-cylindrical geometry ``(1 -/+ 1/2j)`` weights on the radial neighbours and ``4 (phi_1 - phi_0)``
-on the axis, Shortley--Weller weights next to electrodes, and mirrored neighbours on Neumann
-faces. Each row is scaled by ``h**2``.
+The finite differences are those of patchwork's `NodalPoisson`, the solver beamtracer shares
+with picnic: the 5-point Laplacian as finite volumes, in cylindrical geometry over the rings
+(``(1 -/+ 1/2j)`` weights on the radial neighbours and ``4 (phi_1 - phi_0)`` on the axis),
+Shortley--Weller rows next to electrodes with the distances the mesh brackets, and the flux of
+Neumann faces.
 
 For positive-ion extraction the plasma electrons follow a Boltzmann distribution,
 
@@ -27,8 +28,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-import scipy.sparse as sp
-import scipy.sparse.linalg as spla
 import scope_profiler
 from methodcard import ConvergenceProblem, method
 from scipy.constants import epsilon_0
@@ -116,120 +115,146 @@ class BoltzmannIons:
         return self.ion_temperature
 
 
-class _System:
-    """The matrix of the free nodes, the right-hand side of the fixed ones and their LU."""
-
-    def __init__(self, matrix: sp.csr_matrix, rhs_fixed: np.ndarray, free: np.ndarray):
-        self.matrix = matrix
-        self.rhs_fixed = rhs_fixed
-        self.free = free
-        self._lu = None
-        #: The factorised Newton Jacobian the chord steps reuse, or None.
-        self.jacobian_lu = None
-
-    def lu(self):
-        """Return the LU factorisation of the matrix (computed once)."""
-        if self._lu is None:
-            self._lu = spla.splu(self.matrix.tocsc())
-        return self._lu
+#: The faces of `IonOpticsMesh` as patchwork's, in planar and cylindrical geometry
+#: (the radius is patchwork's first axis; the axis ``y_min`` takes no condition).
+_FACES = {
+    False: {
+        "x_min": "x_lower",
+        "x_max": "x_upper",
+        "y_min": "y_lower",
+        "y_max": "y_upper",
+    },
+    True: {"x_min": "y_lower", "x_max": "y_upper", "y_max": "x_upper"},
+}
 
 
-def _assemble(mesh: IonOpticsMesh, fixed: np.ndarray, value: np.ndarray) -> _System:
-    """Assemble the finite differences for the free nodes."""
-    nx, ny = mesh.shape
-    h = mesh.h
-    flat_fixed = fixed.ravel()
-    flat_value = value.ravel()
-    free = np.flatnonzero(~flat_fixed)
-    number = np.full(nx * ny, -1, dtype=np.int64)
-    number[free] = np.arange(free.size)
-    i, j = np.unravel_index(free, (nx, ny))
-    alpha_x, beta_x, alpha_y, beta_y = (
-        mesh.distance[d].ravel()[free] for d in range(4)
-    )
+class _Field:
+    """The patchwork `NodalPoisson` of an `IonOpticsMesh`, and its node numbering.
 
-    rows: list[np.ndarray] = []
-    cols: list[np.ndarray] = []
-    vals: list[np.ndarray] = []
-    rhs = np.zeros(free.size)
-    centre = np.zeros(free.size)
+    In cylindrical geometry patchwork's hierarchy is the ``(r, x)`` plane: its points are
+    ``(r, x)`` where the mesh's are ``(x, r)``.
+    """
 
-    def link(mask: np.ndarray, di: int, dj: int, weight: np.ndarray | float) -> None:
-        """Couple the free nodes in ``mask`` to their neighbour ``(i + di, j + dj)``."""
-        sel = np.flatnonzero(mask)
-        if sel.size == 0:
-            return
-        neighbour = (i[sel] + di) * ny + (j[sel] + dj)
-        w = np.broadcast_to(weight, mask.shape)[sel]
-        known = flat_fixed[neighbour]
-        rhs[sel[known]] -= w[known] * flat_value[neighbour[known]]
-        rows.append(sel[~known])
-        cols.append(number[neighbour[~known]])
-        vals.append(w[~known])
-
-    def face_value(face: str, mask: np.ndarray) -> np.ndarray:
-        """Return the outward normal derivative of a Neumann face at the masked nodes."""
-        out = np.zeros(free.size)
-        if mask.any():
-            x = mesh.origin[0] + h * i[mask]
-            y = mesh.origin[1] + h * j[mask]
-            out[mask] = mesh.faces[face].evaluate(x, y)
-        return out
-
-    # x direction
-    xmin = i == 0
-    xmax = i == nx - 1
-    inner = ~(xmin | xmax)
-    beta2 = 2.0 / beta_x**2
-    alpha2 = 2.0 / alpha_x**2
-    centre += np.where(xmin, beta2, np.where(xmax, alpha2, 2.0 / (alpha_x * beta_x)))
-    link(xmin, 1, 0, beta2)
-    link(xmax, -1, 0, alpha2)
-    link(inner, -1, 0, 2.0 / ((alpha_x + beta_x) * alpha_x))
-    link(inner, 1, 0, 2.0 / ((alpha_x + beta_x) * beta_x))
-    rhs -= 2.0 * h * face_value("x_min", xmin) / beta_x
-    rhs -= 2.0 * h * face_value("x_max", xmax) / alpha_x
-
-    # y (or r) direction
-    ymin = j == 0
-    ymax = j == ny - 1
-    inner = ~(ymin | ymax)
-    alpha2 = 2.0 / alpha_y**2
-    if mesh.cylindrical:
-        jr = np.maximum(j, 1).astype(float)
-        centre += np.where(ymin, 4.0, np.where(ymax, alpha2, 2.0 / (alpha_y * beta_y)))
-        link(ymin, 0, 1, 4.0)
-        link(ymax, 0, -1, alpha2)
-        link(inner, 0, -1, (2.0 / alpha_y - 1.0 / jr) / (alpha_y + beta_y))
-        link(inner, 0, 1, (2.0 / beta_y + 1.0 / jr) / (alpha_y + beta_y))
-        rhs -= (
-            (2.0 / alpha_y + 1.0 / jr)
-            / (2.0 * alpha_y)
-            * 2.0
-            * h
-            * face_value("y_max", ymax)
-            / alpha_y
+    def __init__(
+        self,
+        mesh: IonOpticsMesh,
+        region: np.ndarray | None,
+        region_potential: float,
+        backend: str,
+    ) -> None:
+        from patchwork import (
+            AMRHierarchy,
+            Dirichlet,
+            EmbeddedDirichlet,
+            Neumann,
+            NodalPoisson,
         )
-    else:
-        beta2 = 2.0 / beta_y**2
-        centre += np.where(
-            ymin, beta2, np.where(ymax, alpha2, 2.0 / (alpha_y * beta_y))
-        )
-        link(ymin, 0, 1, beta2)
-        link(ymax, 0, -1, alpha2)
-        link(inner, 0, -1, 2.0 / ((alpha_y + beta_y) * alpha_y))
-        link(inner, 0, 1, 2.0 / ((alpha_y + beta_y) * beta_y))
-        rhs -= 2.0 * h * face_value("y_min", ymin) / beta_y
-        rhs -= 2.0 * h * face_value("y_max", ymax) / alpha_y
 
-    rows.append(np.arange(free.size))
-    cols.append(np.arange(free.size))
-    vals.append(-centre)
-    matrix = sp.csr_matrix(
-        (np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))),
-        shape=(free.size, free.size),
-    )
-    return _System(matrix, rhs, free)
+        nx, ny = mesh.shape
+        (x0, y0), (x1, y1) = mesh.origin, mesh.upper
+        cylindrical = mesh.cylindrical
+        self.mesh = mesh
+        if cylindrical:
+            hierarchy = AMRHierarchy(
+                base_shape=(ny - 1, nx - 1),
+                bounds=((y0, y1), (x0, x1)),
+                geometry="cylindrical",
+            )
+        else:
+            hierarchy = AMRHierarchy(
+                base_shape=(nx - 1, ny - 1), bounds=((x0, x1), (y0, y1))
+            )
+
+        def mesh_points(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+            """The mesh's ``(x, y)`` of patchwork's points."""
+            return (points[1], points[0]) if cylindrical else (points[0], points[1])
+
+        def indices(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+            x, y = mesh_points(points)
+            return (
+                np.rint((x - x0) / mesh.h).astype(np.int64),
+                np.rint((y - y0) / mesh.h).astype(np.int64),
+            )
+
+        def fraction(start: np.ndarray, end: np.ndarray) -> np.ndarray:
+            """The mesh's bracketed distance from a node to the surface towards ``end``."""
+            i, j = indices(start)
+            ie, je = indices(end)
+            direction = np.where(ie < i, 0, np.where(ie > i, 1, np.where(je < j, 2, 3)))
+            return mesh.distance[direction, i, j]
+
+        faces = {}
+        for face, name in _FACES[cylindrical].items():
+            condition = mesh.faces[face]
+            if condition.kind == "dirichlet":
+                value = condition.value
+                faces[name] = Dirichlet(
+                    (lambda *p, c=condition: c.evaluate(*mesh_points(np.array(p))))
+                    if callable(value)
+                    else float(value)
+                )
+            else:
+                value = condition.value
+                faces[name] = Neumann(
+                    (lambda *p, c=condition: c.evaluate(*mesh_points(np.array(p))))
+                    if callable(value)
+                    else float(value)
+                )
+        bodies = []
+        if region is not None:
+            # the initial plasma: nodes held at its potential, where no electrode or
+            # Dirichlet face fixes them, with the stencil of fixed nodes (fraction 1)
+            held = region & ~mesh.fixed
+
+            def in_region(points: np.ndarray) -> np.ndarray:
+                i, j = indices(points)
+                return held[i, j]
+
+            bodies.append(
+                EmbeddedDirichlet(
+                    in_region,
+                    float(region_potential),
+                    fraction=lambda start, end: np.ones(start.shape[1]),
+                )
+            )
+        # patchwork lets the last body listed own a node, the mesh the first electrode
+        for electrode in reversed(mesh.electrodes):
+            bodies.append(
+                EmbeddedDirichlet(
+                    lambda points, e=electrode: np.asarray(
+                        e.inside(*mesh_points(points)), dtype=bool
+                    ),
+                    float(electrode.potential),
+                    fraction=fraction,
+                )
+            )
+        self.solver = NodalPoisson(
+            hierarchy,
+            faces=faces,
+            embedded=bodies,
+            backend=backend,
+            metric="cylindrical" if cylindrical else "cartesian",
+            min_fraction=1.0 / 255.0,
+        )
+        lattice = self.solver.nodes.lattice
+        i, j = (
+            (lattice[:, 1], lattice[:, 0])
+            if cylindrical
+            else (lattice[:, 0], lattice[:, 1])
+        )
+        #: The mesh's flat index of every patchwork node.
+        self.index = i * ny + j
+        self.jacobian = False
+
+    def to_nodes(self, array: np.ndarray) -> np.ndarray:
+        """Patchwork's node values of an ``(nx, ny)`` array."""
+        return np.asarray(array, dtype=float).ravel()[self.index]
+
+    def to_mesh(self, values: np.ndarray) -> np.ndarray:
+        """The ``(nx, ny)`` array of patchwork's node values."""
+        out = np.empty(self.mesh.shape[0] * self.mesh.shape[1])
+        out[self.index] = values
+        return out.reshape(self.mesh.shape)
 
 
 def _poisson_problem() -> ConvergenceProblem:
@@ -263,14 +288,14 @@ def _poisson_problem() -> ConvergenceProblem:
         "shortley_weller": r"h^2 \partial_x^2 \phi \approx \frac{2\, \phi_-}{(\alpha + \beta)\alpha} + \frac{2\, \phi_+}{(\alpha + \beta)\beta} - \frac{2\, \phi_0}{\alpha \beta}",
         "radial": r"h^2 \frac{1}{r}\partial_r (r\, \partial_r \phi) \approx \frac{2/\alpha - 1/j}{\alpha + \beta}\, \phi_- + \frac{2/\beta + 1/j}{\alpha + \beta}\, \phi_+ - \frac{2}{\alpha \beta}\, \phi_0, \quad j \ge 1",
         "axis": r"h^2 \frac{1}{r}\partial_r (r\, \partial_r \phi)\Big|_{r = 0} \approx 4 (\phi_1 - \phi_0)",
-        "neumann": r"\phi_{-1} = \phi_1 + 2 h g: \qquad h^2 \partial_x^2 \phi \approx \frac{2 (\phi_1 - \phi_0)}{\beta^2} + \frac{2 h g}{\beta}",
-        "rhs": r"b = -\frac{h^2 \rho}{\varepsilon_0} - \sum_\text{fixed neighbours} w\, \phi_\text{fixed}",
+        "newton": r"\big(K + \mathrm{diag}(V)\, \tfrac{\rho_0 e^{-s(\phi - U_p)/T}}{T \varepsilon_0}\big)\, \delta\phi = -R(\phi), \qquad R = K\phi - V\, \frac{\rho_b + \rho_p(\phi)}{\varepsilon_0} - b",
     },
     order=2,
     assumptions=(
-        r"$\alpha$, $\beta$ the distances to the lower and upper neighbour or electrode surface in units of $h$ (1 away from electrodes); for $\alpha = \beta = 1$ the 5-point stencil",
-        r"$g$ the outward normal derivative of a Neumann face [V/m]",
-        r"the linear system solved by SuperLU (`scipy.sparse.linalg.splu`), its factorisation cached per set of fixed nodes",
+        r"patchwork's `NodalPoisson` (lumped, finite volumes; `metric='cylindrical'` in $(x, r)$, patchwork's $(r, z)$); $K$ its operator, $V$ the control volumes, $b$ the share of the fixed values",
+        r"$\alpha$, $\beta$ the distances to the lower and upper neighbour or electrode surface in units of $h$, those the mesh brackets (its `distance`, as the field uses them); Shortley--Weller rows at nodes with four cells, the cut edge's two-point flux at nodes on the domain's faces",
+        r"an initial plasma region is a body held at $U_p$ on its nodes (a cut at the node); a Dirichlet face or an electrode keeps its own nodes",
+        r"the Newton Jacobian is patchwork's operator with the reaction $\rho_0 e^{\ldots} / (T \varepsilon_0)$ (`NodalPoisson.set_reaction`), factorised by its backend",
         r"the order is in $h$, for a smooth potential away from electrode corners",
     ),
     references=("G. H. Shortley and R. Weller, J. Appl. Phys. 9, 334 (1938)",),
@@ -279,12 +304,16 @@ def _poisson_problem() -> ConvergenceProblem:
 class IonOpticsPoisson:
     """Solve ``laplace(phi) = -rho / epsilon_0`` (plus a Boltzmann plasma species) on a mesh.
 
-    ``fixed_region`` is an optional ``(nx, ny)`` mask of extra nodes held at ``fixed_potential``
-    (the initial plasma). The LU factorisation of the matrix is reused between solves
-    without plasma electrons.
+    The finite differences are patchwork's `NodalPoisson`, the ecosystem's solver (the
+    cylindrical metric in r–z), with the mesh's electrode distances. ``fixed_region``
+    is an optional ``(nx, ny)`` mask of extra nodes held at ``fixed_potential`` (the
+    initial plasma). The factorisation is reused between solves; ``backend`` is
+    patchwork's (``"lu"``, or ``"petsc"`` to distribute the solve).
     """
 
-    def __init__(self, mesh: IonOpticsMesh, reuse_jacobian: bool = True) -> None:
+    def __init__(
+        self, mesh: IonOpticsMesh, reuse_jacobian: bool = True, backend: str = "lu"
+    ) -> None:
         """Prepare the solver for ``mesh``.
 
         With ``reuse_jacobian`` Newton's method keeps its factorised Jacobian from step to
@@ -293,17 +322,24 @@ class IonOpticsPoisson:
         """
         self.mesh = mesh
         self.reuse_jacobian = bool(reuse_jacobian)
-        self._systems: dict[bytes, _System] = {}
+        self.backend = backend
+        self._fields: dict[bytes, _Field] = {}
         self.newton_iterations = 0
         #: The Jacobian factorisations of the last solve.
         self.factorisations = 0
 
-    def _system(self, fixed: np.ndarray, value: np.ndarray) -> _System:
-        """Return the (cached) linear system for a set of fixed nodes."""
-        key = np.packbits(fixed).tobytes() + value[fixed].tobytes()
-        if key not in self._systems:
-            self._systems = {key: _assemble(self.mesh, fixed, value)}
-        return self._systems[key]
+    def _field(self, region: np.ndarray | None, potential: float) -> _Field:
+        """The (cached) patchwork solver for a set of fixed nodes."""
+        key = (
+            b""
+            if region is None
+            else np.packbits(region).tobytes() + repr(potential).encode()
+        )
+        if key not in self._fields:
+            # the plain one and at most one with an initial plasma
+            self._fields = {k: v for k, v in self._fields.items() if k == b""}
+            self._fields[key] = _Field(self.mesh, region, potential, self.backend)
+        return self._fields[key]
 
     @method(
         equations={
@@ -337,59 +373,66 @@ class IonOpticsPoisson:
         solution) and stops when the largest update is below ``tolerance`` times the largest
         potential difference in the mesh.
         """
-        mesh = self.mesh
-        fixed = mesh.fixed.copy()
-        value = mesh.fixed_value.copy()
-        if fixed_region is not None:
-            extra = np.asarray(fixed_region, dtype=bool) & ~fixed
-            fixed |= extra
-            value[extra] = fixed_potential
-        system = self._system(fixed, value)
-        rhs = system.rhs_fixed.copy()
-        if rho is not None:
-            rhs -= (
-                np.asarray(rho, dtype=float).ravel()[system.free]
-                * mesh.h**2
-                / epsilon_0
-            )
-        phi = value.ravel().copy()
-        if plasma is None:
-            phi[system.free] = system.lu().solve(rhs)
-            self.newton_iterations = 0
-            return phi.reshape(mesh.shape)
-
-        if initial is None:
-            u = system.lu().solve(rhs)
+        region = None if fixed_region is None else np.asarray(fixed_region, dtype=bool)
+        field = self._field(region, float(fixed_potential))
+        solver = field.solver
+        source = (
+            np.zeros(solver.nodes.num_nodes)
+            if rho is None
+            else field.to_nodes(rho) / epsilon_0
+        )
+        if plasma is None or initial is None:
+            if (
+                field.jacobian
+            ):  # the operator holds a Newton Jacobian: the Laplacian again
+                solver.set_reaction(None)
+                field.jacobian = False
+            phi = solver.solve(source)
+            if plasma is None:
+                self.newton_iterations = 0
+                self.factorisations = 0
+                return field.to_mesh(phi)
         else:
-            u = np.asarray(initial, dtype=float).ravel()[system.free].copy()
-        amplitude = plasma.density * mesh.h**2 / epsilon_0
+            phi = field.to_nodes(initial)
+            fixed = solver.fixed
+            phi[fixed] = solver.values[fixed]
+
+        # -laplace(phi) = (rho + s rho_0 exp(-s (phi - Up) / T)) / epsilon_0 by Newton's
+        # method on patchwork's unknowns; the Jacobian adds the reaction
+        # rho_0 exp(...) / (T epsilon_0), which patchwork factorises with the operator
+        unknowns = solver.unknowns
+        u = phi[unknowns].copy()
+        base = solver.load @ source + solver.constant
+        amplitude = plasma.density / epsilon_0
         temperature = float(plasma.temperature)
         up = float(plasma.plasma_potential)
         sign = plasma.sign
+        prescribed = solver.values[solver.fixed]
         scale = max(
-            float(np.ptp(value[fixed])) if fixed.any() else 0.0, temperature, 1.0
+            float(np.ptp(prescribed)) if prescribed.size else 0.0, temperature, 1.0
         )
-        diagonal = sp.diags(np.ones(system.free.size))
         iteration = 0
         factorisations = 0
         # chord steps contract linearly, not quadratically: they stop ten times tighter
         stop = tolerance * scale * (0.1 if self.reuse_jacobian else 1.0)
-        refresh = not self.reuse_jacobian or system.jacobian_lu is None
+        refresh = not self.reuse_jacobian or not field.jacobian
         fresh = False
         previous = np.inf
         for iteration in range(1, max_newton + 1):  # noqa: B007 (counted after the loop)
-            # A u = rhs - s a exp(-s (u - Up) / T) for a species of charge sign s; the
-            # exponent is limited only to keep a bad first guess finite.
+            phi[unknowns] = u
+            # the exponent is limited only to keep a bad first guess finite
             density = amplitude * np.exp(
-                np.minimum(-sign * (u - up) / temperature, 50.0)
+                np.minimum(-sign * (phi - up) / temperature, 50.0)
             )
-            residual = system.matrix @ u - rhs + sign * density
+            residual = solver.stiffness @ u - base - solver.load @ (sign * density)
             if refresh:
-                jacobian = system.matrix - diagonal.multiply(density / temperature)
-                system.jacobian_lu = spla.splu(jacobian.tocsc())
+                solver.set_reaction(density / temperature)
+                field.jacobian = True
                 factorisations += 1
                 fresh = True
-            delta = system.jacobian_lu.solve(-residual)  # type: ignore[union-attr]
+            if solver.solver is None:  # no unknowns
+                break
+            delta = solver.solver.solve(-residual)
             size = float(np.max(np.abs(delta)))
             if self.reuse_jacobian and not fresh and not size < 0.5 * previous:
                 # a stale Jacobian that no longer contracts: redo the step with a new one
@@ -402,7 +445,7 @@ class IonOpticsPoisson:
             refresh = not self.reuse_jacobian
             fresh = False
             previous = size
+        phi[unknowns] = u
         self.newton_iterations = iteration
         self.factorisations = factorisations
-        phi[system.free] = u
-        return phi.reshape(mesh.shape)
+        return field.to_mesh(phi)

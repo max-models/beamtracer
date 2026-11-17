@@ -7,6 +7,17 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The field is solved with patchwork's `NodalPoisson`, the ecosystem's solver that picnic uses
+  too, instead of beamtracer's own finite differences: the cylindrical metric in r–z, the
+  electrodes as embedded bodies with the distances the mesh brackets, the initial plasma as a
+  body held on its nodes, and the Newton Jacobian of the Boltzmann species as patchwork's
+  reaction term (factorised by its backend, still reused as a chord method). `IonOpticsPoisson`
+  keeps its interface and takes patchwork's `backend` (`"lu"`, or `"petsc"` for a distributed
+  solve). Results are unchanged within the discretisation (the beam of IBSimu's `vlasov2d` case
+  to 1e-8, the negative-ion beamlet to 3e-6); on a Neumann face next to an electrode the
+  potential differs by up to 5e-5 of the span, where patchwork takes the cut edge's two-point
+  flux instead of a mirrored Shortley–Weller row. beamtracer now depends on `patchwork-amr`.
+
 - With MPI the ranks share the compiled tracer's electrode lookup: each samples an equal
   share of the cells next to the electrodes, and the shares are gathered (1.9 s on one rank,
   0.25-0.5 s per rank on four, for IBSimu's `vlasov2d` case at 961 x 401 nodes). The node
