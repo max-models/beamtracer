@@ -153,21 +153,20 @@ def test_cylindrical_extraction_agrees_with_the_numpy_tracer() -> None:
     _assert_same(_run(_cylindrical(), True), _run(_cylindrical(), False))
 
 
-def test_kept_trajectories_take_the_numpy_path() -> None:
-    compiled = _run(_planar(save_trajectories=7), True)
+@pytest.mark.parametrize("small", [False, True])
+def test_kept_trajectories_agree_with_the_numpy_tracer(small) -> None:
+    """The compiled tracer records the kept trajectories, growing its buffers if needed."""
+    model = BeamOptics(_planar(save_trajectories=7))
+    if small:
+        model.tracer._capacity = (1, 8)
+    compiled = model.run()
     numpy = _run(_planar(save_trajectories=7), False)
-    np.testing.assert_array_equal(compiled.state.trace.status, numpy.state.trace.status)
-    np.testing.assert_allclose(
-        compiled.state.charge_density, numpy.state.charge_density, rtol=1e-9, atol=1e-12
-    )
+    _assert_same(compiled, numpy)
     assert len(compiled.trajectories) == len(numpy.trajectories) > 0
     for a, b in zip(compiled.trajectories, numpy.trajectories, strict=True):
         np.testing.assert_allclose(a, b, rtol=1e-10, atol=1e-14)
-    for pa, pb in zip(
-        compiled.state.trace.planes, numpy.state.trace.planes, strict=True
-    ):
-        assert pa.current.size == pb.current.size
-        assert pa.current.sum() == pytest.approx(pb.current.sum(), rel=1e-12)
+    if small:
+        assert model.tracer._capacity[1] > 8
 
 
 def _well(threads: int, monkeypatch) -> tuple:
@@ -253,6 +252,8 @@ def _kernel_case(cylindrical: int, integrator: int = 0) -> list:
     )
     cells = np.full((nx - 1, ny - 1), -1, dtype=np.int64)
     cells[20, :] = np.arange(ny - 1)  # a column of cells near an electrode
+    slot = np.full(n, -1, dtype=np.int64)
+    slot[::3] = np.arange(len(slot[::3]))  # every third records its path, 30 points
     subcells = rng.choice(np.array([-2, -1, 0], dtype=np.int64), size=(ny - 1) * 64)
     return [
         np.arange(n, dtype=np.int64), x, v, np.full(n, 9.6e7), np.ones(n),
@@ -260,6 +261,7 @@ def _kernel_case(cylindrical: int, integrator: int = 0) -> list:
         np.full(n, -1, dtype=np.int64), fx, fy, 0.0, 0.0, h, (nx - 1) * h,
         (ny - 1) * h, cylindrical, integrator, 0.5, 400, cells, subcells, 8,
         np.array([5e-3, 15e-3]), np.zeros((n, 2, 3, 8)), np.zeros((n, 2), dtype=np.int64),
+        slot, np.zeros((slot.max() + 1, 30, 2)), np.zeros(slot.max() + 1, dtype=np.int64),
         2, np.zeros((2, nx, ny)),
     ]  # fmt: skip
 
@@ -270,8 +272,8 @@ def _call(function, args) -> list:
     return args
 
 
-OUTPUTS = (1, 2, 5, 6, 7, 23, 24)
-CHARGE = 26
+OUTPUTS = (1, 2, 5, 6, 7, 23, 24, 26, 27)
+CHARGE = 29
 
 
 @pytest.mark.parametrize("integrator", [0, 1])
@@ -281,6 +283,7 @@ def test_kernel_versions_agree(cylindrical, integrator) -> None:
     expected = _call(kernel.host_kernel.kernel.python, args)
     result = _call(kernel, args)
     assert set(np.unique(expected[6])) >= {-2, 0}  # stopped at surfaces and transmitted
+    assert expected[27].max() > 30  # some paths outgrow their buffer
     for i in OUTPUTS:
         np.testing.assert_allclose(result[i], expected[i], rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(
