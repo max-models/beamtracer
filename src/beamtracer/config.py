@@ -456,7 +456,9 @@ class BeamOpticsConfig:
     relaxation by Anderson's acceleration over ``anderson_depth`` previous iterations;
     ``coarse_particles < 1`` traces that share of the trajectories until the potential
     changes by less than ``coarse_tolerance`` [V], then all of them (see
-    `beamtracer.solver.vlasov_iterate`).
+    `beamtracer.solver.vlasov_iterate`). ``field_backend`` solves the field with
+    patchwork's ``"lu"`` (every MPI rank the whole mesh), ``"petsc"`` (the ranks share
+    it: Krylov with algebraic multigrid, needs petsc4py) or ``"auto"``.
     ``diagnostic_planes`` [m] record the trajectories crossing ``x = const``;
     ``save_trajectories`` keeps every n-th trajectory for plotting (0: none).
     ``tolerance`` and ``diagnostic_planes`` take Quantities or strings too, like the
@@ -487,6 +489,7 @@ class BeamOpticsConfig:
     anderson_depth: int = 5
     coarse_particles: float = 1.0
     coarse_tolerance: float = unit_field("V", 0.0)
+    field_backend: str = "lu"
     diagnostic_planes: list[float] = unit_field("m", default_factory=list)
     save_trajectories: int = 0
 
@@ -542,6 +545,10 @@ class BeamOpticsConfig:
             )
         if self.coarse_particles < 1.0 and not self.coarse_tolerance > 0.0:
             raise ValueError("coarse_particles < 1 needs a positive coarse_tolerance")
+        if self.field_backend not in ("lu", "petsc", "auto"):
+            raise ValueError(
+                f"field_backend must be 'lu', 'petsc' or 'auto', got {self.field_backend!r}"
+            )
         if self.integrator not in ("rk4", "boris"):
             raise ValueError(
                 f"integrator must be 'rk4' or 'boris', got {self.integrator!r}"

@@ -26,6 +26,7 @@ beam is known, the potential of an *initial plasma* region is fixed to ``U_p`` i
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import scope_profiler
@@ -141,6 +142,7 @@ class _Field:
         region: np.ndarray | None,
         region_potential: float,
         backend: str,
+        comm: Any = None,
     ) -> None:
         from patchwork import (
             AMRHierarchy,
@@ -159,10 +161,11 @@ class _Field:
                 base_shape=(ny - 1, nx - 1),
                 bounds=((y0, y1), (x0, x1)),
                 geometry="cylindrical",
+                comm=comm,
             )
         else:
             hierarchy = AMRHierarchy(
-                base_shape=(nx - 1, ny - 1), bounds=((x0, x1), (y0, y1))
+                base_shape=(nx - 1, ny - 1), bounds=((x0, x1), (y0, y1)), comm=comm
             )
 
         def mesh_points(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -308,11 +311,16 @@ class IonOpticsPoisson:
     cylindrical metric in r–z), with the mesh's electrode distances. ``fixed_region``
     is an optional ``(nx, ny)`` mask of extra nodes held at ``fixed_potential`` (the
     initial plasma). The factorisation is reused between solves; ``backend`` is
-    patchwork's (``"lu"``, or ``"petsc"`` to distribute the solve).
+    patchwork's: ``"lu"`` (every rank solves the whole mesh), ``"petsc"`` (with ``comm``,
+    the ranks share the mesh's rows: a Krylov method with algebraic multigrid) or ``"auto"``.
     """
 
     def __init__(
-        self, mesh: IonOpticsMesh, reuse_jacobian: bool = True, backend: str = "lu"
+        self,
+        mesh: IonOpticsMesh,
+        reuse_jacobian: bool = True,
+        backend: str = "lu",
+        comm: Any = None,
     ) -> None:
         """Prepare the solver for ``mesh``.
 
@@ -323,6 +331,8 @@ class IonOpticsPoisson:
         self.mesh = mesh
         self.reuse_jacobian = bool(reuse_jacobian)
         self.backend = backend
+        #: The communicator the solve is distributed over (``"petsc"``), or None.
+        self.comm = comm
         self._fields: dict[bytes, _Field] = {}
         self.newton_iterations = 0
         #: The Jacobian factorisations of the last solve.
@@ -338,7 +348,9 @@ class IonOpticsPoisson:
         if key not in self._fields:
             # the plain one and at most one with an initial plasma
             self._fields = {k: v for k, v in self._fields.items() if k == b""}
-            self._fields[key] = _Field(self.mesh, region, potential, self.backend)
+            self._fields[key] = _Field(
+                self.mesh, region, potential, self.backend, self.comm
+            )
         return self._fields[key]
 
     @method(

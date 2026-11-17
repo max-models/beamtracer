@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 import scope_profiler
@@ -229,6 +230,8 @@ def vlasov_iterate(
     anderson_depth: int = 5,
     coarse_particles: float = 1.0,
     coarse_tolerance: float = 0.0,
+    field_backend: str = "lu",
+    comm: Any = None,
     callback: Callable[[int, VlasovState], None] | None = None,
 ) -> VlasovState:
     """Run ``iterations`` Vlasov iterations.
@@ -238,6 +241,8 @@ def vlasov_iterate(
     ``anderson_depth`` previous iterates). With ``coarse_particles < 1`` the iterations
     trace that share of the trajectories (every ``k``-th, the current of each beam kept)
     until the potential changes by less than ``coarse_tolerance`` [V], then all of them.
+    ``field_backend`` is patchwork's backend of the field solve, distributed over
+    ``comm`` with ``"petsc"`` (`IonOpticsPoisson`).
 
     ``make_particles`` returns the beam and its ``sum J / v`` (the beams' charge density
     magnitude at their start, the density of the Boltzmann plasma species); it is called
@@ -253,7 +258,7 @@ def vlasov_iterate(
     coarse = stride > 1
     if coarse and not coarse_tolerance > 0.0:
         raise ValueError("coarse_particles < 1 needs a positive coarse_tolerance")
-    poisson = IonOpticsPoisson(mesh)
+    poisson = IonOpticsPoisson(mesh, backend=field_backend, comm=comm)
     rho = np.zeros(mesh.shape)
     potential: np.ndarray | None = None
     state: VlasovState | None = None
