@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -275,6 +275,7 @@ dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "patchwork-amr" },
     { name = "plasmacoll" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
@@ -366,6 +367,7 @@ requires-dist = [
     { name = "nbformat", marker = "extra == 'docs'", specifier = ">=5.11.1" },
     { name = "numpy" },
     { name = "opencr", marker = "extra == 'neutralizer'", git = "https://github.com/max-models/opencr?branch=devel" },
+    { name = "patchwork-amr", git = "https://github.com/max-models/patchwork?branch=claude%2Fbeamtracer-ibsimu-performance-b325h3" },
     { name = "plasma-plots", marker = "extra == 'examples'", git = "https://github.com/max-models/plasma-plots?branch=devel" },
     { name = "plasma-plots", extras = ["web"], marker = "extra == 'docs'", git = "https://github.com/max-models/plasma-plots?branch=devel" },
     { name = "plasmacoll", git = "https://github.com/max-models/plasmacoll?branch=devel" },
@@ -2536,7 +2538,7 @@ dependencies = [
 [[package]]
 name = "maybempi"
 version = "0.1.2"
-source = { git = "https://github.com/max-models/maybempi?branch=devel#0146f000137c58b84381c176e03ffd2b3e191ce7" }
+source = { git = "https://github.com/max-models/maybempi?branch=devel#2a97796e747c84c61b6db8c61e975d5c33d78902" }
 
 [[package]]
 name = "meson"
@@ -3250,6 +3252,25 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/30/4b/90c937815137d43ce71ba043cd3566221e9df6b9c805f24b5d138c9d40a7/parso-0.8.7.tar.gz", hash = "sha256:eaaac4c9fdd5e9e8852dc778d2d7405897ec510f2a298071453e5e3a07914bb1", size = 401824, upload-time = "2026-05-01T23:13:02.138Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/99/5d/8268b644392ee874ee82a635cd0df1773de230bde356c38de28e298392cc/parso-0.8.7-py2.py3-none-any.whl", hash = "sha256:a8926eb2a1b915486941fdbd31e86a4baf88fe8c210f25f2f35ecec5b574ca1c", size = 107025, upload-time = "2026-05-01T23:12:58.867Z" },
+]
+
+[[package]]
+name = "patchwork-amr"
+version = "0.2.0"
+source = { git = "https://github.com/max-models/patchwork?branch=claude%2Fbeamtracer-ibsimu-performance-b325h3#1657506f4eace05643de230f12e0c9f98cc51eb8" }
+dependencies = [
+    { name = "cunumpy" },
+    { name = "maybempi" },
+    { name = "methodcard" },
+    { name = "mpiarray" },
+    { name = "mpifield" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "scope-profiler" },
 ]
 
 [[package]]
