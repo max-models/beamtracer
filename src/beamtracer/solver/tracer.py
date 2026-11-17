@@ -1053,7 +1053,7 @@ class BeamTracer:
         try:
             if trace_trajectories_2d.selected() != "pyccel":
                 return False
-            trace_trajectories_2d.host_kernel.kernel.get("pyccel")
+            trace_trajectories_2d.host_kernel.kernel.get("pyccel")  # pyright: ignore[reportFunctionMemberAccess]
         except (ImportError, LookupError, NotImplementedError, OSError, RuntimeError):
             return False
         return True
