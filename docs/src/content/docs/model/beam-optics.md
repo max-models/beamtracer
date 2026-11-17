@@ -205,4 +205,5 @@ The examples are scripts in `beamtracer.examples` (the `examples` extra), each r
 - `beam_optics_extraction_2d`: a small planar proton extraction, the entry point;
 - `negative_ion_extraction_optics`: a round H⁻ beamlet and its electrons, with a scan of the
   extraction voltage;
-- `neutralizer_channel_2d`: a 1 MeV D⁻ beam through a beam-driven plasma neutralizer.
+- `neutralizer_channel_2d`: a 1 MeV D⁻ beam through one channel of a gas neutralizer, as in
+  ITER's injectors.

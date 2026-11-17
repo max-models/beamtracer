@@ -1,8 +1,8 @@
 r"""A neutralizer channel: the beam traced through the plasma it makes.
 
-A 1 MeV, 10 A deuterium negative-ion beam crosses one channel of a beam-driven plasma
-neutralizer, 3 m long and 10 cm wide. On the gas, and on the plasma it makes itself,
-the beam changes charge state; the plasma is a global model of the channel
+A 1 MeV, 10 A deuterium negative-ion beam crosses one channel of a gas neutralizer, 3 m
+long and 10 cm wide, as in ITER's injectors. On the gas, and on the weak plasma it makes
+there itself, the beam changes charge state; the plasma is a global model of the channel
 (`wellbalanced`), fed by the beam's stripped and secondary electrons. Alone, that
 model treats the beam as a line integral along the axis. Here the beam is traced
 instead (`beamtracer.neutralizer`): `BeamOptics` trajectories through the channel, each
@@ -19,6 +19,12 @@ beam entered (8 mrad at 10), since the wide angles are the ones lost. The cross 
 illustrative placeholders, not data
 (`wellbalanced.neutralizer.illustrative_deuterium_neutralizer`): the figures show
 what the coupled models compute, not what a neutralizer achieves.
+
+With magnetic cusps on the walls (wellbalanced's default channel), the same channel is
+the beam-driven plasma neutralizer studied for DEMO: the cusps confine the beam's plasma
+so that it strips too. Here its density rises about thirteenfold, still well below a per
+cent ionization, and the neutral fraction does not move; the gallery study compares the
+two.
 
 This example is also a study in the [max-models gallery](https://max-models.github.io/gallery/studies/neutralizer-channel/), with its cached results and what it verifies.
 
@@ -74,7 +80,8 @@ def neutralizer():
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
-        return deuterium_neutralizer(gas_inflow=GAS_INFLOW)
+        # no cusps: a gas neutralizer as in ITER (cusps make it the DEMO concept)
+        return deuterium_neutralizer(gas_inflow=GAS_INFLOW, cusp=None)
 
 
 def channel(divergence: float) -> NeutralizerChannel:
