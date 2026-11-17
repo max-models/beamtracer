@@ -1,0 +1,24 @@
+name: Pyodide
+
+# The check that beamtracer runs in the browser, as the live demo of the docs does: the wheels
+# installed in Pyodide under Node, every module imported (without mpi4py and CuPy) and the demo
+# (docs/src/components/beamtracer_demo.py) run with its defaults; with the shared workflow of
+# max-models/starlight-theme. No module is skipped: the optional dependencies (wellbalanced,
+# opencr, plotting) are imported only inside the functions that need them.
+
+on:
+  push:
+    branches: ["main", "devel"]
+  pull_request:
+    branches: ["main", "devel"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pyodide-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pyodide:
+    uses: max-models/starlight-theme/.github/workflows/pyodide.yml@v0

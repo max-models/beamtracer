@@ -24,6 +24,8 @@ jobs:
   docs:
     uses: max-models/starlight-theme/.github/workflows/docs.yml@v0
     with:
+      # the live demo (docs/src/components/beamtracer_demo.py): wheels for Pyodide
+      pyodide: true
       # one OpenMP thread for the notebooks (set for the later steps of the job)
       pre-notebooks: |
         echo "OMP_NUM_THREADS=1" >> "$GITHUB_ENV"
@@ -31,6 +33,7 @@ jobs:
       pre-build: uv run python docs/tools/examples.py
       smoke-paths: |
         getting-started/installation/index.html
+        getting-started/live-demo/index.html
         examples/index.html
         example-scripts/index.html
         example-scripts/einzel-lens-design-map/index.html
