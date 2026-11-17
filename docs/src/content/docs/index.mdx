@@ -29,7 +29,7 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 		Every trajectory carries the fractions of its particles in each charge state, on a gas or a plasma, and couples to a neutralizer model.
 	</Card>
 	<Card title="CPU and GPU kernels" icon="setting">
-		The field gather and the charge deposit as Pyccel, NumPy, CUDA and Metal kernels through cunumpy.
+		A compiled tracer that follows every trajectory from start to end on all cores (Pyccel with OpenMP) or the GPU (CUDA), and the field gather and charge deposit as Pyccel, NumPy, CUDA and Metal kernels, through cunumpy.
 	</Card>
 </CardGrid>
 

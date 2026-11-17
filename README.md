@@ -20,9 +20,10 @@ charge, repeat); `beamtracer.neutralizer` couples the traced beam to a
 global model of the plasma it makes in a neutralizer
 ([wellbalanced](https://github.com/max-models/wellbalanced)): ITER’s gas
 neutralizer, or the beam-driven plasma neutralizer with magnetic cusps
-studied for DEMO. The field gather and the charge deposit are Pyccel,
-NumPy, CUDA and Metal kernels through
-[cunumpy](https://github.com/max-models/cunumpy).
+studied for DEMO. The tracer is a compiled kernel that follows every
+trajectory from start to end (Pyccel with OpenMP threads, or CUDA), and
+the field gather and the charge deposit are Pyccel, NumPy, CUDA and
+Metal kernels, through [cunumpy](https://github.com/max-models/cunumpy).
 `beamtracer.optimization` searches over the parameters of a design
 (SciPy’s differential evolution, or a scan) in parallel processes, with
 constraints, penalised failures and a resumable record of every
