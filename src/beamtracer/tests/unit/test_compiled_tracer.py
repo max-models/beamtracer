@@ -311,8 +311,9 @@ def test_kernel_versions_agree(cylindrical, integrator, refined) -> None:
     assert expected[29].max() > 30  # some paths outgrow their buffer
     for i in OUTPUTS:
         np.testing.assert_allclose(result[i], expected[i], rtol=1e-12, atol=1e-12)
+    # summed over thread slabs whose split differs between versions: rounding only
     np.testing.assert_allclose(
-        result[CHARGE].sum(0), expected[CHARGE].sum(0), rtol=1e-12
+        result[CHARGE].sum(0), expected[CHARGE].sum(0), rtol=1e-10
     )
 
 
