@@ -452,7 +452,11 @@ class BeamOpticsConfig:
     the step estimate ``min(h / |v|, sqrt(2 h / |a|))`` per Runge--Kutta step, for at most
     ``max_steps`` steps. ``integrator`` is ``"rk4"`` (the classical Runge--Kutta
     method, four field evaluations a step) or ``"boris"`` (Boris's kick--drift--kick,
-    second order with one evaluation a step).
+    second order with one evaluation a step). ``mixing="anderson"`` replaces the
+    relaxation by Anderson's acceleration over ``anderson_depth`` previous iterations;
+    ``coarse_particles < 1`` traces that share of the trajectories until the potential
+    changes by less than ``coarse_tolerance`` [V], then all of them (see
+    `beamtracer.solver.vlasov_iterate`).
     ``diagnostic_planes`` [m] record the trajectories crossing ``x = const``;
     ``save_trajectories`` keeps every n-th trajectory for plotting (0: none).
     ``tolerance`` and ``diagnostic_planes`` take Quantities or strings too, like the
@@ -479,6 +483,10 @@ class BeamOpticsConfig:
     step_fraction: float = 0.5
     max_steps: int = 100_000
     integrator: str = "rk4"
+    mixing: str = "linear"
+    anderson_depth: int = 5
+    coarse_particles: float = 1.0
+    coarse_tolerance: float = unit_field("V", 0.0)
     diagnostic_planes: list[float] = unit_field("m", default_factory=list)
     save_trajectories: int = 0
 
@@ -522,6 +530,18 @@ class BeamOpticsConfig:
             raise ValueError(f"relaxation must be in (0, 1], got {self.relaxation}")
         if self.iterations < 1:
             raise ValueError("iterations must be at least 1")
+        if self.mixing not in ("linear", "anderson"):
+            raise ValueError(
+                f"mixing must be 'linear' or 'anderson', got {self.mixing!r}"
+            )
+        if self.anderson_depth < 1:
+            raise ValueError("anderson_depth must be at least 1")
+        if not 0.0 < self.coarse_particles <= 1.0:
+            raise ValueError(
+                f"coarse_particles must be in (0, 1], got {self.coarse_particles}"
+            )
+        if self.coarse_particles < 1.0 and not self.coarse_tolerance > 0.0:
+            raise ValueError("coarse_particles < 1 needs a positive coarse_tolerance")
         if self.integrator not in ("rk4", "boris"):
             raise ValueError(
                 f"integrator must be 'rk4' or 'boris', got {self.integrator!r}"

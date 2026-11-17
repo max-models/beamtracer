@@ -396,6 +396,10 @@ class BeamOptics:
             compensation=compensation,
             tolerance=config.tolerance,
             relaxation=config.relaxation,
+            mixing=config.mixing,
+            anderson_depth=config.anderson_depth,
+            coarse_particles=config.coarse_particles,
+            coarse_tolerance=config.coarse_tolerance,
             callback=callback,
         )
         if self._parallel:

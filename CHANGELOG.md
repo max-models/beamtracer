@@ -23,6 +23,16 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `BeamOpticsConfig(mixing="anderson")`: Anderson acceleration of the Vlasov iteration's
+  fixed point in place of the relaxation (`beamtracer.solver.AndersonMixer`, over
+  `anderson_depth` previous iterations, 5 by default). It reaches the same beam in fewer
+  iterations: 7 instead of 11 for the extraction of the tests, 19 instead of 30 for the
+  negative-ion beamlet at 8 kV, and it brings the beamlet at 5 kV, where the relaxation
+  keeps oscillating by volts, to changes of a few tenths of a volt.
+- `coarse_particles` and `coarse_tolerance`: the first iterations trace that share of the
+  trajectories (the current of each beam kept) until the potential changes by less than
+  `coarse_tolerance`, then all of them. The history records the trajectories traced per
+  iteration.
 - `BeamOpticsConfig(integrator="boris")` (and `BeamTracer(integrator=...)`): Boris's
   kick--drift--kick step, second order with one field evaluation a step against the four
   of the default `"rk4"`, in the NumPy and the compiled tracer (the field at the end of a

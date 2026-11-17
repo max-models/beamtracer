@@ -108,6 +108,55 @@ class VlasovState:
 
 @method(
     equations={
+        "anderson": r"\rho^{n+1} = \rho^n + \omega f^n - (\Delta X + \omega\, \Delta F)\, \gamma, \qquad \gamma = \arg\min_\gamma \| f^n - \Delta F \gamma \|_2, \qquad f^n = G(\rho^n) - \rho^n",
+        "differences": r"\Delta X = [\rho^{k+1} - \rho^k]_{k = n-m}^{n-1}, \qquad \Delta F = [f^{k+1} - f^k]_{k = n-m}^{n-1}",
+    },
+    assumptions=(
+        r"$G$ the map from a charge density to the deposit of the beam traced in its potential, $\omega$ = `relaxation`, $m$ = `depth` previous iterates",
+        r"Anderson's method of type II (Walker and Ni, SIAM J. Numer. Anal. 49, 2011); with no history it is the linear mixing $\rho + \omega f$",
+        r"the least-squares problem solved with a cut-off of $10^{-10}$ on the singular values, so nearly dependent differences do not blow it up",
+    ),
+)
+class AndersonMixer:
+    """Anderson acceleration of the fixed point ``rho = G(rho)`` of the Vlasov iteration.
+
+    `update` takes the density ``rho`` an iteration started from and its new deposit
+    ``G(rho)``, and returns the density of the next iteration, from the last ``depth``
+    iterates. `reset` forgets them, e.g. when ``G`` changes.
+    """
+
+    def __init__(self, depth: int = 5, relaxation: float = 1.0) -> None:
+        """Keep ``depth`` previous iterates; mix with ``relaxation``."""
+        if depth < 1:
+            raise ValueError(f"depth must be at least 1, got {depth}")
+        self.depth = int(depth)
+        self.relaxation = float(relaxation)
+        self._x: list[np.ndarray] = []
+        self._f: list[np.ndarray] = []
+
+    def reset(self) -> None:
+        """Forget the previous iterates."""
+        self._x, self._f = [], []
+
+    def update(self, rho: np.ndarray, deposit: np.ndarray) -> np.ndarray:
+        """Return the next density from ``rho`` and its deposit ``G(rho)``."""
+        x = np.asarray(rho, dtype=float).ravel()
+        f = np.asarray(deposit, dtype=float).ravel() - x
+        self._x.append(x)
+        self._f.append(f)
+        del self._x[: -self.depth - 1], self._f[: -self.depth - 1]
+        omega = self.relaxation
+        new = x + omega * f
+        if len(self._x) > 1:
+            dx = np.diff(np.array(self._x), axis=0).T
+            df = np.diff(np.array(self._f), axis=0).T
+            gamma = np.linalg.lstsq(df, f, rcond=1e-10)[0]
+            new = new - (dx + omega * df) @ gamma
+        return new.reshape(np.shape(rho))
+
+
+@method(
+    equations={
         "compensation": r"\rho_b \leftarrow (1 - f)\, \rho_b \quad \text{on the node columns } x_\mathrm{min} \le x_i \le x_\mathrm{max}",
     },
     assumptions=(
@@ -126,20 +175,39 @@ def apply_compensation(
     return rho
 
 
+def thin_particles(particles: BeamParticles, stride: int) -> BeamParticles:
+    """Every ``stride``-th trajectory of each species, its current scaled to keep the species'."""
+    keep = np.zeros(len(particles), dtype=bool)
+    scale = np.ones(len(particles))
+    for species in np.unique(particles.species):
+        index = np.flatnonzero(particles.species == species)
+        kept = index[::stride]
+        keep[kept] = True
+        total = np.abs(particles.current[index]).sum()
+        part = np.abs(particles.current[kept]).sum()
+        scale[kept] = total / part if part > 0.0 else 1.0
+    thinned = particles.subset(keep)
+    thinned.current = thinned.current * scale[keep]
+    return thinned
+
+
 @method(
     equations={
         "iteration_0": r"\phi^0 = \text{the vacuum solution, with the free nodes at } x < x_\mathrm{plasma} \text{ held at } U_p \text{ (with a plasma)}",
         "solve": r"\nabla^2 \phi^{n} = -\frac{\rho_b^{n} + \rho_p(\phi^{n})}{\varepsilon_0}, \qquad \text{Newton from } \phi^{n-1}",
         "relaxation": r"\rho_b^{n+1} = (1 - \omega)\, \rho_b^{n} + \omega\, \rho_\mathrm{new}(\phi^{n}), \qquad \rho_b^1 = \rho_\mathrm{new}(\phi^0)",
         "convergence": r"\max |\phi^{n} - \phi^{n-1}| < \text{tolerance}",
+        "coarse": r"\text{while } \max |\phi^{n} - \phi^{n-1}| \ge \text{coarse\_tolerance}: \text{ every } k\text{-th trajectory},\ I \to I\, N_s / N_{s,\mathrm{kept}}",
     },
     assumptions=(
         r"$\rho_\mathrm{new}$ the compensated deposit of the beam traced in $\phi^n$, re-seeded identically every iteration; $\omega$ = `relaxation` in $(0, 1]$ acts on the charge density, not on the potential",
         r"the Boltzmann species built once, at $n = 1$, with $\rho_0$ given or the beams' $\sum J / v_0$",
         r"at most `iterations`; an unconverged iteration returns its last state without a warning (`stats['converged']` is 0); the returned trace is that of the newest potential",
         r"with MPI every rank solves the whole field and the deposits are summed",
+        r"`mixing='anderson'` replaces the relaxation by `AndersonMixer` (from $n = 1$); the coarse phase traces every $k = \lceil 1 / \text{coarse\_particles} \rceil$-th trajectory with the current of each beam kept, and its iterations do not count as converged; the history of the mixer is dropped when it ends",
     ),
     components=(
+        "beamtracer.solver.vlasov.AndersonMixer",
         "beamtracer.solver.poisson.IonOpticsPoisson.solve",
         "beamtracer.solver.fields.StaggeredElectricField",
         "beamtracer.solver.tracer.BeamTracer.trace",
@@ -157,17 +225,34 @@ def vlasov_iterate(
     compensation: Sequence[Compensation] = (),
     tolerance: float = 0.0,
     relaxation: float = 1.0,
+    mixing: str = "linear",
+    anderson_depth: int = 5,
+    coarse_particles: float = 1.0,
+    coarse_tolerance: float = 0.0,
     callback: Callable[[int, VlasovState], None] | None = None,
 ) -> VlasovState:
     """Run ``iterations`` Vlasov iterations.
 
     Stop early when the largest potential change is below ``tolerance`` [V].
+    ``mixing`` is ``"linear"`` (``relaxation``) or ``"anderson"`` (`AndersonMixer` with
+    ``anderson_depth`` previous iterates). With ``coarse_particles < 1`` the iterations
+    trace that share of the trajectories (every ``k``-th, the current of each beam kept)
+    until the potential changes by less than ``coarse_tolerance`` [V], then all of them.
 
     ``make_particles`` returns the beam and its ``sum J / v`` (the beams' charge density
     magnitude at their start, the density of the Boltzmann plasma species); it is called
     every iteration, so every iteration starts from the same beam. ``tracer`` must already hold the field functions'
     owner: its ``electric`` attribute is replaced each iteration.
     """
+    if mixing not in ("linear", "anderson"):
+        raise ValueError(f"mixing must be 'linear' or 'anderson', got {mixing!r}")
+    if not 0.0 < coarse_particles <= 1.0:
+        raise ValueError(f"coarse_particles must be in (0, 1], got {coarse_particles}")
+    mixer = AndersonMixer(anderson_depth, relaxation) if mixing == "anderson" else None
+    stride = int(np.ceil(1.0 / coarse_particles - 1e-9))
+    coarse = stride > 1
+    if coarse and not coarse_tolerance > 0.0:
+        raise ValueError("coarse_particles < 1 needs a positive coarse_tolerance")
     poisson = IonOpticsPoisson(mesh)
     rho = np.zeros(mesh.shape)
     potential: np.ndarray | None = None
@@ -197,26 +282,34 @@ def vlasov_iterate(
         potential = new
         efield = StaggeredElectricField(mesh, potential)
         tracer.electric = efield
+        if coarse and change < coarse_tolerance:
+            coarse = False
+            if mixer is not None:
+                mixer.reset()
         particles, j_over_v = make_particles()
+        if coarse:
+            particles = thin_particles(particles, stride)
         trace = tracer.trace(particles)
         deposited = apply_compensation(mesh, trace.charge_density, compensation)
-        rho = (
-            deposited
-            if iteration == 0
-            else (1.0 - relaxation) * rho + relaxation * deposited
-        )
+        if iteration == 0:
+            rho = deposited
+        elif mixer is not None:
+            rho = mixer.update(rho, deposited)
+        else:
+            rho = (1.0 - relaxation) * rho + relaxation * deposited
         history.append(
             {
                 "iteration": iteration,
                 "max_potential_change": change,
                 "newton_iterations": poisson.newton_iterations,
                 "steps": trace.steps,
+                "trajectories": len(particles),
             }
         )
         state = VlasovState(potential, rho, efield, trace, history, boltzmann)
         if callback is not None:
             callback(iteration, state)
-        if change < tolerance:
+        if change < tolerance and not coarse:
             break
     assert state is not None
     return state
