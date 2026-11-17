@@ -406,6 +406,8 @@ class BeamOptics:
             anderson_depth=config.anderson_depth,
             coarse_particles=config.coarse_particles,
             coarse_tolerance=config.coarse_tolerance,
+            field_backend=config.field_backend,
+            comm=self.comm if self._parallel else None,
             callback=callback,
         )
         if self._parallel:
