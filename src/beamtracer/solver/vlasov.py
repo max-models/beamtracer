@@ -25,6 +25,7 @@ from beamtracer.solver.poisson import (
     BoltzmannIons,
     IonOpticsPoisson,
 )
+from beamtracer.solver.refinement import Layout, PatchedElectricField, Refinement
 from beamtracer.solver.tracer import BeamParticles, BeamTracer, TraceResult
 
 
@@ -99,12 +100,18 @@ class VlasovState:
 
     potential: np.ndarray
     charge_density: np.ndarray
-    electric: StaggeredElectricField
+    electric: StaggeredElectricField | PatchedElectricField
     trace: TraceResult
     history: list[dict[str, float]] = field(default_factory=list)
     #: The Boltzmann plasma species of the last solve (``None`` without a plasma, and in
     #: iteration 0).
     plasma: BoltzmannElectrons | BoltzmannIons | None = None
+    #: The composite nodes (base mesh and refined boxes); `potential` and
+    #: `charge_density` are their values on the base mesh.
+    layout: Layout | None = None
+    #: The potential and the charge density on the composite nodes.
+    composite_potential: np.ndarray | None = None
+    composite_charge_density: np.ndarray | None = None
 
 
 @method(
@@ -156,6 +163,17 @@ class AndersonMixer:
         return new.reshape(np.shape(rho))
 
 
+def compensate(
+    x: np.ndarray, rho: np.ndarray, compensation: Sequence[Compensation]
+) -> np.ndarray:
+    """Return ``rho`` at nodes of axial positions ``x`` with the compensation applied."""
+    rho = np.array(rho, dtype=float)
+    for region in compensation:
+        inside = (x >= region.x_min) & (x <= region.x_max)
+        rho[inside] *= 1.0 - region.fraction
+    return rho
+
+
 @method(
     equations={
         "compensation": r"\rho_b \leftarrow (1 - f)\, \rho_b \quad \text{on the node columns } x_\mathrm{min} \le x_i \le x_\mathrm{max}",
@@ -167,13 +185,8 @@ class AndersonMixer:
 def apply_compensation(
     mesh: IonOpticsMesh, rho: np.ndarray, compensation: Sequence[Compensation]
 ) -> np.ndarray:
-    """Return ``rho`` with the compensation of every region applied."""
-    rho = rho.copy()
-    x = mesh.x
-    for region in compensation:
-        inside = (x >= region.x_min) & (x <= region.x_max)
-        rho[inside, :] *= 1.0 - region.fraction
-    return rho
+    """Return ``rho`` ``(nx, ny)`` with the compensation of every region applied."""
+    return compensate(np.broadcast_to(mesh.x[:, None], mesh.shape), rho, compensation)
 
 
 def thin_particles(particles: BeamParticles, stride: int) -> BeamParticles:
@@ -232,6 +245,7 @@ def vlasov_iterate(
     coarse_tolerance: float = 0.0,
     field_backend: str = "lu",
     comm: Any = None,
+    refinement: Sequence[Refinement] = (),
     callback: Callable[[int, VlasovState], None] | None = None,
 ) -> VlasovState:
     """Run ``iterations`` Vlasov iterations.
@@ -242,7 +256,10 @@ def vlasov_iterate(
     trace that share of the trajectories (every ``k``-th, the current of each beam kept)
     until the potential changes by less than ``coarse_tolerance`` [V], then all of them.
     ``field_backend`` is patchwork's backend of the field solve, distributed over
-    ``comm`` with ``"petsc"`` (`IonOpticsPoisson`).
+    ``comm`` with ``"petsc"`` (`IonOpticsPoisson`). ``refinement`` are boxes of finer
+    cells: the field is solved on the composite mesh and the trajectories step and deposit
+    on the finest box they are in; the state's potential and charge density are then those
+    of the base mesh, the composite ones beside them.
 
     ``make_particles`` returns the beam and its ``sum J / v`` (the beams' charge density
     magnitude at their start, the density of the Boltzmann plasma species); it is called
@@ -258,8 +275,16 @@ def vlasov_iterate(
     coarse = stride > 1
     if coarse and not coarse_tolerance > 0.0:
         raise ValueError("coarse_particles < 1 needs a positive coarse_tolerance")
-    poisson = IonOpticsPoisson(mesh, backend=field_backend, comm=comm)
-    rho = np.zeros(mesh.shape)
+    poisson = IonOpticsPoisson(
+        mesh, backend=field_backend, comm=comm, refinement=refinement
+    )
+    layout = poisson.layout
+    rho = np.zeros(layout.size)
+
+    def initial_plasma(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+        assert plasma is not None
+        return x < plasma.initial_plasma_x
+
     potential: np.ndarray | None = None
     state: VlasovState | None = None
     history: list[dict[str, float]] = []
@@ -267,10 +292,9 @@ def vlasov_iterate(
     j_over_v: float | None = None
     for iteration in range(iterations):
         if plasma is not None and iteration == 0:
-            xn, _ = mesh.nodes()
             new = poisson.solve(
                 rho,
-                fixed_region=xn < plasma.initial_plasma_x,
+                fixed_region=initial_plasma,
                 fixed_potential=plasma.plasma_potential,
             )
         else:
@@ -285,7 +309,7 @@ def vlasov_iterate(
             else float(np.max(np.abs(new - potential)))
         )
         potential = new
-        efield = StaggeredElectricField(mesh, potential)
+        efield = PatchedElectricField(layout, potential)
         tracer.electric = efield
         if coarse and change < coarse_tolerance:
             coarse = False
@@ -295,7 +319,7 @@ def vlasov_iterate(
         if coarse:
             particles = thin_particles(particles, stride)
         trace = tracer.trace(particles)
-        deposited = apply_compensation(mesh, trace.charge_density, compensation)
+        deposited = compensate(layout.x, trace.charge_density, compensation)
         if iteration == 0:
             rho = deposited
         elif mixer is not None:
@@ -311,7 +335,17 @@ def vlasov_iterate(
                 "trajectories": len(particles),
             }
         )
-        state = VlasovState(potential, rho, efield, trace, history, boltzmann)
+        state = VlasovState(
+            layout.on_base(potential),
+            layout.on_base(rho),
+            efield,
+            trace,
+            history,
+            boltzmann,
+            layout,
+            potential,
+            rho,
+        )
         if callback is not None:
             callback(iteration, state)
         if change < tolerance and not coarse:

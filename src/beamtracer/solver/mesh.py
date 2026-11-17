@@ -90,6 +90,8 @@ class IonOpticsMesh:
     geometry: str = "cylindrical"
     electrodes: Sequence[Electrode] = ()
     faces: dict[str, FaceCondition] = field(default_factory=dict)
+    #: A refined box of a larger mesh: a cylindrical one need not start on the axis.
+    patch: bool = False
 
     def _neighbour_solid(self, axis: int, step: int) -> np.ndarray:
         """Return the electrode index of the neighbour of every node in one direction."""
@@ -199,7 +201,7 @@ class IonOpticsMesh:
         unknown = set(self.faces) - set(FACES)
         if unknown:
             raise ValueError(f"unknown faces {sorted(unknown)}")
-        if self.cylindrical:
+        if self.cylindrical and not self.patch:
             if abs(self.origin[1]) > 1e-12 * max(1.0, self.h):
                 raise ValueError("a cylindrical mesh must start on the axis (r = 0)")
             if self.faces["y_min"] != FaceCondition("neumann", 0.0):

@@ -245,11 +245,26 @@ def test_compiled_needs_the_solved_field_alone() -> None:
     assert tracer.trace(particles).status[0] == 0
 
 
-def _kernel_case(cylindrical: int, integrator: int = 0) -> list:
+def _kernel_case(cylindrical: int, integrator: int = 0, refined: bool = False) -> list:
+    """Random fields on the mesh (and, ``refined``, a box of half the spacing)."""
     rng = np.random.default_rng(7)
     n, nx, ny, h = 40, 30, 12, 1e-3
-    fx = rng.normal(size=(nx + 1, ny)) * 1e4 + 3e5
-    fy = rng.normal(size=(nx, ny + 1)) * 1e4
+    # (nx, ny, origin_x, origin_y, h) of every patch, finest first, the mesh last
+    shapes = [(nx, ny, 0.0, 0.0, h)]
+    if refined:
+        shapes.insert(0, (25, 13, 8e-3, 0.0, h / 2))
+    fxs, fys, patch_int, patch_real = [], [], [], []
+    fx_offset = fy_offset = node_offset = 0
+    for pnx, pny, ox, oy, ph in shapes:
+        fxs.append((rng.normal(size=(pnx + 1, pny)) * 1e4 + 3e5).ravel())
+        fys.append((rng.normal(size=(pnx, pny + 1)) * 1e4).ravel())
+        patch_int.append((pnx, pny, fx_offset, fy_offset, pnx * pny, node_offset))
+        patch_real.append(
+            (ox, oy, ph, ox, oy, ox + (pnx - 1) * ph, oy + (pny - 1) * ph)
+        )
+        fx_offset += fxs[-1].size
+        fy_offset += fys[-1].size
+        node_offset += pnx * pny
     x = np.stack([rng.uniform(0, 3e-3, n), rng.uniform(0, 8e-3, n), np.zeros(n)])
     v = np.stack(
         [
@@ -266,11 +281,12 @@ def _kernel_case(cylindrical: int, integrator: int = 0) -> list:
     return [
         np.arange(n, dtype=np.int64), x, v, np.full(n, 9.6e7), np.ones(n),
         np.zeros(n, dtype=np.int64), np.full(n, -1, dtype=np.int64),
-        np.full(n, -1, dtype=np.int64), fx, fy, 0.0, 0.0, h, (nx - 1) * h,
-        (ny - 1) * h, cylindrical, integrator, 0.5, 400, cells, subcells, 8,
+        np.full(n, -1, dtype=np.int64), np.concatenate(fxs), np.concatenate(fys),
+        np.array(patch_int, dtype=np.int64), np.array(patch_real), 0.0, 0.0, h,
+        (nx - 1) * h, (ny - 1) * h, cylindrical, integrator, 0.5, 400, cells, subcells, 8,
         np.array([5e-3, 15e-3]), np.zeros((n, 2, 3, 8)), np.zeros((n, 2), dtype=np.int64),
         slot, np.zeros((slot.max() + 1, 30, 2)), np.zeros(slot.max() + 1, dtype=np.int64),
-        2, np.zeros((2, nx, ny)),
+        2, np.zeros((2, node_offset)),
     ]  # fmt: skip
 
 
@@ -280,18 +296,19 @@ def _call(function, args) -> list:
     return args
 
 
-OUTPUTS = (1, 2, 5, 6, 7, 23, 24, 26, 27)
-CHARGE = 29
+OUTPUTS = (1, 2, 5, 6, 7, 25, 26, 28, 29)
+CHARGE = 31
 
 
+@pytest.mark.parametrize("refined", [False, True])
 @pytest.mark.parametrize("integrator", [0, 1])
 @pytest.mark.parametrize("cylindrical", [0, 1])
-def test_kernel_versions_agree(cylindrical, integrator) -> None:
-    args = _kernel_case(cylindrical, integrator)
+def test_kernel_versions_agree(cylindrical, integrator, refined) -> None:
+    args = _kernel_case(cylindrical, integrator, refined)
     expected = _call(kernel.host_kernel.kernel.python, args)
     result = _call(kernel, args)
     assert set(np.unique(expected[6])) >= {-2, 0}  # stopped at surfaces and transmitted
-    assert expected[27].max() > 30  # some paths outgrow their buffer
+    assert expected[29].max() > 30  # some paths outgrow their buffer
     for i in OUTPUTS:
         np.testing.assert_allclose(result[i], expected[i], rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(
@@ -300,10 +317,11 @@ def test_kernel_versions_agree(cylindrical, integrator) -> None:
 
 
 @pytest.mark.skipif(emulation_compiler() is None, reason="no C++ compiler")
+@pytest.mark.parametrize("refined", [False, True])
 @pytest.mark.parametrize("integrator", [0, 1])
 @pytest.mark.parametrize("cylindrical", [0, 1])
-def test_cuda_version_agrees(cylindrical, integrator) -> None:
-    args = _kernel_case(cylindrical, integrator)
+def test_cuda_version_agrees(cylindrical, integrator, refined) -> None:
+    args = _kernel_case(cylindrical, integrator, refined)
     expected = _call(kernel.host_kernel.kernel.python, args)
     result = [a.copy() if isinstance(a, np.ndarray) else a for a in args]
     result[CHARGE] = np.zeros_like(result[CHARGE][:1])  # the GPU deposits into one slab

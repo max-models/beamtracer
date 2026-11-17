@@ -25,6 +25,7 @@ beam is known, the potential of an *initial plasma* region is fixed to ``U_p`` i
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,6 +36,7 @@ from scipy.constants import epsilon_0
 
 from beamtracer._profiling import PROFILE_TAGS
 from beamtracer.solver.mesh import IonOpticsMesh
+from beamtracer.solver.refinement import Layout, Refinement, layout_of, patches_of
 
 
 @dataclass(frozen=True)
@@ -130,19 +132,21 @@ _FACES = {
 
 
 class _Field:
-    """The patchwork `NodalPoisson` of an `IonOpticsMesh`, and its node numbering.
+    """The patchwork `NodalPoisson` of an `IonOpticsMesh` and its refined boxes.
 
     In cylindrical geometry patchwork's hierarchy is the ``(r, x)`` plane: its points are
-    ``(r, x)`` where the mesh's are ``(x, r)``.
+    ``(r, x)`` where the mesh's are ``(x, r)``. ``region`` (the initial plasma) is a mask
+    of the mesh's nodes (without refinement) or a function of ``(x, y)``.
     """
 
     def __init__(
         self,
         mesh: IonOpticsMesh,
-        region: np.ndarray | None,
+        region: Any,
         region_potential: float,
         backend: str,
         comm: Any = None,
+        refinement: Sequence[Refinement] = (),
     ) -> None:
         from patchwork import (
             AMRHierarchy,
@@ -167,51 +171,88 @@ class _Field:
             hierarchy = AMRHierarchy(
                 base_shape=(nx - 1, ny - 1), bounds=((x0, x1), (y0, y1)), comm=comm
             )
+        patches = patches_of(mesh, refinement)
+        for patch in patches[1:]:
+            box = (patch.box[1], patch.box[0]) if cylindrical else patch.box
+            hierarchy.add_patch(level=patch.level, box=box)
 
         def mesh_points(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
             """The mesh's ``(x, y)`` of patchwork's points."""
             return (points[1], points[0]) if cylindrical else (points[0], points[1])
 
-        def indices(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-            x, y = mesh_points(points)
-            return (
-                np.rint((x - x0) / mesh.h).astype(np.int64),
-                np.rint((y - y0) / mesh.h).astype(np.int64),
-            )
-
         def fraction(start: np.ndarray, end: np.ndarray) -> np.ndarray:
-            """The mesh's bracketed distance from a node to the surface towards ``end``."""
-            i, j = indices(start)
-            ie, je = indices(end)
-            direction = np.where(ie < i, 0, np.where(ie > i, 1, np.where(je < j, 2, 3)))
-            return mesh.distance[direction, i, j]
+            """The bracketed distance from a node to the surface towards ``end``.
+
+            From the mesh of the patch, of the edge's level, that holds the node: the
+            distances the field takes too.
+            """
+            xs, ys = mesh_points(start)
+            xe, ye = mesh_points(end)
+            dx, dy = xe - xs, ye - ys
+            length = np.maximum(np.abs(dx), np.abs(dy))
+            level = np.rint(np.log2(mesh.h / length)).astype(np.int64)
+            direction = np.where(
+                np.abs(dx) >= np.abs(dy),
+                np.where(dx < 0, 0, 1),
+                np.where(dy < 0, 2, 3),
+            )
+            out = np.ones(xs.size)
+            done = np.zeros(xs.size, dtype=bool)
+            for patch in reversed(patches):
+                px0, py0, px1, py1 = patch.bounds
+                h = patch.mesh.h
+                tiny = 1e-9 * h
+                mine = (
+                    ~done
+                    & (level == patch.level)
+                    & (xs >= px0 - tiny)
+                    & (xs <= px1 + tiny)
+                    & (ys >= py0 - tiny)
+                    & (ys <= py1 + tiny)
+                )
+                if mine.any():
+                    i = np.rint((xs[mine] - px0) / h).astype(np.int64)
+                    j = np.rint((ys[mine] - py0) / h).astype(np.int64)
+                    out[mine] = patch.mesh.distance[direction[mine], i, j]
+                    done |= mine
+            return out
 
         faces = {}
         for face, name in _FACES[cylindrical].items():
             condition = mesh.faces[face]
-            if condition.kind == "dirichlet":
-                value = condition.value
-                faces[name] = Dirichlet(
-                    (lambda *p, c=condition: c.evaluate(*mesh_points(np.array(p))))
-                    if callable(value)
-                    else float(value)
-                )
-            else:
-                value = condition.value
-                faces[name] = Neumann(
-                    (lambda *p, c=condition: c.evaluate(*mesh_points(np.array(p))))
-                    if callable(value)
-                    else float(value)
-                )
+            value = condition.value
+            given = (
+                (lambda *p, c=condition: c.evaluate(*mesh_points(np.array(p))))
+                if callable(value)
+                else float(value)
+            )
+            faces[name] = (
+                Dirichlet(given) if condition.kind == "dirichlet" else Neumann(given)
+            )
         bodies = []
         if region is not None:
             # the initial plasma: nodes held at its potential, where no electrode or
             # Dirichlet face fixes them, with the stencil of fixed nodes (fraction 1)
-            held = region & ~mesh.fixed
+            dirichlet = [f for f, c in mesh.faces.items() if c.kind == "dirichlet"]
 
             def in_region(points: np.ndarray) -> np.ndarray:
-                i, j = indices(points)
-                return held[i, j]
+                x, y = mesh_points(points)
+                if not callable(region):
+                    held = np.asarray(region, dtype=bool) & ~mesh.fixed
+                    i = np.rint((x - x0) / mesh.h).astype(np.int64)
+                    j = np.rint((y - y0) / mesh.h).astype(np.int64)
+                    return held[i, j]
+                inside = np.asarray(region(x, y), dtype=bool).copy()
+                tiny = 1e-9 * mesh.h
+                on_face = {
+                    "x_min": x <= x0 + tiny,
+                    "x_max": x >= x1 - tiny,
+                    "y_min": y <= y0 + tiny,
+                    "y_max": y >= y1 - tiny,
+                }
+                for face in dirichlet:
+                    inside &= ~on_face[face]
+                return inside
 
             bodies.append(
                 EmbeddedDirichlet(
@@ -239,25 +280,18 @@ class _Field:
             metric="cylindrical" if cylindrical else "cartesian",
             min_fraction=1.0 / 255.0,
         )
-        lattice = self.solver.nodes.lattice
-        i, j = (
-            (lattice[:, 1], lattice[:, 0])
-            if cylindrical
-            else (lattice[:, 0], lattice[:, 1])
-        )
-        #: The mesh's flat index of every patchwork node.
-        self.index = i * ny + j
+        #: The patches and the composite nodes.
+        self.layout = layout_of(mesh, patches, self.solver.nodes)
+        nodes = self.solver.nodes
+        #: The hanging nodes (on coarse–fine edges) and their interpolation.
+        self.hanging = np.flatnonzero(nodes.hanging)
+        self.hang = nodes.reduction[self.hanging].tocsr()
         self.jacobian = False
 
-    def to_nodes(self, array: np.ndarray) -> np.ndarray:
-        """Patchwork's node values of an ``(nx, ny)`` array."""
-        return np.asarray(array, dtype=float).ravel()[self.index]
-
-    def to_mesh(self, values: np.ndarray) -> np.ndarray:
-        """The ``(nx, ny)`` array of patchwork's node values."""
-        out = np.empty(self.mesh.shape[0] * self.mesh.shape[1])
-        out[self.index] = values
-        return out.reshape(self.mesh.shape)
+    def fill_hanging(self, phi: np.ndarray) -> None:
+        """Interpolate the hanging nodes of ``phi`` from the nodes they hang from."""
+        if self.hanging.size:
+            phi[self.hanging] = self.hang @ phi
 
 
 def _poisson_problem() -> ConvergenceProblem:
@@ -308,9 +342,10 @@ class IonOpticsPoisson:
     """Solve ``laplace(phi) = -rho / epsilon_0`` (plus a Boltzmann plasma species) on a mesh.
 
     The finite differences are patchwork's `NodalPoisson`, the ecosystem's solver (the
-    cylindrical metric in r–z), with the mesh's electrode distances. ``fixed_region``
-    is an optional ``(nx, ny)`` mask of extra nodes held at ``fixed_potential`` (the
-    initial plasma). The factorisation is reused between solves; ``backend`` is
+    cylindrical metric in r–z), with the mesh's electrode distances, on the base mesh and
+    the boxes of ``refinement`` (patchwork's composite mesh, `layout`). ``fixed_region``
+    is an optional mask of extra nodes held at ``fixed_potential`` (the initial plasma), or
+    a function of ``(x, y)``. The factorisation is reused between solves; ``backend`` is
     patchwork's: ``"lu"`` (every rank solves the whole mesh), ``"petsc"`` (with ``comm``,
     the ranks share the mesh's rows: a Krylov method with algebraic multigrid) or ``"auto"``.
     """
@@ -321,6 +356,7 @@ class IonOpticsPoisson:
         reuse_jacobian: bool = True,
         backend: str = "lu",
         comm: Any = None,
+        refinement: Sequence[Refinement] = (),
     ) -> None:
         """Prepare the solver for ``mesh``.
 
@@ -333,25 +369,32 @@ class IonOpticsPoisson:
         self.backend = backend
         #: The communicator the solve is distributed over (``"petsc"``), or None.
         self.comm = comm
-        self._fields: dict[bytes, _Field] = {}
+        self.refinement = tuple(refinement)
+        self._fields: dict[object, _Field] = {}
         self.newton_iterations = 0
         #: The Jacobian factorisations of the last solve.
         self.factorisations = 0
 
-    def _field(self, region: np.ndarray | None, potential: float) -> _Field:
+    def _field(self, region: Any, potential: float) -> _Field:
         """The (cached) patchwork solver for a set of fixed nodes."""
-        key = (
-            b""
-            if region is None
-            else np.packbits(region).tobytes() + repr(potential).encode()
-        )
+        if region is None:
+            key: object = b""
+        elif callable(region):
+            key = (id(region), potential)
+        else:
+            key = np.packbits(region).tobytes() + repr(potential).encode()
         if key not in self._fields:
             # the plain one and at most one with an initial plasma
             self._fields = {k: v for k, v in self._fields.items() if k == b""}
             self._fields[key] = _Field(
-                self.mesh, region, potential, self.backend, self.comm
+                self.mesh, region, potential, self.backend, self.comm, self.refinement
             )
         return self._fields[key]
+
+    @property
+    def layout(self) -> Layout:
+        """The patches and the composite nodes the potential lives on."""
+        return self._field(None, 0.0).layout
 
     @method(
         equations={
@@ -373,26 +416,40 @@ class IonOpticsPoisson:
         rho: np.ndarray | None = None,
         *,
         plasma: BoltzmannElectrons | BoltzmannIons | None = None,
-        fixed_region: np.ndarray | None = None,
+        fixed_region: np.ndarray | Callable | None = None,
         fixed_potential: float = 0.0,
         initial: np.ndarray | None = None,
         tolerance: float = 1.0e-6,
         max_newton: int = 100,
     ) -> np.ndarray:
-        """Return the potential ``(nx, ny)`` for the charge density ``rho`` [C/m^3].
+        """Return the potential for the charge density ``rho`` [C/m^3].
 
-        With ``plasma``, Newton's method starts from ``initial`` (default: the vacuum
-        solution) and stops when the largest update is below ``tolerance`` times the largest
+        ``rho``, ``initial`` and the result are ``(nx, ny)`` arrays of the mesh's nodes, or
+        arrays over the composite nodes of `layout` (with refinement they must be). With
+        ``plasma``, Newton's method starts from ``initial`` (default: the vacuum solution)
+        and stops when the largest update is below ``tolerance`` times the largest
         potential difference in the mesh.
         """
-        region = None if fixed_region is None else np.asarray(fixed_region, dtype=bool)
+        region: Any = (
+            fixed_region
+            if fixed_region is None or callable(fixed_region)
+            else np.asarray(fixed_region, dtype=bool)
+        )
         field = self._field(region, float(fixed_potential))
         solver = field.solver
-        source = (
-            np.zeros(solver.nodes.num_nodes)
-            if rho is None
-            else field.to_nodes(rho) / epsilon_0
-        )
+        layout = field.layout
+        on_mesh = rho is not None and np.shape(rho) == self.mesh.shape
+        if initial is not None and np.shape(initial) == self.mesh.shape:
+            on_mesh = True
+            initial = layout.from_base(initial)
+        if rho is None:
+            source = np.zeros(solver.nodes.num_nodes)
+        elif on_mesh:
+            source = layout.from_base(rho) / epsilon_0
+        else:
+            source = np.asarray(rho, dtype=float) / epsilon_0
+        if rho is None and not layout.refined:
+            on_mesh = True
         if plasma is None or initial is None:
             if (
                 field.jacobian
@@ -403,9 +460,9 @@ class IonOpticsPoisson:
             if plasma is None:
                 self.newton_iterations = 0
                 self.factorisations = 0
-                return field.to_mesh(phi)
+                return layout.on_base(phi) if on_mesh else phi
         else:
-            phi = field.to_nodes(initial)
+            phi = np.array(initial, dtype=float)
             fixed = solver.fixed
             phi[fixed] = solver.values[fixed]
 
@@ -432,6 +489,7 @@ class IonOpticsPoisson:
         previous = np.inf
         for iteration in range(1, max_newton + 1):  # noqa: B007 (counted after the loop)
             phi[unknowns] = u
+            field.fill_hanging(phi)
             # the exponent is limited only to keep a bad first guess finite
             density = amplitude * np.exp(
                 np.minimum(-sign * (phi - up) / temperature, 50.0)
@@ -458,6 +516,7 @@ class IonOpticsPoisson:
             fresh = False
             previous = size
         phi[unknowns] = u
+        field.fill_hanging(phi)
         self.newton_iterations = iteration
         self.factorisations = factorisations
-        return field.to_mesh(phi)
+        return layout.on_base(phi) if on_mesh else phi

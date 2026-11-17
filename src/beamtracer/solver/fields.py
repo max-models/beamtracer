@@ -6,6 +6,7 @@ A staggered electric field and an axisymmetric magnetic field from its on-axis p
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 from methodcard import ConvergenceProblem, Rule, method
@@ -338,9 +339,7 @@ def _node_component(
     ),
     components=("beamtracer.solver.fields.StaggeredElectricField",),
 )
-def surface_field(
-    mesh: IonOpticsMesh, field: StaggeredElectricField
-) -> tuple[np.ndarray, np.ndarray]:
+def surface_field(mesh: IonOpticsMesh, field: Any) -> tuple[np.ndarray, np.ndarray]:
     """Return ``|E|`` [V/m] at the free nodes next to an electrode, and that electrode.
 
     Both arrays have the mesh shape. At a free node with an electrode neighbour along an
@@ -349,7 +348,8 @@ def surface_field(
     mean of the node's two edges. ``|E|`` is ``NaN`` and the electrode index ``-1`` away
     from the electrodes. At a sharp corner of an electrode the field is singular and this
     value grows as the mesh is refined, so round the edges of electrodes whose surface
-    field matters.
+    field matters. ``field`` is a `StaggeredElectricField` of ``mesh`` (or a field with
+    its ``fx`` and ``fy``, as `PatchedElectricField` has those of the base mesh).
     """
     # the electrode index of the neighbour at -x, +x, -y, +y (-1: none)
     neighbours = [

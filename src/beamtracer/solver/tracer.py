@@ -16,6 +16,7 @@ import functools
 import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 import scope_profiler
@@ -28,6 +29,7 @@ from beamtracer.kernels.trace_trajectories_2d import kernel as trace_trajectorie
 from beamtracer.solver.charge_changing import ChargeChanging, ChargeTallies
 from beamtracer.solver.fields import StaggeredElectricField
 from beamtracer.solver.mesh import IonOpticsMesh
+from beamtracer.solver.refinement import Layout, PatchedElectricField
 
 #: Status of a finished trajectory.
 TRANSMITTED, BACKWARD, WALL, ELECTRODE, MAX_STEPS = 0, 1, 2, 3, 4
@@ -280,7 +282,9 @@ class PlaneHits:
 class TraceResult:
     """The outcome of tracing a set of particles."""
 
-    charge_density: np.ndarray
+    #: The charge density on the mesh's nodes or, with refinement, on the composite
+    #: nodes (node charges, or the per-patch ones, until the trace finalizes them).
+    charge_density: Any
     status: np.ndarray
     electrode: np.ndarray
     planes: list[PlaneHits]
@@ -541,8 +545,16 @@ class BeamTracer:
         )
         return self._electrode_cells[i, j]
 
+    def _layout(self) -> Layout | None:
+        """The composite nodes of the field's patches, or None for a field of the mesh."""
+        field = self.electric
+        return field.layout if isinstance(field, PatchedElectricField) else None
+
     def _finalize(self, charge: np.ndarray) -> np.ndarray:
-        """Divide the node charges by the node volumes."""
+        """Divide the node charges by the node volumes (the composite ones if refined)."""
+        layout = self._layout()
+        if layout is not None:
+            return charge / layout.volumes
         mesh = self.mesh
         h = mesh.h
         density = charge.copy()
@@ -624,35 +636,63 @@ class BeamTracer:
                 )
         return np.clip(share, 0.0, 1.0)
 
-    @scope_profiler.profile("beamtracer.deposit", tags=PROFILE_TAGS)
-    def _deposit(self, charge: np.ndarray, points: np.ndarray, q: np.ndarray) -> None:
-        """Add charges ``q`` at ``points`` to the node charges ``(nx, ny)``.
+    def _new_charge(self) -> np.ndarray | list[np.ndarray]:
+        """Zero node charges: ``(nx, ny)``, or one array per patch."""
+        field = self.electric
+        if isinstance(field, PatchedElectricField):
+            return [np.zeros(patch.mesh.shape) for patch in field.patches]
+        return np.zeros(self.mesh.shape)
 
-        With an area-weighted linear shape.
+    def _spacing(self, x: np.ndarray) -> np.ndarray | float:
+        """The node spacing at Cartesian points: the finest patch's, or the mesh's."""
+        field = self.electric
+        if isinstance(field, PatchedElectricField):
+            return field.spacing(*self._project(x))
+        return self.mesh.h
+
+    @scope_profiler.profile("beamtracer.deposit", tags=PROFILE_TAGS)
+    def _deposit(
+        self, charge: np.ndarray | list[np.ndarray], points: np.ndarray, q: np.ndarray
+    ) -> None:
+        """Add charges ``q`` at ``points`` to the node charges.
+
+        With an area-weighted linear shape, on the mesh ``(nx, ny)`` or, with patches, on
+        the finest patch at each point.
         """
         if not len(q):
             return
-        mesh = self.mesh
         px, py = self._project(points)
-        deposit_trajectories_2d(
-            np.ascontiguousarray(px),
-            np.ascontiguousarray(py),
-            np.ascontiguousarray(q, dtype=float),
-            *map(float, mesh.origin),
-            mesh.h,
-            int(mesh.cylindrical),
-            charge,
-        )
+        q = np.asarray(q, dtype=float)
+        if isinstance(charge, list):
+            field = self.electric
+            assert isinstance(field, PatchedElectricField)
+            which = field.patch_of(px, py)
+            parts = [
+                (patch.mesh, charge[k], which == k)
+                for k, patch in enumerate(field.patches)
+            ]
+        else:
+            parts = [(self.mesh, charge, slice(None))]
+        for mesh, target, mine in parts:
+            if isinstance(mine, np.ndarray) and not mine.any():
+                continue
+            deposit_trajectories_2d(
+                np.ascontiguousarray(px[mine]),
+                np.ascontiguousarray(py[mine]),
+                np.ascontiguousarray(q[mine]),
+                *map(float, mesh.origin),
+                mesh.h,
+                int(mesh.cylindrical),
+                target,
+            )
 
     def _trace_numpy(self, particles: BeamParticles, save_every: int) -> TraceResult:
         """Trace with NumPy, all trajectories a step at a time; the charges per node."""
         mesh = self.mesh
-        nx, ny = mesh.shape
-        h = mesh.h
         x0, y0 = mesh.origin
         x1, y1 = mesh.upper
         n = len(particles)
-        charge = np.zeros((nx, ny))
+        charge = self._new_charge()
         status = np.full(n, MAX_STEPS, dtype=np.int8)
         electrode = np.full(n, -1, dtype=np.int32)
         planes = [PlaneHits(p) for p in self.planes]
@@ -714,9 +754,10 @@ class BeamTracer:
             a = self.acceleration(x, v, qm[index])
             speed = np.linalg.norm(v, axis=0)
             accel = np.linalg.norm(a, axis=0)
+            spacing = self._spacing(x)
             with np.errstate(divide="ignore"):
-                dt = np.minimum(h / speed, np.sqrt(2.0 * h / accel))
-            dt = self.step_fraction * np.where(np.isfinite(dt), dt, h)
+                dt = np.minimum(spacing / speed, np.sqrt(2.0 * spacing / accel))
+            dt = self.step_fraction * np.where(np.isfinite(dt), dt, spacing)
             advance = self._rk4 if self.integrator == "rk4" else self._boris
             x_new, v_new = advance(x, v, a, dt, qm[index])
 
@@ -847,7 +888,9 @@ class BeamTracer:
         if self.compiled is False:
             return False
         reasons = []
-        if not isinstance(self.electric, StaggeredElectricField):
+        if not isinstance(
+            self.electric, (StaggeredElectricField, PatchedElectricField)
+        ):
             reasons.append("the electric field is not a StaggeredElectricField")
         if self.magnetic is not None:
             reasons.append("it has no magnetic field")
@@ -912,6 +955,44 @@ class BeamTracer:
             self._lookup = (cells, subcells.ravel())
         return self._lookup
 
+    def _patch_arrays(self) -> tuple:
+        """The patches of the field for the compiled tracer, finest first.
+
+        Their edge fields flattened one after the other, ``patch_int`` ``(P, 6)`` their
+        node counts and the offsets of their ``fx``, ``fy`` and node charges (and the node
+        count), ``patch_real`` ``(P, 7)`` their origin, spacing and node extent.
+        """
+        field = self.electric
+        if isinstance(field, PatchedElectricField):
+            fields = field.fields[::-1]
+            meshes = [
+                patch.field_mesh if patch.field_mesh is not None else patch.mesh
+                for patch in field.patches
+            ][::-1]
+            boxes = [patch.bounds for patch in field.patches][::-1]
+        else:
+            assert isinstance(field, StaggeredElectricField)
+            fields, meshes = [field], [self.mesh]
+            (bx0, by0), (bx1, by1) = self.mesh.origin, self.mesh.upper
+            boxes = [(bx0, by0, bx1, by1)]
+        patch_int = np.zeros((len(fields), 6), dtype=np.int64)
+        patch_real = np.zeros((len(fields), 7))
+        fx_offset = fy_offset = node_offset = 0
+        for k, (f, m, box) in enumerate(zip(fields, meshes, boxes, strict=True)):
+            nxp, nyp = m.shape
+            patch_int[k] = (nxp, nyp, fx_offset, fy_offset, nxp * nyp, node_offset)
+            fx_offset += f.fx.size
+            fy_offset += f.fy.size
+            node_offset += nxp * nyp
+            patch_real[k] = (*m.origin, m.h, *box)
+        fxs = np.concatenate(
+            [np.ascontiguousarray(f.fx, dtype=float).ravel() for f in fields]
+        )
+        fys = np.concatenate(
+            [np.ascontiguousarray(f.fy, dtype=float).ravel() for f in fields]
+        )
+        return fields, meshes, fxs, fys, patch_int, patch_real
+
     @scope_profiler.profile("beamtracer.trace_compiled", tags=PROFILE_TAGS)
     def _trace_compiled(self, particles: BeamParticles) -> TraceResult:
         """Trace with the compiled kernel, every trajectory from start to end; the node charges.
@@ -946,9 +1027,7 @@ class BeamTracer:
         path_slot[saved_ids] = np.arange(saved_ids.size)
         first = self._project(x[:, saved_ids])
 
-        assert isinstance(self.electric, StaggeredElectricField)
-        fx = np.ascontiguousarray(self.electric.fx, dtype=float)
-        fy = np.ascontiguousarray(self.electric.fy, dtype=float)
+        fields, meshes, fxs, fys, patch_int, patch_real = self._patch_arrays()
         cells, subcells = self._electrode_lookup()
         # without planes one that is never crossed (NaN)
         planes = np.array(self.planes or (np.nan,), dtype=float)
@@ -956,7 +1035,7 @@ class BeamTracer:
         initial = (x.copy(), v.copy(), status.copy(), electrode.copy())
         while True:
             capacity, path_capacity = self._capacity
-            charge = np.zeros((threads, nx, ny))
+            charge = np.zeros((threads, int(patch_int[:, 4].sum())))
             hits = np.zeros((n, planes.size, capacity, 8))
             counts = np.zeros((n, planes.size), dtype=np.int64)
             paths = np.zeros((max(saved_ids.size, 1), path_capacity, 2))
@@ -965,7 +1044,8 @@ class BeamTracer:
             active = start
             while active.size:
                 trace_trajectories_2d(
-                    active, x, v, qm, dq, steps, status, electrode, fx, fy,
+                    active, x, v, qm, dq, steps, status, electrode,
+                    fxs, fys, patch_int, patch_real,
                     *map(float, mesh.origin), mesh.h, *map(float, mesh.upper),
                     int(mesh.cylindrical), INTEGRATORS.index(self.integrator),
                     self.step_fraction, self.max_steps,
@@ -989,6 +1069,18 @@ class BeamTracer:
             x, v, status, electrode = (a.copy() for a in initial)
             steps[:] = 0
         charge = charge.sum(axis=0)
+        # back from the flat slabs (finest first) to the patches (coarse first)
+        per_patch = [
+            charge[offset : offset + m.shape[0] * m.shape[1]].reshape(m.shape)
+            for m, offset in zip(meshes, patch_int[:, 5], strict=True)
+        ][::-1]
+        layout = self._layout()
+        if layout is not None:
+            # the charges of the boxes, without the margins of their fields' meshes
+            per_patch = [
+                c[p.inner] for c, p in zip(per_patch, layout.patches, strict=True)
+            ]
+        charge = per_patch[0] if layout is None else layout.deposit_total(per_patch)
 
         hit_planes = []
         slots = np.arange(capacity)
@@ -1048,6 +1140,10 @@ class BeamTracer:
         else:
             result = self._trace_numpy(particles, self.save_trajectories)
         charge = result.charge_density
+        if isinstance(charge, list):
+            layout = self._layout()
+            assert layout is not None
+            charge = layout.deposit_total(charge)
         if self.reduce is not None:
             charge = self.reduce(charge)
         result.charge_density = self._finalize(charge)
