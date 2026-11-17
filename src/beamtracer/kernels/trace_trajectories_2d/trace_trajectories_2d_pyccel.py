@@ -23,8 +23,10 @@ def trace_trajectories_2d(
     steps: "int[:]",
     status: "int[:]",
     electrode: "int[:]",
-    fx: "float[:,:]",
-    fy: "float[:,:]",
+    fxs: "float[:]",
+    fys: "float[:]",
+    patch_int: "int[:,:]",
+    patch_real: "float[:,:]",
     origin_x: float,
     origin_y: float,
     h: float,
@@ -44,7 +46,7 @@ def trace_trajectories_2d(
     paths: "float[:,:,:]",
     path_count: "int[:]",
     num_threads: int,
-    charge: "float[:,:,:]",
+    charge: "float[:,:]",
 ) -> None:
     """Trace the ``active`` trajectories until they end, or reach a surface.
 
@@ -52,9 +54,9 @@ def trace_trajectories_2d(
     mass, ``dq`` the signed current deposited per unit time, ``steps`` the steps
     taken so far. A step is that of `BeamTracer`, the Runge--Kutta step (``integrator``
     0) or Boris's kick--drift--kick (1, one field evaluation a step: the end's is the next
-    start's), through the edge fields ``fx``, ``fy`` (as ``staggered_field_2d``); it deposits ``dq dt`` at its
-    Hermite midpoint (as ``deposit_trajectories_2d``) into ``charge[t]``, one slab per
-    thread ``t < num_threads``, and records every crossing of the ``planes`` in
+    start's), through the edge fields of patches (as ``staggered_field_2d``); it deposits
+    ``dq dt`` at its Hermite midpoint (as ``deposit_trajectories_2d``) into ``charge[t]``,
+    one slab per thread ``t < num_threads``, and records every crossing of the ``planes`` in
     ``hits[k, plane, c]`` (point, velocity, direction, step) for the first
     ``hits.shape[2]`` crossings, counting all in ``counts[k, plane]``. ``status`` ends
     as 0-4 (transmitted, backward, wall, electrode, max steps), or -2 for an end point
@@ -65,15 +67,24 @@ def trace_trajectories_2d(
     ``path_slot[k] >= 0`` appends the mesh coordinates ``(x, y)`` or ``(x, r)`` of every
     step's end to ``paths[slot]``, as far as it holds, counting all in
     ``path_count[slot]``. Thread ``t`` traces every ``num_threads``-th active trajectory.
+
+    The field and the charge live on patches, finest first and the whole mesh last:
+    ``patch_int[p]`` holds a patch's node counts ``nx, ny``, the offsets of its ``fx``
+    ``(nx + 1, ny)`` in ``fxs`` and ``fy`` ``(nx, ny + 1)`` in ``fys``, its node count and
+    the offset of its nodes in ``charge[t]``; ``patch_real[p]`` its origin, node spacing and
+    node extent ``x0, y0, x1, y1``. A point takes the finest patch containing it, and a
+    step the spacing of the patch at its start. The mesh's ``origin``, ``h`` and
+    ``upper`` (the last patch's) decide the exits and the electrode cells.
     """
-    nx = fy.shape[0]
-    ny = fx.shape[1]
+    n_patches = patch_int.shape[0]
+    nx = patch_int[n_patches - 1, 0]
+    ny = patch_int[n_patches - 1, 1]
     n_active = active.shape[0]
     n_planes = planes.shape[0]
     capacity = hits.shape[2]
     path_capacity = paths.shape[1]
     # fmt: off
-    #$ omp parallel for schedule(static, 1) num_threads(num_threads) private(t, m, k, slot, nstage, have, ca0, ca1, ca2, x0, x1, x2, v0, v1, v2, qmk, ns, st, stage, q0, q1, q2, qy, r, cy, cz, sx, sy, s, w, u, i, j, low, high, ex, ey, g0, g1, g2, a0, a1, a2, kx0, kx1, kx2, sx0, sx1, sx2, sv0, sv1, sv2, speed, accel, dt, d2, hdt, dt6, y0, y1, y2, w0, w1, w2, m0, m1, m2, deposit, p, xp, before, after, c, px, py, cell, si, sj, e)
+    #$ omp parallel for schedule(static, 1) num_threads(num_threads) private(pp, qq, pnx, pny, ofx, ofy, ofn, pox, poy, phh, hloc, rr, t, m, k, slot, nstage, have, ca0, ca1, ca2, x0, x1, x2, v0, v1, v2, qmk, ns, st, stage, q0, q1, q2, qy, r, cy, cz, sx, sy, s, w, u, i, j, low, high, ex, ey, g0, g1, g2, a0, a1, a2, kx0, kx1, kx2, sx0, sx1, sx2, sv0, sv1, sv2, speed, accel, dt, d2, hdt, dt6, y0, y1, y2, w0, w1, w2, m0, m1, m2, deposit, p, xp, before, after, c, px, py, cell, si, sj, e)
     # fmt: on
     for t in range(num_threads):
         m = t
@@ -99,6 +110,18 @@ def trace_trajectories_2d(
             ca1 = 0.0
             ca2 = 0.0
             while ns < max_steps:
+                # the spacing of the finest patch at the step's start
+                rr = x1
+                if cylindrical != 0:
+                    rr = hypot(x1, x2)
+                hloc = h
+                for qq in range(n_patches - 1):
+                    if (
+                        x0 >= patch_real[qq, 3] and x0 <= patch_real[qq, 5]
+                        and rr >= patch_real[qq, 4] and rr <= patch_real[qq, 6]
+                    ):  # fmt: skip
+                        hloc = patch_real[qq, 2]
+                        break
                 # classical Runge--Kutta as BeamTracer._rk4: stage s samples the field at
                 # q, its velocity is kx; sx and sv sum the stages with weights 1, 2, 2, 1
                 q0 = x0
@@ -124,39 +147,60 @@ def trace_trajectories_2d(
                                 cy = q1 / r
                                 cz = q2 / r
                             qy = r
-                        sx = (q0 - origin_x) / h
-                        sy = (qy - origin_y) / h
+                        pp = n_patches - 1
+                        for qq in range(n_patches - 1):
+                            if (
+                                q0 >= patch_real[qq, 3] and q0 <= patch_real[qq, 5]
+                                and qy >= patch_real[qq, 4] and qy <= patch_real[qq, 6]
+                            ):  # fmt: skip
+                                pp = qq
+                                break
+                        pnx = patch_int[pp, 0]
+                        pny = patch_int[pp, 1]
+                        ofx = patch_int[pp, 2]
+                        ofy = patch_int[pp, 3]
+                        pox = patch_real[pp, 0]
+                        poy = patch_real[pp, 1]
+                        phh = patch_real[pp, 2]
+                        sx = (q0 - pox) / phh
+                        sy = (qy - poy) / phh
                         s = sx + 0.5
                         i = floor(s)
                         if i < 0:
                             i = 0
-                        elif i > nx - 1:
-                            i = nx - 1
+                        elif i > pnx - 1:
+                            i = pnx - 1
                         j = floor(sy)
                         if j < 0:
                             j = 0
-                        elif j > ny - 2:
-                            j = ny - 2
+                        elif j > pny - 2:
+                            j = pny - 2
                         u = s - i
                         w = sy - j
-                        low = fx[i, j] + w * (fx[i, j + 1] - fx[i, j])
-                        high = fx[i + 1, j] + w * (fx[i + 1, j + 1] - fx[i + 1, j])
+                        # fx (pnx + 1, pny) flattened
+                        c = ofx + i * pny + j
+                        low = fxs[c] + w * (fxs[c + 1] - fxs[c])
+                        high = fxs[c + pny] + w * (fxs[c + pny + 1] - fxs[c + pny])
                         ex = low + u * (high - low)
                         s = sy + 0.5
                         i = floor(sx)
                         if i < 0:
                             i = 0
-                        elif i > nx - 2:
-                            i = nx - 2
+                        elif i > pnx - 2:
+                            i = pnx - 2
                         j = floor(s)
                         if j < 0:
                             j = 0
-                        elif j > ny - 1:
-                            j = ny - 1
+                        elif j > pny - 1:
+                            j = pny - 1
                         u = sx - i
                         w = s - j
-                        low = fy[i, j] + w * (fy[i, j + 1] - fy[i, j])
-                        high = fy[i + 1, j] + w * (fy[i + 1, j + 1] - fy[i + 1, j])
+                        # fy (pnx, pny + 1) flattened
+                        c = ofy + i * (pny + 1) + j
+                        low = fys[c] + w * (fys[c + 1] - fys[c])
+                        high = fys[c + pny + 1] + w * (
+                            fys[c + pny + 2] - fys[c + pny + 1]
+                        )
                         ey = low + u * (high - low)
                         if cylindrical != 0:
                             g0 = qmk * ex
@@ -174,13 +218,13 @@ def trace_trajectories_2d(
                         accel = sqrt(a0 * a0 + a1 * a1 + a2 * a2)
                         dt = -1.0
                         if speed > 0.0:
-                            dt = h / speed
+                            dt = hloc / speed
                         if accel > 0.0:
-                            d2 = sqrt(2.0 * h / accel)
+                            d2 = sqrt(2.0 * hloc / accel)
                             if dt < 0.0 or d2 < dt:
                                 dt = d2
                         if dt < 0.0:
-                            dt = h
+                            dt = hloc
                         dt = step_fraction * dt
                         hdt = 0.5 * dt
                         dt6 = dt / 6.0
@@ -265,32 +309,47 @@ def trace_trajectories_2d(
                 m2 = 0.5 * (x2 + y2) + dt * (v2 - w2) / 8.0
                 if cylindrical != 0:
                     m1 = hypot(m1, m2)
-                i = floor((m0 - origin_x) / h)
-                j = floor((m1 - origin_y) / h)
-                u = (m0 - (origin_x + h * i)) / h
+                pp = n_patches - 1
+                for qq in range(n_patches - 1):
+                    if (
+                        m0 >= patch_real[qq, 3] and m0 <= patch_real[qq, 5]
+                        and m1 >= patch_real[qq, 4] and m1 <= patch_real[qq, 6]
+                    ):  # fmt: skip
+                        pp = qq
+                        break
+                pnx = patch_int[pp, 0]
+                pny = patch_int[pp, 1]
+                ofn = patch_int[pp, 5]
+                pox = patch_real[pp, 0]
+                poy = patch_real[pp, 1]
+                phh = patch_real[pp, 2]
+                i = floor((m0 - pox) / phh)
+                j = floor((m1 - poy) / phh)
+                u = (m0 - (pox + phh * i)) / phh
                 if cylindrical != 0:
-                    low = origin_y + h * j
-                    high = low + h
+                    low = poy + phh * j
+                    high = low + phh
                     w = (m1 * m1 - low * low) / (high * high - low * low)
                 else:
-                    w = (m1 - (origin_y + h * j)) / h
+                    w = (m1 - (poy + phh * j)) / phh
                 if i < 0:
                     u = 0.0
                     i = 0
-                elif i >= nx - 1:
+                elif i >= pnx - 1:
                     u = 1.0
-                    i = nx - 2
+                    i = pnx - 2
                 if j < 0:
                     w = 0.0
                     j = 0
-                elif j >= ny - 1:
+                elif j >= pny - 1:
                     w = 1.0
-                    j = ny - 2
+                    j = pny - 2
                 deposit = dq[k] * dt
-                charge[t, i, j] += (1.0 - u) * (1.0 - w) * deposit
-                charge[t, i, j + 1] += (1.0 - u) * w * deposit
-                charge[t, i + 1, j] += u * (1.0 - w) * deposit
-                charge[t, i + 1, j + 1] += u * w * deposit
+                c = ofn + i * pny + j
+                charge[t, c] += (1.0 - u) * (1.0 - w) * deposit
+                charge[t, c + 1] += (1.0 - u) * w * deposit
+                charge[t, c + pny] += u * (1.0 - w) * deposit
+                charge[t, c + pny + 1] += u * w * deposit
                 ns = ns + 1
 
                 for p in range(n_planes):

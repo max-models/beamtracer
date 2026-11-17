@@ -23,6 +23,7 @@ from beamtracer.config import (
     FieldMapParams,
     NegativeExtractionPlasma,
     ParticleBeam,
+    RefinementParams,
     Solenoid,
     SpaceChargeCompensation,
 )
@@ -62,6 +63,7 @@ __all__ = [
     "ParticleBeam",
     "ShapeParams",
     "Solenoid",
+    "RefinementParams",
     "SpaceChargeCompensation",
     "SymbolicSpaceFunction",
 ]

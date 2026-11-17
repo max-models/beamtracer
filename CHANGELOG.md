@@ -46,6 +46,18 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Mesh refinement: `BeamOpticsConfig(refinement=[RefinementParams(level, lower, upper)])`
+  solves the field on boxes of finer cells (each level halves them) with patchwork's
+  composite `NodalPoisson`, and every trajectory takes the field of, steps with the spacing
+  of and deposits its charge on the finest box it is in (the compiled tracer, its CUDA
+  version and the NumPy one). Each box's field reaches one coarse cell beyond it, so its
+  edges see the coarser potential. On the negative-ion beamlet at 8 kV (best of 3, 4
+  threads) a box of half the cells around the plasma grid gives the beam of the uniform
+  0.05 mm mesh in 2.7 s instead of 9.5 s, and a second level in it that of the uniform
+  0.025 mm mesh in 4.6 s instead of 38 s; without refinement the run is unchanged. The
+  state keeps the potential and charge density of the base mesh, and the composite ones
+  beside them.
+
 - `BeamOpticsConfig(field_backend="petsc")`: under MPI the ranks share the field solve
   (patchwork's distributed backend: Krylov with algebraic multigrid, needs petsc4py) instead
   of each factorising the whole mesh; the Boltzmann Newton steps too. On IBSimu's `vlasov2d`

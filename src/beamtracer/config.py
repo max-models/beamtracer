@@ -349,6 +349,36 @@ class FieldMapParams:
 
 
 @dataclass(frozen=True)
+class RefinementParams:
+    """A box refined to ``level`` (cells ``2**level`` times smaller than the grid's).
+
+    ``lower`` and ``upper`` are corners ``(x, y)`` [m] (``(x, r)`` in cylindrical
+    geometry), widened to the cells of the level below; a level's boxes must lie in those
+    of the level below. Each takes Quantities or strings too (``("1 mm", "0 mm")``).
+    """
+
+    level: int
+    lower: tuple[float, float] = field(metadata=unit_metadata("m"))
+    upper: tuple[float, float] = field(metadata=unit_metadata("m"))
+
+    def __post_init__(self) -> None:
+        """Convert the units and check the box."""
+        convert_units(self)
+        if int(self.level) != self.level or self.level < 1:
+            raise ValueError(f"level must be a positive integer, got {self.level}")
+        object.__setattr__(self, "level", int(self.level))
+        lower, upper = tuple(map(float, self.lower)), tuple(map(float, self.upper))
+        if (
+            len(lower) != 2
+            or len(upper) != 2
+            or not all(a < b for a, b in zip(lower, upper, strict=True))
+        ):
+            raise ValueError(f"a refined box needs lower < upper, got {lower}, {upper}")
+        object.__setattr__(self, "lower", lower)
+        object.__setattr__(self, "upper", upper)
+
+
+@dataclass(frozen=True)
 class SpaceChargeCompensation:
     """The beam's space charge is reduced by ``fraction`` between ``x_min`` and ``x_max``.
 
@@ -458,7 +488,10 @@ class BeamOpticsConfig:
     changes by less than ``coarse_tolerance`` [V], then all of them (see
     `beamtracer.solver.vlasov_iterate`). ``field_backend`` solves the field with
     patchwork's ``"lu"`` (every MPI rank the whole mesh), ``"petsc"`` (the ranks share
-    it: Krylov with algebraic multigrid, needs petsc4py) or ``"auto"``.
+    it: Krylov with algebraic multigrid, needs petsc4py) or ``"auto"``. ``refinement``
+    lists boxes solved and traced on finer cells (`RefinementParams`): the field on
+    patchwork's composite mesh, each trajectory stepping and depositing on the finest box
+    it is in.
     ``diagnostic_planes`` [m] record the trajectories crossing ``x = const``;
     ``save_trajectories`` keeps every n-th trajectory for plotting (0: none).
     ``tolerance`` and ``diagnostic_planes`` take Quantities or strings too, like the
@@ -490,6 +523,7 @@ class BeamOpticsConfig:
     coarse_particles: float = 1.0
     coarse_tolerance: float = unit_field("V", 0.0)
     field_backend: str = "lu"
+    refinement: list[RefinementParams] = field(default_factory=list)
     diagnostic_planes: list[float] = unit_field("m", default_factory=list)
     save_trajectories: int = 0
 
@@ -523,6 +557,7 @@ class BeamOpticsConfig:
         self.compensation = [
             coerce(SpaceChargeCompensation, c) for c in self.compensation
         ]
+        self.refinement = [coerce(RefinementParams, r) for r in self.refinement]
         self.charge_changing = coerce(ChargeChangingParams, self.charge_changing)
         self.diagnostic_planes = list(self.diagnostic_planes)
         if (
@@ -580,6 +615,7 @@ class BeamOpticsConfig:
             None if self.field_map is None else dataclass_to_dict(self.field_map)
         )
         params["compensation"] = [dataclass_to_dict(c) for c in self.compensation]
+        params["refinement"] = [dataclass_to_dict(r) for r in self.refinement]
         params["charge_changing"] = (
             None if self.charge_changing is None else self.charge_changing.to_dict()
         )

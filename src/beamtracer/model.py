@@ -50,6 +50,7 @@ from beamtracer.solver import (
     surface_field,
     vlasov_iterate,
 )
+from beamtracer.solver.refinement import Refinement
 
 _FACES = {
     "x_min": ("x", "min"),
@@ -407,6 +408,9 @@ class BeamOptics:
             coarse_particles=config.coarse_particles,
             coarse_tolerance=config.coarse_tolerance,
             field_backend=config.field_backend,
+            refinement=[
+                Refinement(r.level, r.lower, r.upper) for r in config.refinement
+            ],
             comm=self.comm if self._parallel else None,
             callback=callback,
         )
