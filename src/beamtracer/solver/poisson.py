@@ -124,6 +124,8 @@ class _System:
         self.rhs_fixed = rhs_fixed
         self.free = free
         self._lu = None
+        #: The factorised Newton Jacobian the chord steps reuse, or None.
+        self.jacobian_lu = None
 
     def lu(self):
         """Return the LU factorisation of the matrix (computed once)."""
@@ -282,11 +284,19 @@ class IonOpticsPoisson:
     without plasma electrons.
     """
 
-    def __init__(self, mesh: IonOpticsMesh) -> None:
-        """Prepare the solver for ``mesh``."""
+    def __init__(self, mesh: IonOpticsMesh, reuse_jacobian: bool = True) -> None:
+        """Prepare the solver for ``mesh``.
+
+        With ``reuse_jacobian`` Newton's method keeps its factorised Jacobian from step to
+        step and from solve to solve (a chord method), refactorising it when an update
+        does not halve; otherwise every step factorises its own.
+        """
         self.mesh = mesh
+        self.reuse_jacobian = bool(reuse_jacobian)
         self._systems: dict[bytes, _System] = {}
         self.newton_iterations = 0
+        #: The Jacobian factorisations of the last solve.
+        self.factorisations = 0
 
     def _system(self, fixed: np.ndarray, value: np.ndarray) -> _System:
         """Return the (cached) linear system for a set of fixed nodes."""
@@ -304,6 +314,7 @@ class IonOpticsPoisson:
         assumptions=(
             r"$s = \pm 1$ the sign of the Boltzmann species; the exponent capped at 50 to keep a bad first guess finite",
             r"started from the vacuum solution or the previous potential; undamped, at most 100 steps, the last iterate returned without a warning",
+            r"with `reuse_jacobian` (the default) a chord method: the factorised Jacobian is kept across steps and solves and refactorised when $\max|\delta u|$ does not halve from one step to the next, so a step it stops on contracts by at least 2 and the error is at most the last update; it stops at a tenth of the tolerance",
             r"without a plasma species one linear solve; an initial plasma region is held at $U_p$ as extra fixed nodes",
         ),
         components=("beamtracer.solver.poisson.IonOpticsPoisson",),
@@ -360,6 +371,12 @@ class IonOpticsPoisson:
         )
         diagonal = sp.diags(np.ones(system.free.size))
         iteration = 0
+        factorisations = 0
+        # chord steps contract linearly, not quadratically: they stop ten times tighter
+        stop = tolerance * scale * (0.1 if self.reuse_jacobian else 1.0)
+        refresh = not self.reuse_jacobian or system.jacobian_lu is None
+        fresh = False
+        previous = np.inf
         for iteration in range(1, max_newton + 1):  # noqa: B007 (counted after the loop)
             # A u = rhs - s a exp(-s (u - Up) / T) for a species of charge sign s; the
             # exponent is limited only to keep a bad first guess finite.
@@ -367,11 +384,25 @@ class IonOpticsPoisson:
                 np.minimum(-sign * (u - up) / temperature, 50.0)
             )
             residual = system.matrix @ u - rhs + sign * density
-            jacobian = system.matrix - diagonal.multiply(density / temperature)
-            delta = spla.splu(jacobian.tocsc()).solve(-residual)
+            if refresh:
+                jacobian = system.matrix - diagonal.multiply(density / temperature)
+                system.jacobian_lu = spla.splu(jacobian.tocsc())
+                factorisations += 1
+                fresh = True
+            delta = system.jacobian_lu.solve(-residual)  # type: ignore[union-attr]
+            size = float(np.max(np.abs(delta)))
+            if self.reuse_jacobian and not fresh and not size < 0.5 * previous:
+                # a stale Jacobian that no longer contracts: redo the step with a new one
+                refresh = True
+                previous = np.inf
+                continue
             u += delta
-            if np.max(np.abs(delta)) < tolerance * scale:
+            if size < stop:
                 break
+            refresh = not self.reuse_jacobian
+            fresh = False
+            previous = size
         self.newton_iterations = iteration
+        self.factorisations = factorisations
         phi[system.free] = u
         return phi.reshape(mesh.shape)

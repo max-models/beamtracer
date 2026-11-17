@@ -7,6 +7,13 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Newton's method for the Boltzmann plasma species reuses its factorised Jacobian from step
+  to step and from solve to solve (a chord method), refactorising it when an update does
+  not halve, and stops at a tenth of the tolerance since its steps converge linearly.
+  It factorises about a third as often: the field solve of the negative-ion beamlet at
+  8 kV takes 1.2 s instead of 2.8 s, the beam unchanged within the tolerance.
+  `IonOpticsPoisson(mesh, reuse_jacobian=False)` factorises every step as before.
+
 - The tracer runs as one compiled kernel, `trace_trajectories_2d`, that follows every
   trajectory from start to end: the Runge--Kutta steps, the space-charge deposit, the plane
   crossings and the exit and electrode tests, in parallel over OpenMP threads (each with its
