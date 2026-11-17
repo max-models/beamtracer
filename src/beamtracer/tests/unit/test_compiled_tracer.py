@@ -29,6 +29,7 @@ from beamtracer.solver import (
     IonOpticsMesh,
     StaggeredElectricField,
 )
+from beamtracer.solver.tracer import share_of
 from beamtracer.tests.unit.test_beam_optics import _extraction
 
 pytestmark = pytest.mark.skipif(
@@ -340,3 +341,31 @@ def test_boris_in_a_solenoid_keeps_the_speed_and_follows_rk4() -> None:
         ends["boris"].point[1], ends["rk4"].point[1], rtol=0, atol=2e-5
     )
     assert np.abs(ends["boris"].point[1] - position[1]).max() > 1e-4  # it focuses
+
+
+def test_the_shares_of_the_ranks_cover_every_item_once() -> None:
+    for n in (0, 1, 7, 100):
+        for size in (1, 3, 8):
+            covered = np.concatenate(
+                [np.arange(n)[share_of(n, rank, size)] for rank in range(size)]
+            )
+            np.testing.assert_array_equal(covered, np.arange(n))
+
+
+@pytest.mark.parametrize("size", [2, 3])
+def test_ranks_share_the_electrode_lookup(size) -> None:
+    """Every rank samples its share; gathered, the lookup is the serial one."""
+    model = BeamOptics(_planar())
+    serial = model.tracer._electrode_lookup()
+    ci, cj = np.nonzero(model.tracer._electrode_cells)
+    parts = [model.tracer._subcells(ci[s], cj[s]) for s in
+             (share_of(ci.size, rank, size) for rank in range(size))]  # fmt: skip
+    for rank in range(size):
+        tracer = BeamOptics(_planar()).tracer
+        tracer.ranks = (rank, size)
+        tracer.allgather = lambda part, rank=rank: [
+            part if r == rank else parts[r] for r in range(size)
+        ]
+        cells, subcells = tracer._electrode_lookup()
+        np.testing.assert_array_equal(cells, serial[0])
+        np.testing.assert_array_equal(subcells, serial[1])
