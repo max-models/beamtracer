@@ -5,6 +5,11 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- `neutralizer_channel_2d` traces a gas neutralizer as in ITER's injectors (no cusps); the docs
+  say that the cusp-confined channel is the beam-driven plasma neutralizer studied for DEMO.
+
 ### Added
 
 - Field maps (`beamtracer.FieldMap`): gridded E and B as netCDF/xarray in the field-map

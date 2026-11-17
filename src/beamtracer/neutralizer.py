@@ -1,8 +1,11 @@
 """A neutralizer: beam trajectories through the channel, coupled to the plasma they make.
 
-The plasma of a beam-driven plasma neutralizer is a global model of the channel
+The plasma the beam makes in a neutralizer channel is a global model of the channel
 (`wellbalanced.neutralizer.Neutralizer`, which also holds the channel, the
-beam and its cross sections). Alone it treats the beam as a line integral along
+beam and its cross sections). Without magnetic cusps (``cusp=None``) the channel is a
+gas neutralizer as in ITER's injectors, whose weak plasma hardly matters; with cusps
+it is the beam-driven plasma neutralizer studied for DEMO, whose confined plasma
+strips the beam too. Alone it treats the beam as a line integral along
 the axis. `NeutralizerChannel` traces the beam instead: a
 `beamtracer.model.BeamOptics` run on the channel's section in
 ``(x, y)`` (planar, per unit height), grounded walls at ``y = +-w/2``, every
