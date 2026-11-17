@@ -367,7 +367,7 @@ requires-dist = [
     { name = "nbformat", marker = "extra == 'docs'", specifier = ">=5.11.1" },
     { name = "numpy" },
     { name = "opencr", marker = "extra == 'neutralizer'", git = "https://github.com/max-models/opencr?branch=devel" },
-    { name = "patchwork-amr", git = "https://github.com/max-models/patchwork?branch=claude%2Fbeamtracer-ibsimu-performance-b325h3" },
+    { name = "patchwork-amr", git = "https://github.com/max-models/patchwork?branch=devel" },
     { name = "plasma-plots", marker = "extra == 'examples'", git = "https://github.com/max-models/plasma-plots?branch=devel" },
     { name = "plasma-plots", extras = ["web"], marker = "extra == 'docs'", git = "https://github.com/max-models/plasma-plots?branch=devel" },
     { name = "plasmacoll", git = "https://github.com/max-models/plasmacoll?branch=devel" },
@@ -3257,7 +3257,7 @@ wheels = [
 [[package]]
 name = "patchwork-amr"
 version = "0.2.0"
-source = { git = "https://github.com/max-models/patchwork?branch=claude%2Fbeamtracer-ibsimu-performance-b325h3#1657506f4eace05643de230f12e0c9f98cc51eb8" }
+source = { git = "https://github.com/max-models/patchwork?branch=devel#aea9f3ab567ab0d59910bba9f6ce47dfd7f75157" }
 dependencies = [
     { name = "cunumpy" },
     { name = "maybempi" },
