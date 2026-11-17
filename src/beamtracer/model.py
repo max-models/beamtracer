@@ -314,8 +314,11 @@ class BeamOptics:
         return self.comm is not None and self.comm.Get_size() > 1
 
     def _allreduce(self, array: np.ndarray) -> np.ndarray:
-        """Sum an array over the ranks."""
-        return self.comm.allreduce(array, op=MPI.SUM)
+        """Sum a float array over the ranks (a buffer ``Allreduce``, not pickled)."""
+        array = np.ascontiguousarray(array, dtype=float)
+        total = np.empty_like(array)
+        self.comm.Allreduce(array, total, op=MPI.SUM)
+        return total
 
     def _gather_results(self) -> None:
         """Give every rank the plane crossings, statuses and saved trajectories."""
@@ -387,6 +390,9 @@ class BeamOptics:
             Compensation(c.x_min, c.x_max, c.fraction) for c in config.compensation
         ]
         self.tracer.reduce = self._allreduce if self._parallel else None
+        if self._parallel:
+            self.tracer.ranks = (self.rank, self.comm.Get_size())
+            self.tracer.allgather = self.comm.allgather
         self._state = vlasov_iterate(
             self.mesh,
             self._particles,

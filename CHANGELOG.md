@@ -7,6 +7,11 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- With MPI the ranks share the compiled tracer's electrode lookup: each samples an equal
+  share of the cells next to the electrodes, and the shares are gathered (1.9 s on one rank,
+  0.25-0.5 s per rank on four, for IBSimu's `vlasov2d` case at 961 x 401 nodes). The node
+  charges are summed with a buffer `Allreduce` instead of the pickled `allreduce`.
+
 - Newton's method for the Boltzmann plasma species reuses its factorised Jacobian from step
   to step and from solve to solve (a chord method), refactorising it when an update does
   not halve, and stops at a tenth of the tolerance since its steps converge linearly.

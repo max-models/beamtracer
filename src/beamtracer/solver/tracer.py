@@ -41,6 +41,11 @@ SUBCELLS = 8
 INTEGRATORS = ("rk4", "boris")
 
 
+def share_of(n: int, rank: int, size: int) -> slice:
+    """The share of ``rank`` of ``n`` items among ``size`` ranks: contiguous, in rank order."""
+    return slice(rank * n // size, (rank + 1) * n // size)
+
+
 def _num_threads() -> int:
     """The OpenMP threads of the compiled tracer: ``OMP_NUM_THREADS``, else the usable cores."""
     value = os.environ.get("OMP_NUM_THREADS", "").split(",")[0].strip()
@@ -402,6 +407,10 @@ class BeamTracer:
         self._capacity = (4, 1024)
         #: Sums the node charges over MPI ranks that each trace a share of the beam.
         self.reduce: Callable[[np.ndarray], np.ndarray] | None = None
+        #: With MPI, this rank and the number of ranks, and a function returning the
+        #: arrays of all ranks in rank order: the ranks share the electrode lookup.
+        self.ranks: tuple[int, int] = (0, 1)
+        self.allgather: Callable[[np.ndarray], list[np.ndarray]] | None = None
         #: The random stream of analog charge changes, e.g. the MPI rank.
         self.stream = 0
         # Cells with an electrode node or a node next to one: only particles in these cells
@@ -854,43 +863,53 @@ class BeamTracer:
             )
         return not reasons
 
+    def _subcells(self, ci: np.ndarray, cj: np.ndarray) -> np.ndarray:
+        """The electrode of every sub-cell ``(len(ci), SUBCELLS, SUBCELLS)`` of cells ``(ci, cj)``.
+
+        The electrode containing the sub-cell's corners and centre, -1 for none, or -2
+        when they disagree (a surface cuts it).
+        """
+        mesh = self.mesh
+
+        def sample(fraction: np.ndarray) -> np.ndarray:
+            px = mesh.origin[0] + mesh.h * (ci[:, None, None] + fraction[None, :, None])
+            py = mesh.origin[1] + mesh.h * (cj[:, None, None] + fraction[None, None, :])
+            px, py = np.broadcast_arrays(px, py)
+            return mesh.inside_solid(px.ravel(), py.ravel()).reshape(px.shape)
+
+        corner = sample(np.arange(SUBCELLS + 1) / SUBCELLS)
+        centre = sample((np.arange(SUBCELLS) + 0.5) / SUBCELLS)
+        same = (
+            (corner[:, :-1, :-1] == centre)
+            & (corner[:, 1:, :-1] == centre)
+            & (corner[:, :-1, 1:] == centre)
+            & (corner[:, 1:, 1:] == centre)
+        )
+        return np.where(same, centre, -2).astype(np.int64)
+
     def _electrode_lookup(self) -> tuple[np.ndarray, np.ndarray]:
         """The electrode at every sub-cell of the cells that touch an electrode.
 
         ``cells`` ``(nx - 1, ny - 1)`` numbers the touching cells (-1 for the others);
-        ``subcells`` holds, for each, its ``SUBCELLS**2`` sub-cells: the electrode
-        containing the sub-cell's corners and centre, -1 for none, or -2 when they
-        disagree (a surface cuts it). Built once per mesh.
+        ``subcells`` holds, for each, its ``SUBCELLS**2`` sub-cells (`_subcells`). Built
+        once per mesh; with `allgather` every rank samples an equal share of the cells
+        and the shares are gathered.
         """
         if self._lookup is None:
-            mesh = self.mesh
             cells = np.full(self._electrode_cells.shape, -1, dtype=np.int64)
             ci, cj = np.nonzero(self._electrode_cells)
-            if not mesh.electrodes or not ci.size:
+            if not self.mesh.electrodes or not ci.size:
                 self._lookup = (cells, np.full(1, -1, dtype=np.int64))
                 return self._lookup
             cells[ci, cj] = np.arange(ci.size, dtype=np.int64)
-
-            def sample(fraction: np.ndarray) -> np.ndarray:
-                px = mesh.origin[0] + mesh.h * (
-                    ci[:, None, None] + fraction[None, :, None]
-                )
-                py = mesh.origin[1] + mesh.h * (
-                    cj[:, None, None] + fraction[None, None, :]
-                )
-                px, py = np.broadcast_arrays(px, py)
-                return mesh.inside_solid(px.ravel(), py.ravel()).reshape(px.shape)
-
-            corner = sample(np.arange(SUBCELLS + 1) / SUBCELLS)
-            centre = sample((np.arange(SUBCELLS) + 0.5) / SUBCELLS)
-            same = (
-                (corner[:, :-1, :-1] == centre)
-                & (corner[:, 1:, :-1] == centre)
-                & (corner[:, :-1, 1:] == centre)
-                & (corner[:, 1:, 1:] == centre)
-            )
-            subcells = np.where(same, centre, -2).astype(np.int64).ravel()
-            self._lookup = (cells, subcells)
+            rank, size = self.ranks
+            if size > 1 and self.allgather is not None:
+                share = share_of(ci.size, rank, size)
+                parts = self.allgather(self._subcells(ci[share], cj[share]))
+                subcells = np.concatenate(parts, axis=0)
+            else:
+                subcells = self._subcells(ci, cj)
+            self._lookup = (cells, subcells.ravel())
         return self._lookup
 
     @scope_profiler.profile("beamtracer.trace_compiled", tags=PROFILE_TAGS)
