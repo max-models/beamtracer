@@ -131,7 +131,7 @@ methodcard = { git = "https://github.com/max-models/methodcard", branch = "devel
 mpifield = { git = "https://github.com/max-models/mpifield", branch = "devel" }
 mpiparticles = { git = "https://github.com/max-models/mpiparticles", branch = "devel" }
 opencr = { git = "https://github.com/max-models/opencr", branch = "devel" }
-patchwork-amr = { git = "https://github.com/max-models/patchwork", branch = "claude/beamtracer-ibsimu-performance-b325h3" }
+patchwork-amr = { git = "https://github.com/max-models/patchwork", branch = "devel" }
 plasma-plots = { git = "https://github.com/max-models/plasma-plots", branch = "devel" }
 plasmacoll = { git = "https://github.com/max-models/plasmacoll", branch = "devel" }
 scope-profiler = { git = "https://github.com/max-models/scope-profiler", branch = "devel" }
