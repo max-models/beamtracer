@@ -47,8 +47,9 @@ def _run(implementation, args):
 
 
 def test_the_catalog_has_every_kernel():
-    assert set(KERNEL_NAMES) == set(NAMES)
-    assert all(KERNELS[name] is not None for name in NAMES)
+    # the trace kernel is tested in test_compiled_tracer
+    assert set(KERNEL_NAMES) == {*NAMES, "trace_trajectories_2d"}
+    assert all(KERNELS[name] is not None for name in KERNEL_NAMES)
 
 
 @pytest.mark.parametrize("name", NAMES)

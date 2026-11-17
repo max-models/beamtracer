@@ -12,6 +12,8 @@ then the charge is divided by the node volumes.
 
 from __future__ import annotations
 
+import functools
+import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
@@ -22,12 +24,30 @@ from scipy import constants
 
 from beamtracer._profiling import PROFILE_TAGS
 from beamtracer.kernels.deposit_trajectories_2d import kernel as deposit_trajectories_2d
+from beamtracer.kernels.trace_trajectories_2d import kernel as trace_trajectories_2d
 from beamtracer.solver.charge_changing import ChargeChanging, ChargeTallies
+from beamtracer.solver.fields import StaggeredElectricField
 from beamtracer.solver.mesh import IonOpticsMesh
 
 #: Status of a finished trajectory.
 TRANSMITTED, BACKWARD, WALL, ELECTRODE, MAX_STEPS = 0, 1, 2, 3, 4
 STATUS_NAMES = ("transmitted", "backward", "wall", "electrode", "max_steps")
+#: Status in the compiled tracer: still moving, or stopped where an electrode surface
+#: cuts its sub-cell (decided by the electrode's own test).
+_ALIVE, _PAUSED = -1, -2
+#: Sub-cells per cell side of the electrode lookup of the compiled tracer.
+SUBCELLS = 8
+
+
+def _num_threads() -> int:
+    """The OpenMP threads of the compiled tracer: ``OMP_NUM_THREADS``, else the usable cores."""
+    value = os.environ.get("OMP_NUM_THREADS", "").split(",")[0].strip()
+    if value.isdigit() and int(value) > 0:
+        return int(value)
+    try:
+        return len(os.sched_getaffinity(0))
+    except AttributeError:  # macOS, Windows
+        return os.cpu_count() or 1
 
 
 def _cartesian(
@@ -326,12 +346,15 @@ class BeamTracer:
         planes: Sequence[float] = (),
         save_trajectories: int = 0,
         charge_changing: ChargeChanging | None = None,
+        compiled: bool | None = None,
     ) -> None:
         """Set up the tracer; ``save_trajectories`` keeps every n-th trajectory (0: none).
 
         ``charge_changing`` lets every trajectory carry charge-state fractions that
         change on the targets it crosses, or one state that changes at sampled
-        events (see `beamtracer.solver.charge_changing`).
+        events (see `beamtracer.solver.charge_changing`). ``compiled`` chooses the
+        compiled tracer (`compiled_available`) or the NumPy one; ``None`` takes the
+        compiled one where it applies.
         """
         if not 0.0 < step_fraction <= 1.0:
             raise ValueError(f"step_fraction must be in (0, 1], got {step_fraction}")
@@ -344,6 +367,13 @@ class BeamTracer:
         self.planes = tuple(float(p) for p in planes)
         self.save_trajectories = int(save_trajectories)
         self.charge_changing = charge_changing
+        #: The compiled tracer (True), the NumPy one (False) or the compiled one where
+        #: it applies (None).
+        self.compiled = compiled
+        self._lookup: tuple[np.ndarray, np.ndarray] | None = None
+        #: Crossings per plane and trajectory the compiled tracer's buffer holds; grown
+        #: when a trace needs more.
+        self._capacity = 4
         #: Sums the node charges over MPI ranks that each trace a share of the beam.
         self.reduce: Callable[[np.ndarray], np.ndarray] | None = None
         #: The random stream of analog charge changes, e.g. the MPI rank.
@@ -530,30 +560,8 @@ class BeamTracer:
             charge,
         )
 
-    # -- tracing ----------------------------------------------------------------------------
-
-    @method(
-        equations={
-            "charge": r"\Delta Q = \operatorname{sign}(q)\, I\, \Delta t \quad \text{or, with charge changes,} \quad \Delta Q = N_k\, e \sum_s z_s \bar F_s\, \Delta t",
-            "midpoint": r"\mathbf x_{1/2} = \tfrac12 (\mathbf x + \mathbf x') + \frac{\Delta t}{8} (\mathbf v - \mathbf v')",
-            "weights": r"w_x = \frac{x - x_i}{h}, \qquad w_r = \frac{r^2 - r_j^2}{r_{j+1}^2 - r_j^2} \ \text{(cylindrical)}, \quad w_y = \frac{y - y_j}{h} \ \text{(planar)}",
-            "volumes": r"\rho_{ij} = \frac{Q_{ij}}{V_j}, \qquad V_j = h^2 \ \text{(planar)}, \quad V_j = \pi h (r_{j+1/2}^2 - r_{j-1/2}^2) = 2\pi r_j h^2, \quad V_0 = \pi h^3",
-            "path": r"\Delta s = \tfrac12 \Delta t\, (|\mathbf v| + |\mathbf v'|) \times \text{the share of the step inside the mesh}",
-        },
-        assumptions=(
-            r"a steady trajectory of current $I$ is a line charge $I / v$, so a step holds $I \Delta t$; currents are magnitudes, the sign is the charge's",
-            r"$\mathbf x_{1/2}$ the cubic Hermite interpolant at the half step; charge outside the mesh goes to the boundary nodes, whose densities are doubled (half cells)",
-            r"a trajectory ends transmitted ($x \ge x_\mathrm{max}$), backward ($x < x_\mathrm{min}$), on the wall, on an electrode (tested in the cells touching one) or after `max_steps`, tested at the end of each step",
-            r"$\bar F$ the mean of the fractions before and after the step; with MPI the node charges are summed over the ranks",
-        ),
-        components=(
-            "beamtracer.solver.tracer.BeamTracer",
-            "beamtracer.solver.charge_changing.ChargeChanging",
-        ),
-    )
-    @scope_profiler.profile("beamtracer.trace", tags=PROFILE_TAGS)
-    def trace(self, particles: BeamParticles) -> TraceResult:
-        """Trace ``particles`` until they leave the mesh or hit an electrode."""
+    def _trace_numpy(self, particles: BeamParticles, save_every: int) -> TraceResult:
+        """Trace with NumPy, all trajectories a step at a time; the charges per node."""
         mesh = self.mesh
         nx, ny = mesh.shape
         h = mesh.h
@@ -597,11 +605,7 @@ class BeamTracer:
                 depth = rng.exponential(size=n)
                 generation = np.zeros(n, dtype=np.int64)
         species = particles.species
-        saved_ids = (
-            np.arange(0, n, self.save_trajectories)
-            if self.save_trajectories
-            else np.zeros(0, int)
-        )
+        saved_ids = np.arange(0, n, save_every) if save_every else np.zeros(0, int)
         saved = {int(k): [self._project(x[:, k : k + 1])[:, 0]] for k in saved_ids}
 
         # Particles starting inside an electrode never move (and deposit nothing).
@@ -734,11 +738,8 @@ class BeamTracer:
             if fractions is not None:
                 fractions = fractions_new
 
-        if self.reduce is not None:
-            charge = self.reduce(charge)
-        density = self._finalize(charge)
         return TraceResult(
-            charge_density=density,
+            charge_density=charge,
             status=status,
             electrode=electrode,
             planes=planes,
@@ -748,3 +749,238 @@ class BeamTracer:
             fractions=final_fractions,
             tallies=tallies,
         )
+
+    def _use_compiled(self) -> bool:
+        """Whether this trace runs the compiled tracer.
+
+        It applies to the solved electric field alone: no magnetic or imposed electric
+        field and no charge changes.
+
+        Raises:
+            ValueError: If ``compiled=True`` and it does not apply.
+        """
+        if self.compiled is False:
+            return False
+        reasons = []
+        if not isinstance(self.electric, StaggeredElectricField):
+            reasons.append("the electric field is not a StaggeredElectricField")
+        if self.magnetic is not None:
+            reasons.append("it has no magnetic field")
+        if self.imposed_electric is not None:
+            reasons.append("it has no imposed electric field")
+        if self.charge_changing is not None:
+            reasons.append("it has no charge changes")
+        if not self.compiled_available():
+            reasons.append("the Pyccel kernel is not available")
+        if reasons and self.compiled:
+            raise ValueError(
+                "the compiled tracer does not apply: " + "; ".join(reasons)
+            )
+        return not reasons
+
+    def _electrode_lookup(self) -> tuple[np.ndarray, np.ndarray]:
+        """The electrode at every sub-cell of the cells that touch an electrode.
+
+        ``cells`` ``(nx - 1, ny - 1)`` numbers the touching cells (-1 for the others);
+        ``subcells`` holds, for each, its ``SUBCELLS**2`` sub-cells: the electrode
+        containing the sub-cell's corners and centre, -1 for none, or -2 when they
+        disagree (a surface cuts it). Built once per mesh.
+        """
+        if self._lookup is None:
+            mesh = self.mesh
+            cells = np.full(self._electrode_cells.shape, -1, dtype=np.int64)
+            ci, cj = np.nonzero(self._electrode_cells)
+            if not mesh.electrodes or not ci.size:
+                self._lookup = (cells, np.full(1, -1, dtype=np.int64))
+                return self._lookup
+            cells[ci, cj] = np.arange(ci.size, dtype=np.int64)
+
+            def sample(fraction: np.ndarray) -> np.ndarray:
+                px = mesh.origin[0] + mesh.h * (
+                    ci[:, None, None] + fraction[None, :, None]
+                )
+                py = mesh.origin[1] + mesh.h * (
+                    cj[:, None, None] + fraction[None, None, :]
+                )
+                px, py = np.broadcast_arrays(px, py)
+                return mesh.inside_solid(px.ravel(), py.ravel()).reshape(px.shape)
+
+            corner = sample(np.arange(SUBCELLS + 1) / SUBCELLS)
+            centre = sample((np.arange(SUBCELLS) + 0.5) / SUBCELLS)
+            same = (
+                (corner[:, :-1, :-1] == centre)
+                & (corner[:, 1:, :-1] == centre)
+                & (corner[:, :-1, 1:] == centre)
+                & (corner[:, 1:, 1:] == centre)
+            )
+            subcells = np.where(same, centre, -2).astype(np.int64).ravel()
+            self._lookup = (cells, subcells)
+        return self._lookup
+
+    @scope_profiler.profile("beamtracer.trace_compiled", tags=PROFILE_TAGS)
+    def _trace_compiled(self, particles: BeamParticles) -> TraceResult:
+        """Trace with the compiled kernel, every trajectory from start to end; the node charges.
+
+        The trajectories kept for plotting take the NumPy path. Those stopped in a
+        sub-cell cut by an electrode surface are tested with the electrodes' own test,
+        and the ones outside resume. A trace that records more crossings of a plane per
+        trajectory than its buffer holds is repeated with a larger buffer, which the
+        tracer keeps for the next traces.
+        """
+        mesh = self.mesh
+        nx, ny = mesh.shape
+        n = len(particles)
+        x = np.array(particles.position, dtype=float, order="C")
+        v = np.array(particles.velocity, dtype=float, order="C")
+        qm = np.ascontiguousarray(particles.charge / particles.mass, dtype=float)
+        current = particles.current.astype(float)
+        dq = np.ascontiguousarray(np.sign(particles.charge) * np.abs(current))
+        species = particles.species
+        status = np.full(n, _ALIVE, dtype=np.int64)
+        electrode = np.full(n, -1, dtype=np.int64)
+        steps = np.zeros(n, dtype=np.int64)
+        if mesh.electrodes and n:
+            hit = mesh.inside_solid(*self._project(x))
+            dead = hit >= 0
+            status[dead] = ELECTRODE
+            electrode[dead] = hit[dead]
+        save = self.save_trajectories
+        saved_ids = np.arange(0, n, save) if save else np.zeros(0, int)
+        traced = np.ones(n, dtype=bool)
+        traced[saved_ids] = False
+        start = np.flatnonzero(traced & (status == _ALIVE)).astype(np.int64)
+
+        assert isinstance(self.electric, StaggeredElectricField)
+        fx = np.ascontiguousarray(self.electric.fx, dtype=float)
+        fy = np.ascontiguousarray(self.electric.fy, dtype=float)
+        cells, subcells = self._electrode_lookup()
+        # Pyccel takes no empty arrays: without planes one that is never crossed (NaN)
+        planes = np.array(self.planes or (np.nan,), dtype=float)
+        threads = max(1, min(_num_threads(), start.size))
+        initial = (x.copy(), v.copy(), status.copy(), electrode.copy())
+        while True:
+            capacity = self._capacity
+            charge = np.zeros((threads, nx, ny))
+            hits = np.zeros((n, planes.size, capacity, 8))
+            counts = np.zeros((n, planes.size), dtype=np.int64)
+            active = start
+            while active.size:
+                trace_trajectories_2d(
+                    active, x, v, qm, dq, steps, status, electrode, fx, fy,
+                    *map(float, mesh.origin), mesh.h, *map(float, mesh.upper),
+                    int(mesh.cylindrical), self.step_fraction, self.max_steps,
+                    cells, subcells, SUBCELLS, planes, hits, counts, threads, charge,
+                )  # fmt: skip
+                paused = active[status[active] == _PAUSED]
+                if not paused.size:
+                    break
+                hit = mesh.inside_solid(*self._project(x[:, paused]))
+                inside = hit >= 0
+                status[paused[inside]] = ELECTRODE
+                electrode[paused[inside]] = hit[inside]
+                active = paused[~inside]
+                status[active] = _ALIVE
+            most = int(counts.max()) if counts.size else 0
+            if most <= capacity:
+                break
+            self._capacity = most
+            x, v, status, electrode = (a.copy() for a in initial)
+            steps[:] = 0
+        charge = charge.sum(axis=0)
+
+        hit_planes = []
+        slots = np.arange(capacity)
+        for p, position in enumerate(self.planes):
+            k, c = np.nonzero(slots[None, :] < counts[:, p, None])
+            record = hits[k, p, c]
+            order = np.lexsort((k, record[:, 7]))  # in the order of the steps
+            k, record = k[order], record[order]
+            plane = PlaneHits(position)
+            plane.append(
+                record[:, 0:3].T.copy(),
+                record[:, 3:6].T.copy(),
+                current[k],
+                species[k],
+                record[:, 6].astype(np.int8),
+            )
+            hit_planes.append(plane)
+
+        most_steps = int(steps.max()) if n else 0
+        trajectories: list[np.ndarray] = []
+        trajectory_species = species[saved_ids]
+        if saved_ids.size:
+            kept = self._trace_numpy(particles.subset(saved_ids), 1)
+            charge += kept.charge_density
+            status[saved_ids] = kept.status
+            electrode[saved_ids] = kept.electrode
+            for plane, more in zip(hit_planes, kept.planes, strict=True):
+                plane.append(
+                    more.point,
+                    more.velocity,
+                    more.current,
+                    more.species,
+                    more.direction,
+                )
+            trajectories = kept.trajectories
+            most_steps = max(most_steps, kept.steps)
+        return TraceResult(
+            charge_density=charge,
+            status=status.astype(np.int8),
+            electrode=electrode.astype(np.int32),
+            planes=hit_planes,
+            trajectories=trajectories,
+            trajectory_species=trajectory_species,
+            steps=most_steps,
+        )
+
+    # -- tracing ----------------------------------------------------------------------------
+
+    @method(
+        equations={
+            "charge": r"\Delta Q = \operatorname{sign}(q)\, I\, \Delta t \quad \text{or, with charge changes,} \quad \Delta Q = N_k\, e \sum_s z_s \bar F_s\, \Delta t",
+            "midpoint": r"\mathbf x_{1/2} = \tfrac12 (\mathbf x + \mathbf x') + \frac{\Delta t}{8} (\mathbf v - \mathbf v')",
+            "weights": r"w_x = \frac{x - x_i}{h}, \qquad w_r = \frac{r^2 - r_j^2}{r_{j+1}^2 - r_j^2} \ \text{(cylindrical)}, \quad w_y = \frac{y - y_j}{h} \ \text{(planar)}",
+            "volumes": r"\rho_{ij} = \frac{Q_{ij}}{V_j}, \qquad V_j = h^2 \ \text{(planar)}, \quad V_j = \pi h (r_{j+1/2}^2 - r_{j-1/2}^2) = 2\pi r_j h^2, \quad V_0 = \pi h^3",
+            "path": r"\Delta s = \tfrac12 \Delta t\, (|\mathbf v| + |\mathbf v'|) \times \text{the share of the step inside the mesh}",
+        },
+        assumptions=(
+            r"a steady trajectory of current $I$ is a line charge $I / v$, so a step holds $I \Delta t$; currents are magnitudes, the sign is the charge's",
+            r"$\mathbf x_{1/2}$ the cubic Hermite interpolant at the half step; charge outside the mesh goes to the boundary nodes, whose densities are doubled (half cells)",
+            r"a trajectory ends transmitted ($x \ge x_\mathrm{max}$), backward ($x < x_\mathrm{min}$), on the wall, on an electrode (tested in the cells touching one) or after `max_steps`, tested at the end of each step",
+            r"the compiled tracer (the solved $\mathbf E$ alone) takes the same steps; it looks the electrodes up in sub-cells of $h/8$ (sampled at their corners and centre) and runs the electrode's own test only in the sub-cells a surface cuts",
+            r"$\bar F$ the mean of the fractions before and after the step; with MPI the node charges are summed over the ranks",
+        ),
+        components=(
+            "beamtracer.solver.tracer.BeamTracer",
+            "beamtracer.solver.charge_changing.ChargeChanging",
+        ),
+    )
+    @scope_profiler.profile("beamtracer.trace", tags=PROFILE_TAGS)
+    def trace(self, particles: BeamParticles) -> TraceResult:
+        """Trace ``particles`` until they leave the mesh or hit an electrode."""
+        if self._use_compiled():
+            result = self._trace_compiled(particles)
+        else:
+            result = self._trace_numpy(particles, self.save_trajectories)
+        charge = result.charge_density
+        if self.reduce is not None:
+            charge = self.reduce(charge)
+        result.charge_density = self._finalize(charge)
+        return result
+
+    # -- the compiled tracer ----------------------------------------------------------------
+
+    @staticmethod
+    @functools.cache
+    def compiled_available() -> bool:
+        """Whether the compiled tracer (the Pyccel ``trace_trajectories_2d`` kernel) can run.
+
+        Builds the kernel on the first call; a failed build means the NumPy tracer.
+        """
+        try:
+            if trace_trajectories_2d.selected() != "pyccel":
+                return False
+            trace_trajectories_2d.host_kernel.kernel.get("pyccel")  # pyright: ignore[reportFunctionMemberAccess]
+        except (ImportError, LookupError, NotImplementedError, OSError, RuntimeError):
+            return False
+        return True

@@ -7,6 +7,17 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The tracer runs as one compiled kernel, `trace_trajectories_2d`, that follows every
+  trajectory from start to end: the Runge--Kutta steps, the space-charge deposit, the plane
+  crossings and the exit and electrode tests, in parallel over OpenMP threads (each with its
+  own charge grid; `OMP_NUM_THREADS` sets them), with a CUDA version. It takes the same steps
+  as the NumPy tracer and agrees with it to rounding, about 2.5 times faster on one core and
+  about 10 times faster on four on IBSimu's `vlasov2d` case. It applies to the solved
+  electric field alone (no magnetic or imposed field, no charge changes) and where Pyccel is
+  installed; the NumPy tracer runs otherwise, and for the trajectories kept for plotting.
+  `BeamTracer(compiled=...)` chooses. Electrodes are looked up in sub-cells of `h/8`, and
+  tested with their own `inside` function only where a surface cuts the sub-cell.
+
 - `neutralizer_channel_2d` traces a gas neutralizer as in ITER's injectors (no cusps); the docs
   say that the cusp-confined channel is the beam-driven plasma neutralizer studied for DEMO.
 
