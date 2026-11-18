@@ -561,8 +561,11 @@ class BeamOpticsConfig:
     patchwork's ``"lu"`` (every MPI rank the whole mesh), ``"petsc"`` (the ranks share
     it: Krylov with algebraic multigrid, needs petsc4py), ``"amg"`` (every rank, algebraic
     multigrid preconditioning a Krylov method, no factorisation; with a plasma a
-    Newton--Krylov method keeping its preconditioner; needs pyamg; for 3D and large
-    meshes) or ``"auto"``. ``refinement``
+    Newton--Krylov method keeping its preconditioner; needs pyamg), ``"multigrid"``
+    (every rank, patchwork's geometric multigrid with a compiled Gauss--Seidel V-cycle;
+    with a plasma every Newton step preconditioned by its own Jacobian, which the
+    multigrid takes as a diagonal update; the fastest for 3D and large meshes) or
+    ``"auto"``. ``refinement``
     lists boxes solved and traced on finer cells (`RefinementParams`): the field on
     patchwork's composite mesh, each trajectory stepping and depositing on the finest box
     it is in. ``symmetry_plane`` makes a planar grid half of a geometry mirrored at its
@@ -709,9 +712,9 @@ class BeamOpticsConfig:
             )
         if self.coarse_particles < 1.0 and not self.coarse_tolerance > 0.0:
             raise ValueError("coarse_particles < 1 needs a positive coarse_tolerance")
-        if self.field_backend not in ("lu", "petsc", "amg", "auto"):
+        if self.field_backend not in ("lu", "petsc", "amg", "multigrid", "auto"):
             raise ValueError(
-                "field_backend must be 'lu', 'petsc', 'amg' or 'auto', got "
+                "field_backend must be 'lu', 'petsc', 'amg', 'multigrid' or 'auto', got "
                 f"{self.field_backend!r}"
             )
         if self.integrator not in ("rk4", "boris"):

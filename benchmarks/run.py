@@ -87,7 +87,7 @@ def arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--field-backend",
         default="lu",
-        choices=("lu", "amg", "petsc", "auto"),
+        choices=("lu", "amg", "multigrid", "petsc", "auto"),
         help="beamtracer's field solve (field_backend)",
     )
     parser.add_argument("--out", type=Path, default=Path("benchmark_results"))

@@ -40,7 +40,16 @@ from beamtracer.solver.mesh3d import FACES_3D, IonOpticsMesh3D
 from beamtracer.solver.refinement import Layout, Refinement, layout_of, patches_of
 from beamtracer.solver.refinement3d import Layout3D, layout_of_3d, patches_of_3d
 
-#: The relative residual of a Newton step by GMRES with ``backend="amg"`` (an inexact
+#: The backends whose Newton steps are GMRES with a kept multigrid preconditioner.
+KRYLOV_BACKENDS = ("amg", "multigrid")
+
+#: The multigrid's coarsest level (``backend="multigrid"``): small enough to invert densely.
+COARSEST_UNKNOWNS = 30
+
+#: The backends that precondition every Newton step with its own Jacobian.
+REFRESHED_BACKENDS = ("multigrid",)
+
+#: The relative residual of a Newton step by GMRES with ``backend="amg"`` or ``"multigrid"`` (an inexact
 #: Newton step: near the solution each step gains this factor).
 NEWTON_KRYLOV_RTOL = 1e-3
 #: GMRES iterations after which the kept AMG preconditioner is built again (a build of
@@ -138,6 +147,19 @@ _FACES = {
     },
     True: {"x_min": "y_lower", "x_max": "y_upper", "y_max": "x_upper"},
 }
+
+
+def _patchwork_backend(backend: str) -> Any:
+    """Patchwork's backend for a name: ``"multigrid"`` smooths by Gauss--Seidel (compiled)."""
+    if backend == "multigrid":
+        from patchwork import MultigridBackend
+
+        return MultigridBackend(
+            smoother="gauss-seidel",
+            smoothing_steps=1,
+            coarsest_unknowns=COARSEST_UNKNOWNS,
+        )
+    return backend
 
 
 class _Field:
@@ -285,7 +307,7 @@ class _Field:
             hierarchy,
             faces=faces,
             embedded=bodies,
-            backend=backend,
+            backend=_patchwork_backend(backend),
             metric="cylindrical" if cylindrical else "cartesian",
             min_fraction=1.0 / 255.0,
         )
@@ -434,7 +456,7 @@ class _Field3D:
             hierarchy,
             faces=faces,
             embedded=bodies,
-            backend=backend,
+            backend=_patchwork_backend(backend),
             min_fraction=1.0 / 255.0,
         )
         nodes = self.solver.nodes
@@ -507,7 +529,9 @@ class IonOpticsPoisson:
     the ranks share the mesh's rows: a Krylov method with algebraic multigrid), ``"amg"``
     (every rank, algebraic multigrid preconditioning a Krylov method: no factorisation,
     for large and 3D meshes; with a plasma a Newton--Krylov method whose AMG
-    preconditioner is kept, `_newton_krylov`) or ``"auto"``.
+    preconditioner is kept, `_newton_krylov`), ``"multigrid"`` (every rank, patchwork's
+    geometric multigrid with a compiled Gauss--Seidel V-cycle; with a plasma every
+    Newton step preconditioned by its own Jacobian) or ``"auto"``.
     """
 
     def __init__(
@@ -587,13 +611,17 @@ class IonOpticsPoisson:
         stop: float,
         max_newton: int,
     ) -> np.ndarray:
-        """Newton's method with every step by GMRES, preconditioned by a kept AMG cycle.
+        """Newton's method with every step by GMRES, preconditioned by a multigrid cycle.
 
         The step solves the current Jacobian ``K + L diag(c)`` (a sparse matrix without
-        hanging nodes) to a relative residual of `NEWTON_KRYLOV_RTOL`; its preconditioner is the V-cycle of the algebraic-multigrid
-        hierarchy (patchwork's ``"amg"`` backend) of an earlier Jacobian, kept across steps,
-        solves and Vlasov iterations, and built again only when GMRES fails or takes more
-        than `NEWTON_KRYLOV_REBUILD` iterations. Returns the unknowns.
+        hanging nodes) to a relative residual of `NEWTON_KRYLOV_RTOL`. With ``"amg"`` its
+        preconditioner is the V-cycle of the algebraic-multigrid hierarchy of an earlier
+        Jacobian, kept across steps, solves and Vlasov iterations, and built again only
+        when GMRES fails or takes more than `NEWTON_KRYLOV_REBUILD` iterations. With
+        ``"multigrid"`` (`REFRESHED_BACKENDS`) every step is preconditioned by the
+        geometric multigrid of its own Jacobian: the lumped reaction changes only the
+        diagonal, which patchwork takes without a new Galerkin product
+        (``CompositeMultigrid.update_diagonal``). Returns the unknowns.
         """
         from scipy import sparse
         from scipy.sparse.linalg import LinearOperator, gmres
@@ -604,6 +632,16 @@ class IonOpticsPoisson:
         hanging = getattr(field, "hanging", np.zeros(0))
         load_unknowns = None if np.size(hanging) else solver.load[:, unknowns].tocsr()
         builds = iterations = krylov_iterations = 0
+        # a multigrid takes a new diagonal cheaply: every step its own Jacobian
+        refresh = self.backend in REFRESHED_BACKENDS
+        diagonal_only = None
+        if refresh and load_unknowns is not None:
+            take = getattr(solver.solver, "update_diagonal", None)
+            load_diagonal = load_unknowns.diagonal()
+            off = load_unknowns - sparse.diags(load_diagonal)
+            if callable(take) and not off.count_nonzero():
+                # the lumped reaction is on the diagonal: hand the multigrid only that
+                diagonal_only = (take, solver.stiffness.diagonal(), load_diagonal)
         for iterations in range(1, max_newton + 1):  # noqa: B007 (counted after the loop)
             phi[unknowns] = u
             field.fill_hanging(phi)
@@ -614,7 +652,15 @@ class IonOpticsPoisson:
             if solver.solver is None:  # no unknowns
                 break
             reaction = density / temperature
-            if load_unknowns is not None:
+            if diagonal_only is not None:
+                take, stiffness_diagonal, load_diagonal = diagonal_only
+                take(stiffness_diagonal + load_diagonal * reaction[unknowns])
+                field.jacobian = True
+                builds += 1
+                operator = (
+                    solver.solver.matrix
+                )  # this Jacobian, as the multigrid holds it
+            elif load_unknowns is not None:
                 # no hanging nodes: the Jacobian as a sparse matrix
                 operator: Any = solver.stiffness + load_unknowns @ sparse.diags(
                     reaction[unknowns]
@@ -632,8 +678,14 @@ class IonOpticsPoisson:
                 operator = LinearOperator((n, n), matvec=jacobian, dtype=float)  # pyright: ignore[reportCallIssue]
             delta = None
             for attempt in range(2):
-                if not field.jacobian or attempt == 1:
-                    solver.set_reaction(reaction)  # the hierarchy of this Jacobian
+                if attempt == 1 or (
+                    diagonal_only is None and (not field.jacobian or refresh)
+                ):
+                    take = getattr(solver.solver, "update_operator", None)
+                    if load_unknowns is not None and callable(take):
+                        take(operator)  # the multigrid of this Jacobian, as assembled
+                    else:
+                        solver.set_reaction(reaction)  # the hierarchy of this Jacobian
                     field.jacobian = True
                     builds += 1
                 count = [0]
@@ -647,7 +699,10 @@ class IonOpticsPoisson:
                     callback=counter, callback_type="pr_norm",
                 )  # fmt: skip
                 krylov_iterations += count[0]
-                if info == 0 and count[0] <= NEWTON_KRYLOV_REBUILD:
+                # a preconditioner of this very Jacobian is not built again
+                if info == 0 and (
+                    count[0] <= NEWTON_KRYLOV_REBUILD or diagonal_only is not None
+                ):
                     delta = step
                     break
                 delta = step if info == 0 else None
@@ -782,7 +837,7 @@ class IonOpticsPoisson:
         scale = max(
             float(np.ptp(prescribed)) if prescribed.size else 0.0, temperature, 1.0
         )
-        if self.backend == "amg":
+        if self.backend in KRYLOV_BACKENDS:
             u = self._newton_krylov(
                 field, phi, u, base, amplitude, temperature, up, sign,
                 tolerance * scale, max_newton,

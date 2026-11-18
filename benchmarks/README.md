@@ -74,9 +74,11 @@ python benchmarks/run.py vlasov2d --scale 4 --repeats 3 --threads 4 --integrator
 python benchmarks/run.py --codes beamtracer     # beamtracer alone, no comparison
 ```
 
-`--field-backend amg` solves beamtracer's field with algebraic multigrid and its plasma
-with the Newton--Krylov method (the default is the LU factorisation; `amg` is faster in
-3D). `--scale n` divides the cells by `n`, `--particles` overrides the trajectories, `--threads`
+`--field-backend multigrid` (or `amg`) solves beamtracer's field with multigrid and its
+plasma with the Newton--Krylov method (the default is the LU factorisation). `multigrid` is
+the fastest in 3D: on `extraction3d` 2.6 s against IBSimu's 4.0 s (`amg` 7.0 s, `lu` 26 s),
+on `quad3d` 0.31 s against 2.5 s, one thread each, best of 3. `--scale n` divides the cells
+by `n`, `--particles` overrides the trajectories, `--threads`
 sets the threads of both codes (`--ibsimu-threads` IBSimu's alone). Each code runs each case
 in its own process under a scope-profiler session; the profiles (`<case>_<code>.h5`), the
 potentials and exit beams (`.npz`) and the report (`results.md`, `results.json`) go to
