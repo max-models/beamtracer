@@ -30,6 +30,7 @@ KERNEL_NAMES = (
     "staggered_field_2d",
     "deposit_trajectories_2d",
     "trace_trajectories_2d",
+    "trace_trajectories_3d",
 )
 
 _PACKAGE = __name__.rpartition(".")[0]
