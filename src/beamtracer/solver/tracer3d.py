@@ -15,6 +15,7 @@ from typing import Any
 import numpy as np
 import scope_profiler
 from methodcard import method
+from scipy import constants
 
 from beamtracer._profiling import PROFILE_TAGS
 from beamtracer.kernels.trace_trajectories_3d import kernel as trace_trajectories_3d
@@ -28,12 +29,84 @@ from beamtracer.solver.tracer import (
     BeamParticles,
     PlaneHits,
     TraceResult,
+    _gaussian_samples,
     _num_threads,
     share_of,
 )
 
 #: Sub-cells per cell edge of the 3D electrode lookup (``SUBCELLS**3`` per cell).
 SUBCELLS_3D = 4
+
+
+@method(
+    equations={
+        "rectangle": r"(y, z) = \mathbf c + \left(\left(i + \tfrac12\right) \frac{a}{n_y} - \frac a2,\ \left(j + \tfrac12\right) \frac{b}{n_z} - \frac b2\right), \qquad n_y \approx \sqrt{N a / b},\ n_z \approx N / n_y",
+        "disc": r"r_k = R \sqrt{\frac{k + 1/2}{N}}, \qquad \theta_k = k\, \pi (3 - \sqrt 5)",
+        "velocity": r"\mathbf v = (v_0 + \sigma_\parallel g_2,\ \sigma_\perp g_1,\ \sigma_\perp g_3), \qquad v_0 = \sqrt{\frac{2 E e}{m}}, \quad \sigma = \sqrt{\frac{T e}{m}}",
+        "current": r"I_k = \frac{J A}{N}",
+    },
+    assumptions=(
+        r"the emitting surface is perpendicular to $x$; every trajectory stands for an equal share of its area",
+        r"$g_{1,2,3}$ an unscrambled 3D Sobol sequence through the inverse normal: the same beam on every call",
+    ),
+)
+def beam_on_surface(
+    num_particles: int,
+    current_density: float,
+    charge: float,
+    mass: float,
+    energy: float,
+    parallel_temperature: float,
+    transverse_temperature: float,
+    centre: Sequence[float],
+    size: Sequence[float],
+    shape: str = "rectangle",
+    *,
+    species: int = 0,
+) -> tuple[BeamParticles, float]:
+    """Seed a beam emitted from a surface perpendicular to ``x``; return it and ``J / v``.
+
+    ``shape`` ``"rectangle"`` of side lengths ``size`` ``(along y, along z)`` [m], the
+    trajectories at the centres of a grid of about ``num_particles`` equal cells, or
+    ``"disc"`` of radius ``size[0]``, the trajectories on a sunflower pattern of equal
+    areas, centred at ``centre`` ``(x, y, z)`` [m]. They move along ``+x`` at ``energy``
+    [eV] with Gaussian spreads [eV]; ``current_density`` [A/m^2], ``charge`` [e], ``mass``
+    [u]. Every trajectory carries ``J A / N``.
+    """
+    q = charge * constants.e
+    m = mass * constants.atomic_mass
+    v = np.sqrt(2.0 * energy * constants.e / m)
+    dvp = np.sqrt(parallel_temperature * constants.e / m)
+    dvt = np.sqrt(transverse_temperature * constants.e / m)
+    cx, cy, cz = (float(c) for c in centre)
+    if shape == "rectangle":
+        a, b = (float(s) for s in size)
+        ny = max(1, round(np.sqrt(num_particles * a / b)))
+        nz = max(1, round(num_particles / ny))
+        j, k = np.meshgrid(np.arange(ny), np.arange(nz), indexing="ij")
+        py = cy - 0.5 * a + (j.ravel() + 0.5) * a / ny
+        pz = cz - 0.5 * b + (k.ravel() + 0.5) * b / nz
+        area = a * b
+    elif shape == "disc":
+        radius = float(size[0])
+        k = np.arange(num_particles)
+        r = radius * np.sqrt((k + 0.5) / num_particles)
+        theta = k * np.pi * (3.0 - np.sqrt(5.0))
+        py, pz = cy + r * np.cos(theta), cz + r * np.sin(theta)
+        area = np.pi * radius**2
+    else:
+        raise ValueError(f"shape must be 'rectangle' or 'disc', got {shape!r}")
+    n = py.size
+    g = _gaussian_samples(n, "sobol")
+    particles = BeamParticles(
+        position=np.stack([np.full(n, cx), py, pz]),
+        velocity=np.stack([v + dvp * g[:, 1], dvt * g[:, 0], dvt * g[:, 2]]),
+        charge=np.full(n, q),
+        mass=np.full(n, m),
+        current=np.full(n, current_density * area / n),
+        species=np.full(n, species, dtype=np.int32),
+    )
+    return particles, current_density / v
 
 
 @method(
