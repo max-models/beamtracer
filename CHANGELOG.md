@@ -59,6 +59,10 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The example "Mesh refinement": a beam extracted through an aperture on a coarse mesh with a
+  refined box over the meniscus and the aperture, against uniform meshes (the divergence of
+  the mesh with half the cells, with half its nodes).
+
 - `field_backend="multigrid"`: patchwork's geometric multigrid with a compiled Gauss–Seidel
   V-cycle preconditions the Newton–Krylov steps, each with its own Jacobian (the lumped
   reaction changes only the diagonal, which the multigrid takes in about 10 ms). On the 3D
