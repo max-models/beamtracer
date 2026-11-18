@@ -58,13 +58,15 @@ def plane_moments(
     mass: np.ndarray | float,
     species: int | None = None,
     forward_only: bool = True,
+    axis: str = "y",
 ) -> BeamMoments:
     """Return the `BeamMoments` of the trajectories crossing a plane.
 
     In cylindrical geometry each trajectory is a ring, and the moments are those of its
     projection on ``x``-``x'`` (the ring rotated about the axis, averaged over all angles): ``<x^2> = <r^2>/2``, ``<x'^2> = <r'^2 + a'^2>/2`` and ``<x x'> = <r r'>/2``,
     with ``r' = v_r / v_x`` and ``a' = v_theta / v_x``. In planar geometry the moments are
-    those of ``y`` and ``y' = v_y / v_x`` about their means. ``mass`` [kg] is one value per
+    those of ``y`` and ``y' = v_y / v_x`` about their means (``axis="z"``: of ``z`` and
+    ``z' = v_z / v_x``, in 3D). ``mass`` [kg] is one value per
     species (indexed by ``hits.species``) or a single value; only the given ``species`` and,
     with ``forward_only``, crossings in the ``+x`` direction count.
     """
@@ -96,8 +98,11 @@ def plane_moments(
         pp = np.sum(w * (rp * rp + ap * ap)) / (2.0 * total)
         xp = np.sum(w * r * rp) / (2.0 * total)
     else:
-        y = point[1]
-        yp = vel[1] / vx
+        if axis not in ("y", "z"):
+            raise ValueError(f"axis must be 'y' or 'z', got {axis!r}")
+        a = 1 if axis == "y" else 2
+        y = point[a]
+        yp = vel[a] / vx
         my = np.sum(w * y) / total
         myp = np.sum(w * yp) / total
         xx = np.sum(w * (y - my) ** 2) / total

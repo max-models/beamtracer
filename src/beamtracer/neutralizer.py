@@ -295,7 +295,7 @@ class NeutralizerChannel:
         assert model is not None and mean is not None
         incoming = n.beam.particle_rate / n.height  # per metre of height
         exit_fractions = {}
-        changing = model.tracer.charge_changing
+        changing = getattr(model.tracer, "charge_changing", None)
         assert changing is not None
         for s in changing.states:
             moments = model.state_moments(self.exit_plane, s)

@@ -11,11 +11,12 @@ is made (`plasmacoll.units`); temperatures convert between K and eV.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any, ClassVar
 
+import numpy as np
 from plasmacoll.units import (
     convert_units,
     dataclass_to_dict,
@@ -27,6 +28,7 @@ from plasmacoll.units import (
 
 from beamtracer.field_map import OUTSIDE, FieldMap
 from beamtracer.sections import (
+    OBJECT_TYPES_3D,
     ConfigDict,
     FieldBCs,
     GridParams,
@@ -68,6 +70,63 @@ class BeamSpecies:
             raise ValueError("mass must be positive")
         if self.energy <= 0.0:
             raise ValueError("energy must be positive")
+
+
+@dataclass(frozen=True)
+class BeamSpecies3D:
+    """A beam emitted from a surface of a 3D grid, perpendicular to ``x``.
+
+    ``num_particles`` trajectories start on the ``shape`` centred at ``centre``
+    ``(x, y, z)`` [m] in the plane ``x = centre[0]``: a ``"rectangle"`` of side
+    lengths ``size`` ``(along y, along z)`` [m] on a grid of cells of equal area, or a
+    ``"disc"`` of radius ``size[0]`` on a sunflower pattern of equal areas. They move
+    along ``+x`` with ``energy`` [eV] and Gaussian spreads ``parallel_temperature`` /
+    ``transverse_temperature`` [eV] (as IBSimu's ``add_rectangular_beam_with_energy`` and
+    ``add_cylindrical_beam_with_energy``), each carrying ``current_density`` [A/m^2] times
+    its share of the area. ``charge`` [e], ``mass`` [u].
+    """
+
+    name: str
+    current_density: float = field(metadata=unit_metadata("A/m2"))
+    centre: tuple[float, float, float] = field(metadata=unit_metadata("m"))
+    size: tuple[float, ...] = field(metadata=unit_metadata("m"))
+    shape: str = "rectangle"
+    charge: float = 1.0
+    mass: float = unit_field("u", 1.007276)
+    energy: float = unit_field("eV", 5.0)
+    parallel_temperature: float = unit_field("eV", 0.0)
+    transverse_temperature: float = unit_field("eV", 0.5)
+    num_particles: int = 1000
+
+    def __post_init__(self) -> None:
+        """Convert the units and check the values."""
+        convert_units(self)
+        object.__setattr__(self, "centre", tuple(float(c) for c in self.centre))
+        size = np.atleast_1d(np.asarray(self.size, dtype=float))
+        object.__setattr__(self, "size", tuple(size.tolist()))
+        if len(self.centre) != 3:
+            raise ValueError("centre is an (x, y, z) point")
+        if self.shape not in ("rectangle", "disc"):
+            raise ValueError(f"shape must be 'rectangle' or 'disc', got {self.shape!r}")
+        if len(self.size) != (2 if self.shape == "rectangle" else 1):
+            raise ValueError(
+                "size is (along y, along z) for a rectangle, (radius,) for a disc"
+            )
+        if min(self.size) <= 0.0:
+            raise ValueError("size must be positive")
+        if self.num_particles < 1:
+            raise ValueError("num_particles must be at least 1")
+        if self.mass <= 0.0:
+            raise ValueError("mass must be positive")
+        if self.energy <= 0.0:
+            raise ValueError("energy must be positive")
+
+    @property
+    def area(self) -> float:
+        """The emitting area [m^2]."""
+        if self.shape == "disc":
+            return float(np.pi * self.size[0] ** 2)
+        return float(self.size[0] * self.size[1])
 
 
 @dataclass(frozen=True)
@@ -396,19 +455,31 @@ class SpaceChargeCompensation:
             raise ValueError(f"fraction must be in [0, 1], got {self.fraction}")
 
 
-def beam_from_value(value: Any) -> BeamSpecies | ParticleBeam:
-    """Return a beam from a dataclass or its mapping (its ``type`` tells which)."""
-    if isinstance(value, (BeamSpecies, ParticleBeam)):
+def beam_from_value(value: Any) -> BeamSpecies | BeamSpecies3D | ParticleBeam:
+    """Return a beam from a dataclass or its mapping (its ``type`` tells which).
+
+    ``"line"`` (`BeamSpecies`, the default), ``"surface"`` (`BeamSpecies3D`) or
+    ``"particles"`` (`ParticleBeam`).
+    """
+    if isinstance(value, (BeamSpecies, BeamSpecies3D, ParticleBeam)):
         return value
     params = dict(value)
     kind = params.pop("type", "line")
-    return ParticleBeam(**params) if kind == "particles" else BeamSpecies(**params)
+    classes = {"line": BeamSpecies, "surface": BeamSpecies3D, "particles": ParticleBeam}
+    if kind not in classes:
+        raise ValueError(f"beam type must be one of {sorted(classes)}, got {kind!r}")
+    return classes[kind](**params)
 
 
-def beam_to_dict(beam: BeamSpecies | ParticleBeam) -> ConfigDict:
+def beam_to_dict(beam: BeamSpecies | BeamSpecies3D | ParticleBeam) -> ConfigDict:
     """Return the configuration-file form of a beam."""
     params = dataclass_to_dict(beam)
-    params["type"] = "particles" if isinstance(beam, ParticleBeam) else "line"
+    if isinstance(beam, ParticleBeam):
+        params["type"] = "particles"
+    elif isinstance(beam, BeamSpecies3D):
+        params["type"] = "surface"
+    else:
+        params["type"] = "line"
     return params
 
 
@@ -507,7 +578,9 @@ class BeamOpticsConfig:
     grid: GridParams = field(default_factory=GridParams)
     objects: dict[str, ObjectParams] = field(default_factory=dict)
     bcs_field: FieldBCs | None = None
-    beams: list[BeamSpecies | ParticleBeam] = field(default_factory=list)
+    beams: Sequence[BeamSpecies | BeamSpecies3D | ParticleBeam] = field(
+        default_factory=list
+    )
     plasma: ExtractionPlasma | NegativeExtractionPlasma | None = None
     solenoids: list[Solenoid] = field(default_factory=list)
     axial_field: AxialField | None = None
@@ -528,8 +601,43 @@ class BeamOpticsConfig:
     field_backend: str = "lu"
     refinement: list[RefinementParams] = field(default_factory=list)
     symmetry_plane: bool = False
+    symmetry_planes: list[str] = field(default_factory=list)
     diagnostic_planes: list[float] = unit_field("m", default_factory=list)
     save_trajectories: int = 0
+
+    def _check_dimension(self) -> None:
+        """Check that the beams, objects and settings fit the grid's dimension."""
+        three = self.grid.ndim == 3
+        for name, obj in self.objects.items():
+            if any((s.type in OBJECT_TYPES_3D) != three for s in obj.shape_list):
+                raise ValueError(
+                    f"object {name!r} has a {'2D' if three else '3D'} shape on a "
+                    f"{self.grid.ndim}D grid"
+                )
+        for beam in self.beams:
+            if isinstance(beam, BeamSpecies) and three:
+                raise ValueError("a 3D grid takes BeamSpecies3D, not line beams")
+            if isinstance(beam, BeamSpecies3D) and not three:
+                raise ValueError("BeamSpecies3D needs a 3D grid")
+        if not three:
+            if self.symmetry_planes:
+                raise ValueError(
+                    "symmetry_planes is for a 3D grid (2D: symmetry_plane)"
+                )
+            return
+        unsupported = {
+            "refinement": self.refinement,
+            "charge_changing": self.charge_changing,
+            "symmetry_plane": self.symmetry_plane,
+        }
+        given = sorted(name for name, value in unsupported.items() if value)
+        if given:
+            raise ValueError(f"a 3D grid does not take {', '.join(given)} yet")
+        for plane in self.symmetry_planes:
+            if plane not in ("y_min", "z_min"):
+                raise ValueError(
+                    f"a symmetry plane is 'y_min' or 'z_min', got {plane!r}"
+                )
 
     def __post_init__(self) -> None:
         """Convert the units, check the grid and read the sections."""
@@ -539,18 +647,22 @@ class BeamOpticsConfig:
             name: _section(ObjectParams, obj)
             for name, obj in (self.objects or {}).items()
         }
+        three = self.grid.ndim == 3
         if self.bcs_field is None:
-            self.bcs_field = FieldBCs.grounded()
+            self.bcs_field = FieldBCs.grounded(self.grid.ndim)
         else:
             self.bcs_field = _section(FieldBCs, self.bcs_field)
+        assert self.bcs_field is not None
+        if self.bcs_field.has_z != three:
+            raise ValueError("a 3D grid needs the z faces in bcs_field, a 2D one none")
         if self.grid.coordinates not in ("cartesian", "cylindrical"):
             raise ValueError(
                 f"BeamOptics needs cartesian or cylindrical coordinates, got "
                 f"{self.grid.coordinates!r}"
             )
-        dx, dy = self.grid.deltas
-        if abs(dx - dy) > 1e-9 * max(dx, dy):
-            raise ValueError(f"BeamOptics needs equal node spacing, got {dx} and {dy}")
+        deltas = self.grid.deltas
+        if max(deltas) - min(deltas) > 1e-9 * max(deltas):
+            raise ValueError(f"BeamOptics needs equal node spacing, got {deltas}")
         self.beams = [beam_from_value(beam) for beam in self.beams]
         self.plasma = plasma_from_value(self.plasma)
         self.solenoids = [coerce(Solenoid, s) for s in self.solenoids]
@@ -565,9 +677,13 @@ class BeamOpticsConfig:
         self.charge_changing = coerce(ChargeChangingParams, self.charge_changing)
         self.diagnostic_planes = list(self.diagnostic_planes)
         if (
-            self.solenoids or self.axial_field
-        ) and self.grid.coordinates != "cylindrical":
-            raise ValueError("solenoids need cylindrical coordinates")
+            (self.solenoids or self.axial_field)
+            and self.grid.coordinates != "cylindrical"
+            and self.grid.ndim != 3
+        ):
+            raise ValueError(
+                "solenoids need cylindrical coordinates (or a 3D grid, on the x axis)"
+            )
         if not 0.0 < self.relaxation <= 1.0:
             raise ValueError(f"relaxation must be in (0, 1], got {self.relaxation}")
         if self.iterations < 1:
@@ -594,6 +710,8 @@ class BeamOpticsConfig:
             )
         if self.symmetry_plane and self.grid.coordinates == "cylindrical":
             raise ValueError("symmetry_plane needs a planar (cartesian) grid")
+        self.symmetry_planes = list(self.symmetry_planes)
+        self._check_dimension()
 
     def replace(self, **changes: Any) -> BeamOpticsConfig:
         """Return a copy with ``changes`` applied (and checked again)."""

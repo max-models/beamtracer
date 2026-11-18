@@ -49,6 +49,16 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `BeamOptics` on a 3D grid (`GridParams(ndim=3)`): electrodes as 3D shapes (`cuboid`,
+  `sphere`, `cylinder`, `tube`, `cone`), the z faces in `FieldBCs`, beams emitted from a
+  rectangle or a disc (`BeamSpecies3D`), the plasma species, solenoids and an axial profile
+  on the x axis and magnetic field maps on (x, y, z) sampled onto the nodes,
+  `symmetry_planes` (`"y_min"`, `"z_min"`), MPI over the trajectories, and the moments in
+  either transverse plane (`beam_moments(x, axis="z")`). `BeamOptics.dataset()` returns the
+  potential and the charge density as an xarray Dataset. A docs notebook runs an
+  electrostatic quadrupole. Refinement, charge changes, an imposed electric field and
+  `surface_fields` are 2D only for now.
+
 - 3D ion optics, second part: `BeamTracer3D` and its `trace_trajectories_3d` kernel (Pyccel
   with OpenMP threads, a CUDA version; without Pyccel its source runs as Python). Every
   trajectory from start to end: RK4 or Boris (kick--rotate--kick) steps through the staggered
