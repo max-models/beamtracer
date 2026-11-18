@@ -16,6 +16,7 @@ compared quantity is outside its tolerance.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import importlib
 import json
 import os
@@ -57,9 +58,12 @@ CASES = (
 CODES = ("ibsimu", "beamtracer")
 
 
-def load(name: str) -> Case | common3d.Case3D:
-    """Return the case ``name`` of ``benchmarks/cases``."""
-    return importlib.import_module(f"cases.{name}").CASE
+def load(name: str, iterations: int | None = None) -> Case | common3d.Case3D:
+    """Return the case ``name`` of ``benchmarks/cases``, with ``iterations`` if given."""
+    case = importlib.import_module(f"cases.{name}").CASE
+    if iterations:
+        case = dataclasses.replace(case, iterations=iterations)
+    return case
 
 
 def arguments(argv: list[str] | None = None) -> argparse.Namespace:
@@ -72,6 +76,12 @@ def arguments(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--particles", type=int, default=None, help="trajectories (default: the case's)"
+    )
+    parser.add_argument(
+        "--iterations",
+        type=int,
+        default=None,
+        help="Vlasov iterations (default: the case's)",
     )
     parser.add_argument(
         "--repeats", type=int, default=1, help="runs per code; best time"
@@ -102,7 +112,7 @@ def worker(args: argparse.Namespace) -> None:
     import scope_profiler as sp
 
     name, code = args.worker
-    case = load(name)
+    case = load(name, args.iterations)
     nodes, h = case.mesh(args.scale)
     particles = args.particles or case.particles
     stem = args.out / f"{name}_{code}"
@@ -225,6 +235,8 @@ def run_case(name: str, args: argparse.Namespace) -> dict[str, Any]:
         ]
         if args.particles:
             command += ["--particles", str(args.particles)]
+        if args.iterations:
+            command += ["--iterations", str(args.iterations)]
         if subprocess.run(command, env=env).returncode != 0:
             return {"case": name, "error": f"{code} failed", "times": {}}
     result: dict[str, Any] = {

@@ -278,6 +278,9 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A Newton–Krylov step whose GMRES stops just short of its tolerance (SciPy checks the
+  preconditioned residual) is taken when its true relative residual is below 0.1, instead of
+  failing the solve: the 3D extraction benchmark at 420 000 nodes stopped there.
 - `conductance_profile` ends exactly at `downstream`: the sum of the drops could round below
   zero, which `AxialProfile` refused.
 - The math in the docstrings renders on the API pages: `$$` blocks instead of reST

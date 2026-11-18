@@ -40,6 +40,10 @@ from beamtracer.solver.mesh3d import FACES_3D, IonOpticsMesh3D
 from beamtracer.solver.refinement import Layout, Refinement, layout_of, patches_of
 from beamtracer.solver.refinement3d import Layout3D, layout_of_3d, patches_of_3d
 
+#: A Newton--Krylov step whose GMRES stops short of `NEWTON_KRYLOV_RTOL` is still taken
+#: when its true relative residual is below this (an inexact Newton step).
+NEWTON_KRYLOV_ACCEPT = 0.1
+
 #: The backends whose Newton steps are GMRES with a kept multigrid preconditioner.
 KRYLOV_BACKENDS = ("amg", "multigrid")
 
@@ -698,6 +702,13 @@ class IonOpticsPoisson:
                     callback=counter, callback_type="pr_norm",
                 )  # fmt: skip
                 krylov_iterations += count[0]
+                if info != 0:
+                    # SciPy's GMRES stops on the preconditioned residual: a step that
+                    # misses `NEWTON_KRYLOV_RTOL` but is well inside an inexact Newton
+                    # method's forcing range is still taken
+                    left = np.linalg.norm(operator @ step + residual)
+                    if left < NEWTON_KRYLOV_ACCEPT * np.linalg.norm(residual):
+                        info = 0
                 # a preconditioner of this very Jacobian is not built again
                 if info == 0 and (
                     count[0] <= NEWTON_KRYLOV_REBUILD or diagonal_only is not None
