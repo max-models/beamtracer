@@ -78,10 +78,29 @@ python benchmarks/run.py --codes beamtracer     # beamtracer alone, no compariso
 plasma with the Newton--Krylov method (the default is the LU factorisation). `multigrid` is
 the fastest in 3D: on `extraction3d` 2.6 s against IBSimu's 4.0 s (`amg` 7.0 s, `lu` 26 s),
 on `quad3d` 0.31 s against 2.5 s, one thread each, best of 3. `--scale n` divides the cells
-by `n`, `--particles` overrides the trajectories, `--threads`
+by `n`, `--particles` overrides the trajectories, `--iterations` the Vlasov iterations, `--threads`
 sets the threads of both codes (`--ibsimu-threads` IBSimu's alone). Each code runs each case
 in its own process under a scope-profiler session; the profiles (`<case>_<code>.h5`), the
 potentials and exit beams (`.npz`) and the report (`results.md`, `results.json`) go to
 `--out` (`benchmark_results/`). The exit status is 1 when a case does not agree. The times
 are the best of `--repeats` runs; take at least 3 for timings, since the first run of a
 process includes one-off costs (loading the compiled kernels, the first factorisation).
+
+## Larger meshes
+
+`extraction3d` with the cells divided by 2 and 3 (`--scale`), `--field-backend multigrid`
+(timings of one run each):
+
+| Nodes | Iterations | Threads | IBSimu | beamtracer | Speedup |
+|---|---|---|---|---|---|
+| 55 000 | 16 | 1 | 4.0 s | 2.6 s | 1.5x |
+| 420 000 | 32 | 1 | 99 s | 66 s | 1.5x |
+| 420 000 | 32 | 4 | 125 s | 47 s | 2.7x |
+| 1 390 000 | 8 | 1 | 255 s | 97 s | 2.6x |
+
+A field solve per iteration at 1.39 million nodes takes 10 s in beamtracer and 30 s in IBSimu.
+On the finer meshes the case needs more than its 16 iterations: at 420 000 nodes IBSimu's
+current still moves by 9% between 16 and 32 iterations (beamtracer's by less than 0.1%),
+and at 32 the two codes agree to 2–3%, the beam's 900 trajectories being few for the finer
+cells. IBSimu's threads do not shorten its field solve here; beamtracer's multigrid cycle
+runs on all of them.

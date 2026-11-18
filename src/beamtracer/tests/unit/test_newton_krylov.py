@@ -152,3 +152,39 @@ def test_beam_optics_with_the_multigrid_field_solves(three, backend) -> None:
     assert amg.current == pytest.approx(lu.current, rel=1e-6)
     assert amg.rms_size == pytest.approx(lu.rms_size, rel=1e-5)
     assert amg.rms_angle == pytest.approx(lu.rms_angle, rel=1e-5)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_a_step_that_gmres_reports_short_is_taken_when_its_residual_is_small(
+    backend, monkeypatch
+) -> None:
+    """SciPy's GMRES can stop on the preconditioned residual just above its tolerance."""
+    import scipy.sparse.linalg
+
+    mesh = _mesh()
+    rho = np.random.default_rng(5).uniform(0.0, 2e-6, mesh.shape)
+    plasma = PLASMAS[0]
+    initial = np.zeros(mesh.shape)
+    direct = IonOpticsPoisson(mesh, reuse_jacobian=False).solve(
+        rho, plasma=plasma, initial=initial
+    )
+    gmres = scipy.sparse.linalg.gmres
+
+    def short(*args, **kwargs):
+        step, _ = gmres(*args, **kwargs)
+        return step, 2  # converged, but reported as not
+
+    monkeypatch.setattr(scipy.sparse.linalg, "gmres", short)
+    phi = IonOpticsPoisson(mesh, backend=backend).solve(
+        rho, plasma=plasma, initial=initial
+    )
+    np.testing.assert_allclose(phi, direct, rtol=0, atol=2e-5)
+
+    def useless(operator, b, **kwargs):
+        return np.zeros_like(b), 2
+
+    monkeypatch.setattr(scipy.sparse.linalg, "gmres", useless)
+    with pytest.raises(RuntimeError, match="did not converge"):
+        IonOpticsPoisson(mesh, backend=backend).solve(
+            rho, plasma=plasma, initial=initial
+        )
