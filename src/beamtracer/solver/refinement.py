@@ -157,21 +157,21 @@ class Layout:
         The mesh's ``x`` is horizontal, ``y`` (or ``r``) vertical, the coordinates times
         ``scale`` (``1e3`` for mm). Every level's grid is drawn in full, the finer ones on
         top; ``kwargs`` go to `plot_patches` (e.g. ``colors``, ``labels``, ``grid_alpha``).
-        Returns the axes.
+        Returns the axes (``None`` on the ranks other than patchwork's plotting rank).
         """
         from patchwork import plot_patches
 
         if self.hierarchy is None:
             raise ValueError("the layout has no patchwork hierarchy")
         options = {"mask_covered": False, "title": ""} | kwargs
-        _, ax = plot_patches(
+        drawn = plot_patches(
             self.hierarchy,
             ax=ax,
             transpose=self.base.mesh.cylindrical,
             scale=scale,
             **options,
         )
-        return ax
+        return None if drawn is None else drawn[1]
 
     def on_base(self, values: np.ndarray) -> np.ndarray:
         """The ``(nx, ny)`` array of composite values on the base mesh."""
