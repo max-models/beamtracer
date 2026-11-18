@@ -20,11 +20,11 @@ from beamtracer.solver.mesh import IonOpticsMesh
 
 @dataclass(frozen=True)
 class Refinement:
-    """A box ``lower``-``upper`` [m] (``(x, y)`` corners) refined to ``level``."""
+    """A box ``lower``-``upper`` [m] (``(x, y)`` corners, ``(x, y, z)`` in 3D) refined to ``level``."""
 
     level: int
-    lower: tuple[float, float]
-    upper: tuple[float, float]
+    lower: tuple[float, ...]
+    upper: tuple[float, ...]
 
 
 @dataclass

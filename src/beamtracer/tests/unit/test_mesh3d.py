@@ -8,7 +8,8 @@ import pytest
 from beamtracer.solver.fields3d import StaggeredElectricField3D, _staggered_problem
 from beamtracer.solver.mesh import Electrode, FaceCondition, IonOpticsMesh
 from beamtracer.solver.mesh3d import Electrode3D, IonOpticsMesh3D
-from beamtracer.solver.poisson import BoltzmannElectrons, IonOpticsPoisson, Layout3D
+from beamtracer.solver.poisson import BoltzmannElectrons, IonOpticsPoisson
+from beamtracer.solver.refinement3d import Layout3D, PatchedElectricField3D
 
 INNER, OUTER = 0.2, 0.8
 
@@ -118,9 +119,8 @@ def test_the_layout_maps_patchwork_nodes_to_the_mesh() -> None:
     np.testing.assert_array_equal(layout.on_base(layout.from_base(values)), values)
     np.testing.assert_allclose(layout.x, layout.from_base(mesh.nodes()[0]))
     field = layout.field(layout.from_base(values))
-    assert isinstance(field, StaggeredElectricField3D)
-    with pytest.raises(ValueError, match="refinement"):
-        IonOpticsPoisson(mesh, refinement=[object()]).solve()  # type: ignore[list-item]
+    assert isinstance(field, PatchedElectricField3D)
+    assert isinstance(field.fields[0], StaggeredElectricField3D)
 
 
 def test_the_field_converges_and_vanishes_across_a_symmetry_plane() -> None:

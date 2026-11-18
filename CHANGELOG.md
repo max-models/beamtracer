@@ -59,6 +59,11 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Refined boxes on a 3D grid (`refinement` with `(x, y, z)` corners): patchwork's composite
+  solve, a staggered field per box with ghost nodes from the coarser boxes, and the compiled
+  3D tracer (and its CUDA version) steps and deposits on the finest box at a particle. A box
+  over the whole domain gives the beam of the grid with half the cells to 1e-14.
+
 - `field_backend="amg"`: patchwork's algebraic-multigrid backend (pyamg's classical AMG
   preconditioning CG or GMRES) instead of an LU factorisation, and with a plasma a
   Newton--Krylov method: every Newton step solves the current Jacobian by GMRES to 1e-3,

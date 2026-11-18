@@ -412,13 +412,13 @@ class RefinementParams:
     """A box refined to ``level`` (cells ``2**level`` times smaller than the grid's).
 
     ``lower`` and ``upper`` are corners ``(x, y)`` [m] (``(x, r)`` in cylindrical
-    geometry), widened to the cells of the level below; a level's boxes must lie in those
-    of the level below. Each takes Quantities or strings too (``("1 mm", "0 mm")``).
+    geometry, ``(x, y, z)`` on a 3D grid), widened to the cells of the level below; a
+    level's boxes must lie in those of the level below. Each takes Quantities or strings too (``("1 mm", "0 mm")``).
     """
 
     level: int
-    lower: tuple[float, float] = field(metadata=unit_metadata("m"))
-    upper: tuple[float, float] = field(metadata=unit_metadata("m"))
+    lower: tuple[float, ...] = field(metadata=unit_metadata("m"))
+    upper: tuple[float, ...] = field(metadata=unit_metadata("m"))
 
     def __post_init__(self) -> None:
         """Convert the units and check the box."""
@@ -428,8 +428,8 @@ class RefinementParams:
         object.__setattr__(self, "level", int(self.level))
         lower, upper = tuple(map(float, self.lower)), tuple(map(float, self.upper))
         if (
-            len(lower) != 2
-            or len(upper) != 2
+            len(lower) not in (2, 3)
+            or len(upper) != len(lower)
             or not all(a < b for a, b in zip(lower, upper, strict=True))
         ):
             raise ValueError(f"a refined box needs lower < upper, got {lower}, {upper}")
@@ -623,19 +623,25 @@ class BeamOpticsConfig:
             if isinstance(beam, BeamSpecies3D) and not three:
                 raise ValueError("BeamSpecies3D needs a 3D grid")
         if not three:
+            if any(len(box.lower) != 2 for box in self.refinement):
+                raise ValueError("a refined box of a 2D grid has (x, y) corners")
             if self.symmetry_planes:
                 raise ValueError(
                     "symmetry_planes is for a 3D grid (2D: symmetry_plane)"
                 )
             return
         unsupported = {
-            "refinement": self.refinement,
             "charge_changing": self.charge_changing,
             "symmetry_plane": self.symmetry_plane,
         }
         given = sorted(name for name, value in unsupported.items() if value)
         if given:
             raise ValueError(f"a 3D grid does not take {', '.join(given)} yet")
+        for box in self.refinement:
+            if len(box.lower) != 3:
+                raise ValueError(
+                    f"a refined box of a 3D grid needs (x, y, z) corners: {box}"
+                )
         for plane in self.symmetry_planes:
             if plane not in ("y_min", "z_min"):
                 raise ValueError(

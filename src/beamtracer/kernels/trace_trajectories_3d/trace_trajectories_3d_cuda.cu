@@ -10,17 +10,32 @@ __device__ static long long clamp_index(long long i, long long high) {
     return i < 0 ? 0 : (i > high ? high : i);
 }
 
-// Trilinear interpolation of f at the fractional index (s, t, u), the cell clamped to
-// [0, n - 2] on each axis.
-__device__ static double trilinear(const Array3D<double>& f, double s, double t, double u) {
-    const long long i = clamp_index((long long)floor(s), f.shape[0] - 2);
-    const long long j = clamp_index((long long)floor(t), f.shape[1] - 2);
-    const long long l = clamp_index((long long)floor(u), f.shape[2] - 2);
+// Trilinear interpolation of the (n0, n1, n2) array flattened at f(offset + ...) at the
+// fractional index (s, t, u), the cell clamped to [0, n - 2] on each axis.
+__device__ static double trilinear(const Array1D<double>& f, long long offset, long long n0,
+                                   long long n1, long long n2, double s, double t, double u) {
+    const long long i = clamp_index((long long)floor(s), n0 - 2);
+    const long long j = clamp_index((long long)floor(t), n1 - 2);
+    const long long l = clamp_index((long long)floor(u), n2 - 2);
     const double a = s - i, b = t - j, c = u - l;
-    return (1.0 - a) * ((1.0 - b) * ((1.0 - c) * f(i, j, l) + c * f(i, j, l + 1))
-                        + b * ((1.0 - c) * f(i, j + 1, l) + c * f(i, j + 1, l + 1)))
-         + a * ((1.0 - b) * ((1.0 - c) * f(i + 1, j, l) + c * f(i + 1, j, l + 1))
-                + b * ((1.0 - c) * f(i + 1, j + 1, l) + c * f(i + 1, j + 1, l + 1)));
+    const long long dj = n2, di = n1 * n2;
+    const long long q = offset + i * di + j * dj + l;
+    return (1.0 - a) * ((1.0 - b) * ((1.0 - c) * f(q) + c * f(q + 1))
+                        + b * ((1.0 - c) * f(q + dj) + c * f(q + dj + 1)))
+         + a * ((1.0 - b) * ((1.0 - c) * f(q + di) + c * f(q + di + 1))
+                + b * ((1.0 - c) * f(q + di + dj) + c * f(q + di + dj + 1)));
+}
+
+// The finest patch containing (px, py, pz): patches finest first, the whole mesh last.
+__device__ static long long patch_of(double px, double py, double pz,
+                                     const Array2D<double>& patch_real, long long n_patches) {
+    for (long long q = 0; q < n_patches - 1; ++q) {
+        if (px >= patch_real(q, 4) && px <= patch_real(q, 7) && py >= patch_real(q, 5) &&
+            py <= patch_real(q, 8) && pz >= patch_real(q, 6) && pz <= patch_real(q, 9)) {
+            return q;
+        }
+    }
+    return n_patches - 1;
 }
 
 // B component n0 on the nodes (3, nx, ny, nz) at the fractional index (s, t, u).
@@ -36,13 +51,15 @@ __device__ static double node_field(const Array4D<double>& bn, long long n0, dou
                 + b * ((1.0 - c) * bn(n0, i + 1, j + 1, l) + c * bn(n0, i + 1, j + 1, l + 1)));
 }
 
-// E and B at (q0, q1, q2): below a symmetry plane those of the mirror image, E_y (E_z) and
-// the other two components of B changing sign.
+// E and B at (q0, q1, q2): E of the finest patch containing the point, B of the base
+// mesh's nodes; below a symmetry plane those of the mirror image, E_y (E_z) and the
+// other two components of B changing sign.
 __device__ static void fields_3d(
-    double q0, double q1, double q2, const Array3D<double>& fx, const Array3D<double>& fy,
-    const Array3D<double>& fz, const Array4D<double>& bn, long long has_b, double origin_x,
-    double origin_y, double origin_z, double h, long long mirror_y, long long mirror_z,
-    double* e, double* b
+    double q0, double q1, double q2, const Array1D<double>& fxs, const Array1D<double>& fys,
+    const Array1D<double>& fzs, const Array2D<long long>& patch_int,
+    const Array2D<double>& patch_real, long long n_patches, const Array4D<double>& bn,
+    long long has_b, double origin_x, double origin_y, double origin_z, double h,
+    long long mirror_y, long long mirror_z, double* e, double* b
 ) {
     double s1 = 1.0, s2 = 1.0;
     if (mirror_y != 0 && q1 < origin_y) {
@@ -53,16 +70,20 @@ __device__ static void fields_3d(
         q2 = 2.0 * origin_z - q2;
         s2 = -1.0;
     }
-    const double sx = (q0 - origin_x) / h, sy = (q1 - origin_y) / h, sz = (q2 - origin_z) / h;
-    // the ghost edges make the staggered grids one longer: clamp to their own ends
-    e[0] = trilinear(fx, sx + 0.5, sy, sz);
-    e[1] = s1 * trilinear(fy, sx, sy + 0.5, sz);
-    e[2] = s2 * trilinear(fz, sx, sy, sz + 0.5);
+    const long long pp = patch_of(q0, q1, q2, patch_real, n_patches);
+    const long long nx = patch_int(pp, 0), ny = patch_int(pp, 1), nz = patch_int(pp, 2);
+    const double hp = patch_real(pp, 3);
+    const double sx = (q0 - patch_real(pp, 0)) / hp, sy = (q1 - patch_real(pp, 1)) / hp,
+                 sz = (q2 - patch_real(pp, 2)) / hp;
+    e[0] = trilinear(fxs, patch_int(pp, 3), nx + 1, ny, nz, sx + 0.5, sy, sz);
+    e[1] = s1 * trilinear(fys, patch_int(pp, 4), nx, ny + 1, nz, sx, sy + 0.5, sz);
+    e[2] = s2 * trilinear(fzs, patch_int(pp, 5), nx, ny, nz + 1, sx, sy, sz + 0.5);
     b[0] = b[1] = b[2] = 0.0;
     if (has_b != 0) {
-        b[0] = s1 * s2 * node_field(bn, 0, sx, sy, sz);
-        b[1] = s2 * node_field(bn, 1, sx, sy, sz);
-        b[2] = s1 * node_field(bn, 2, sx, sy, sz);
+        const double bx = (q0 - origin_x) / h, by = (q1 - origin_y) / h, bz = (q2 - origin_z) / h;
+        b[0] = s1 * s2 * node_field(bn, 0, bx, by, bz);
+        b[1] = s2 * node_field(bn, 1, bx, by, bz);
+        b[2] = s1 * node_field(bn, 2, bx, by, bz);
     }
 }
 
@@ -100,9 +121,11 @@ void trace_trajectories_3d(
     Array1D<long long> steps,
     Array1D<long long> status,
     Array1D<long long> electrode,
-    Array3D<double> fx,
-    Array3D<double> fy,
-    Array3D<double> fz,
+    Array1D<double> fxs,
+    Array1D<double> fys,
+    Array1D<double> fzs,
+    Array2D<long long> patch_int,
+    Array2D<double> patch_real,
     Array4D<double> bn,
     long long has_b,
     double origin_x,
@@ -131,7 +154,9 @@ void trace_trajectories_3d(
 ) {
     const long long m = blockDim.x * (long long)blockIdx.x + threadIdx.x;
     if (m >= active.shape[0]) return;
-    const long long nx = fy.shape[0], ny = fx.shape[1], nz = fx.shape[2];
+    const long long n_patches = patch_int.shape[0];
+    const long long nx = patch_int(n_patches - 1, 0), ny = patch_int(n_patches - 1, 1),
+                    nz = patch_int(n_patches - 1, 2);
     const long long n_planes = planes.shape[0];
     const long long capacity = hits.shape[2];
     const long long k = active(m);
@@ -147,20 +172,25 @@ void trace_trajectories_3d(
     double e[3], b[3];
     while (ns < max_steps) {
         if (!have) {
-            fields_3d(xs[0], xs[1], xs[2], fx, fy, fz, bn, has_b, origin_x, origin_y,
+            fields_3d(xs[0], xs[1], xs[2], fxs, fys, fzs, patch_int, patch_real, n_patches, bn, has_b, origin_x, origin_y,
                       origin_z, h, mirror_y, mirror_z, e, b);
         }
         double a[3];
         lorentz(qmk, e, b, vs, a);
         const double speed = sqrt(vs[0] * vs[0] + vs[1] * vs[1] + vs[2] * vs[2]);
         const double accel = sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+        // the spacing of the finest patch at the step's start
+        double fy0 = xs[1], fz0 = xs[2];
+        if (mirror_y != 0 && fy0 < origin_y) fy0 = 2.0 * origin_y - fy0;
+        if (mirror_z != 0 && fz0 < origin_z) fz0 = 2.0 * origin_z - fz0;
+        const double hloc = patch_real(patch_of(xs[0], fy0, fz0, patch_real, n_patches), 3);
         double dt = -1.0;
-        if (speed > 0.0) dt = h / speed;
+        if (speed > 0.0) dt = hloc / speed;
         if (accel > 0.0) {
-            const double d2 = sqrt(2.0 * h / accel);
+            const double d2 = sqrt(2.0 * hloc / accel);
             if (dt < 0.0 || d2 < dt) dt = d2;
         }
-        if (dt < 0.0) dt = h;
+        if (dt < 0.0) dt = hloc;
         dt *= step_fraction;
         const double hdt = 0.5 * dt;
         double y[3], w[3];
@@ -169,7 +199,7 @@ void trace_trajectories_3d(
             double half[3];
             boris_half(vs, e, b, tau, half);
             for (int d = 0; d < 3; ++d) y[d] = xs[d] + dt * half[d];
-            fields_3d(y[0], y[1], y[2], fx, fy, fz, bn, has_b, origin_x, origin_y, origin_z,
+            fields_3d(y[0], y[1], y[2], fxs, fys, fzs, patch_int, patch_real, n_patches, bn, has_b, origin_x, origin_y, origin_z,
                       h, mirror_y, mirror_z, e, b);
             boris_half(half, e, b, tau, w);
             have = true;
@@ -182,7 +212,7 @@ void trace_trajectories_3d(
                 ku[d] = vs[d] + hdt * a[d];
             }
             for (int stage = 1; stage < 4; ++stage) {
-                fields_3d(q[0], q[1], q[2], fx, fy, fz, bn, has_b, origin_x, origin_y,
+                fields_3d(q[0], q[1], q[2], fxs, fys, fzs, patch_int, patch_real, n_patches, bn, has_b, origin_x, origin_y,
                           origin_z, h, mirror_y, mirror_z, ee, bb);
                 lorentz(qmk, ee, bb, ku, g);
                 const double weight = stage < 3 ? 2.0 : 1.0;
@@ -209,12 +239,14 @@ void trace_trajectories_3d(
         for (int d = 0; d < 3; ++d) mid[d] = 0.5 * (xs[d] + y[d]) + dt * (vs[d] - w[d]) / 8.0;
         if (mirror_y != 0 && mid[1] < origin_y) mid[1] = 2.0 * origin_y - mid[1];
         if (mirror_z != 0 && mid[2] < origin_z) mid[2] = 2.0 * origin_z - mid[2];
-        const double origin[3] = {origin_x, origin_y, origin_z};
-        const long long n[3] = {nx, ny, nz};
+        const long long pp = patch_of(mid[0], mid[1], mid[2], patch_real, n_patches);
+        const long long n[3] = {patch_int(pp, 0), patch_int(pp, 1), patch_int(pp, 2)};
+        const double origin[3] = {patch_real(pp, 0), patch_real(pp, 1), patch_real(pp, 2)};
+        const double hp = patch_real(pp, 3);
         long long idx[3];
         double frac[3];
         for (int d = 0; d < 3; ++d) {
-            const double s = (mid[d] - origin[d]) / h;
+            const double s = (mid[d] - origin[d]) / hp;
             idx[d] = (long long)floor(s);
             frac[d] = s - idx[d];
             if (idx[d] < 0) {
@@ -226,14 +258,14 @@ void trace_trajectories_3d(
             }
         }
         const double deposit = dqk * dt;
-        const long long c = (idx[0] * ny + idx[1]) * nz + idx[2];
+        const long long c = patch_int(pp, 7) + (idx[0] * n[1] + idx[1]) * n[2] + idx[2];
         for (int di = 0; di < 2; ++di) {
             const double wi = di ? frac[0] : 1.0 - frac[0];
             for (int dj = 0; dj < 2; ++dj) {
                 const double wj = dj ? frac[1] : 1.0 - frac[1];
                 for (int dk = 0; dk < 2; ++dk) {
                     const double wk = dk ? frac[2] : 1.0 - frac[2];
-                    cunumpy_atomic_add(&charge(0, c + di * ny * nz + dj * nz + dk),
+                    cunumpy_atomic_add(&charge(0, c + di * n[1] * n[2] + dj * n[2] + dk),
                                        wi * wj * wk * deposit);
                 }
             }

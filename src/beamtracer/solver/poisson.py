@@ -35,10 +35,10 @@ from methodcard import ConvergenceProblem, method
 from scipy.constants import epsilon_0
 
 from beamtracer._profiling import PROFILE_TAGS
-from beamtracer.solver.fields3d import StaggeredElectricField3D
 from beamtracer.solver.mesh import IonOpticsMesh
 from beamtracer.solver.mesh3d import FACES_3D, IonOpticsMesh3D
 from beamtracer.solver.refinement import Layout, Refinement, layout_of, patches_of
+from beamtracer.solver.refinement3d import Layout3D, layout_of_3d, patches_of_3d
 
 #: The relative residual of a Newton step by GMRES with ``backend="amg"`` (an inexact
 #: Newton step: near the solution each step gains this factor).
@@ -303,45 +303,11 @@ class _Field:
             phi[self.hanging] = self.hang @ phi
 
 
-@dataclass
-class Layout3D:
-    """The nodes of a 3D mesh as patchwork numbers them (no refinement).
-
-    ``index[n]`` is the flat mesh index of patchwork's node ``n``; ``x`` its ``x``.
-    """
-
-    mesh: IonOpticsMesh3D
-    index: np.ndarray
-    x: np.ndarray
-
-    #: No refined boxes in 3D.
-    refined = False
-
-    @property
-    def size(self) -> int:
-        """The number of nodes."""
-        return int(self.index.size)
-
-    def from_base(self, values: np.ndarray) -> np.ndarray:
-        """Mesh values ``(nx, ny, nz)`` as a vector over patchwork's nodes."""
-        return np.asarray(values, dtype=float).reshape(-1)[self.index]
-
-    def on_base(self, values: np.ndarray) -> np.ndarray:
-        """A vector over patchwork's nodes as mesh values ``(nx, ny, nz)``."""
-        out = np.empty(self.mesh.shape)
-        out.reshape(-1)[self.index] = values
-        return out
-
-    def field(self, potential: np.ndarray) -> StaggeredElectricField3D:
-        """The electric field of a potential over patchwork's nodes."""
-        return StaggeredElectricField3D(self.mesh, self.on_base(potential))
-
-
 class _Field3D:
-    """The patchwork `NodalPoisson` of an `IonOpticsMesh3D` (as `_Field` in 2D).
+    """The patchwork `NodalPoisson` of an `IonOpticsMesh3D` and its refined boxes.
 
-    ``region`` (the initial plasma) is a mask of the mesh's nodes or a function of
-    ``(x, y, z)``.
+    As `_Field` in 2D. ``region`` (the initial plasma) is a mask of the mesh's nodes
+    (without refinement) or a function of ``(x, y, z)``.
     """
 
     def __init__(
@@ -351,6 +317,7 @@ class _Field3D:
         region_potential: float,
         backend: str,
         comm: Any = None,
+        refinement: Sequence[Refinement] = (),
     ) -> None:
         from patchwork import (
             AMRHierarchy,
@@ -368,6 +335,9 @@ class _Field3D:
             bounds=tuple((origin[a], upper[a]) for a in range(3)),
             comm=comm,
         )
+        patches = patches_of_3d(mesh, refinement)
+        for patch in patches[1:]:
+            hierarchy.add_patch(level=patch.level, box=patch.box)
 
         def node_index(points: np.ndarray) -> tuple[np.ndarray, ...]:
             return tuple(
@@ -375,12 +345,37 @@ class _Field3D:
             )
 
         def fraction(start: np.ndarray, end: np.ndarray) -> np.ndarray:
-            """The bracketed distance from a node to the surface towards ``end``."""
+            """The bracketed distance from a node to the surface towards ``end``.
+
+            From the mesh of the patch, of the edge's level, that holds the node: the
+            distances the field takes too.
+            """
             step = end - start
             axis = np.argmax(np.abs(step), axis=0)
-            positive = step[axis, np.arange(axis.size)] > 0
-            direction = 2 * axis + positive
-            return mesh.distance[(direction, *node_index(start))]
+            length = np.abs(step[axis, np.arange(axis.size)])
+            direction = 2 * axis + (step[axis, np.arange(axis.size)] > 0)
+            level = np.rint(np.log2(h / length)).astype(np.int64)
+            out = np.ones(axis.size)
+            done = np.zeros(axis.size, dtype=bool)
+            for patch in reversed(patches):
+                lo, hi = np.array(patch.bounds[:3]), np.array(patch.bounds[3:])
+                tiny = 1e-9 * patch.mesh.h
+                mine = (
+                    ~done
+                    & (level == patch.level)
+                    & np.all(start >= lo[:, None] - tiny, axis=0)
+                    & np.all(start <= hi[:, None] + tiny, axis=0)
+                )
+                if mine.any():
+                    index = tuple(
+                        np.rint(
+                            (start[a, mine] - patch.mesh.origin[a]) / patch.mesh.h
+                        ).astype(np.int64)
+                        for a in range(3)
+                    )
+                    out[mine] = patch.mesh.distance[(direction[mine], *index)]
+                    done |= mine
+            return out
 
         faces = {}
         for face in FACES_3D:
@@ -442,14 +437,18 @@ class _Field3D:
             backend=backend,
             min_fraction=1.0 / 255.0,
         )
-        points = np.asarray(self.solver.nodes.coordinates).T
-        flat = np.ravel_multi_index(node_index(points), shape)
-        #: patchwork's nodes on the mesh.
-        self.layout = Layout3D(mesh, flat, points[0].copy())
+        nodes = self.solver.nodes
+        #: The patches and the composite nodes.
+        self.layout = layout_of_3d(patches, nodes)
+        #: The hanging nodes (on coarse-fine faces) and their interpolation.
+        self.hanging = np.flatnonzero(nodes.hanging)
+        self.hang = nodes.reduction[self.hanging].tocsr()
         self.jacobian = False
 
     def fill_hanging(self, phi: np.ndarray) -> None:
-        """No hanging nodes without refinement."""
+        """Interpolate the hanging nodes of ``phi`` from the nodes they hang from."""
+        if self.hanging.size:
+            phi[self.hanging] = self.hang @ phi
 
 
 def _poisson_problem() -> ConvergenceProblem:
@@ -551,10 +550,13 @@ class IonOpticsPoisson:
             # the plain one and at most one with an initial plasma
             self._fields = {k: v for k, v in self._fields.items() if k == b""}
             if isinstance(self.mesh, IonOpticsMesh3D):
-                if self.refinement:
-                    raise ValueError("refinement is not available in 3D")
                 self._fields[key] = _Field3D(
-                    self.mesh, region, potential, self.backend, self.comm
+                    self.mesh,
+                    region,
+                    potential,
+                    self.backend,
+                    self.comm,
+                    self.refinement,
                 )
             else:
                 self._fields[key] = _Field(

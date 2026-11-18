@@ -21,6 +21,7 @@ from beamtracer._profiling import PROFILE_TAGS
 from beamtracer.kernels.trace_trajectories_3d import kernel as trace_trajectories_3d
 from beamtracer.solver.fields3d import StaggeredElectricField3D
 from beamtracer.solver.mesh3d import IonOpticsMesh3D
+from beamtracer.solver.refinement3d import PatchedElectricField3D
 from beamtracer.solver.tracer import (
     _ALIVE,
     _PAUSED,
@@ -128,7 +129,9 @@ def beam_on_surface(
 class BeamTracer3D:
     """Trace beam particles through the fields of a 3D mesh.
 
-    ``electric`` is a `StaggeredElectricField3D` (set by the Vlasov iteration),
+    ``electric`` is a `StaggeredElectricField3D`, or a `PatchedElectricField3D` with
+    refined boxes (set by the Vlasov iteration: the charge density is then over the
+    composite nodes, divided by their control volumes),
     ``magnetic`` an optional ``(3, nx, ny, nz)`` array of ``B`` [T] on the mesh's nodes.
     ``planes`` are the diagnostic planes ``x = const`` [m]; ``save_trajectories`` keeps every
     n-th trajectory (0: none); ``integrator`` is ``"rk4"`` or ``"boris"``.
@@ -137,7 +140,7 @@ class BeamTracer3D:
     def __init__(
         self,
         mesh: IonOpticsMesh3D,
-        electric: StaggeredElectricField3D | None = None,
+        electric: StaggeredElectricField3D | PatchedElectricField3D | None = None,
         magnetic: np.ndarray | None = None,
         *,
         step_fraction: float = 0.5,
@@ -258,6 +261,41 @@ class BeamTracer3D:
             self._lookup = (cells, subcells.ravel())
         return self._lookup
 
+    def _patch_arrays(self) -> tuple:
+        """The patches of the field for the kernel, finest first.
+
+        Their edge fields flattened one after the other, ``patch_int`` ``(P, 8)`` their node
+        counts, the offsets of their three edge fields, their node count and the offset of
+        their nodes in the charge, ``patch_real`` ``(P, 10)`` their origin, spacing and node
+        extent (the box's, not the field mesh's margin).
+        """
+        field = self.electric
+        if isinstance(field, PatchedElectricField3D):
+            fields = field.fields[::-1]
+            meshes = field.meshes[::-1]
+            boxes = [patch.bounds for patch in field.patches][::-1]
+        else:
+            assert isinstance(field, StaggeredElectricField3D)
+            fields, meshes = [field], [self.mesh]
+            boxes = [(*self.mesh.origin, *self.mesh.upper)]
+        patch_int = np.zeros((len(fields), 8), dtype=np.int64)
+        patch_real = np.zeros((len(fields), 10))
+        offsets = [0, 0, 0, 0]
+        for k, (f, m, box) in enumerate(zip(fields, meshes, boxes, strict=True)):
+            patch_int[k] = (*m.shape, *offsets[:3], int(np.prod(m.shape)), offsets[3])
+            offsets = [
+                offsets[0] + f.fx.size, offsets[1] + f.fy.size, offsets[2] + f.fz.size,
+                offsets[3] + int(np.prod(m.shape)),
+            ]  # fmt: skip
+            patch_real[k] = (*m.origin, m.h, *box)
+        flat = [
+            np.concatenate(
+                [np.ascontiguousarray(getattr(f, name)).ravel() for f in fields]
+            )
+            for name in ("fx", "fy", "fz")
+        ]
+        return meshes, flat, patch_int, patch_real
+
     def _finalize(self, charge: np.ndarray) -> np.ndarray:
         """Divide the node charges by the node volumes: ``h^3``, halved on each face."""
         density = charge / self.mesh.h**3
@@ -305,6 +343,7 @@ class BeamTracer3D:
         path_slot[saved_ids] = np.arange(saved_ids.size)
         first = np.stack(self._mesh_points(x[:, saved_ids]))
         cells, subcells = self._electrode_lookup()
+        meshes, (fxs, fys, fzs), patch_int, patch_real = self._patch_arrays()
         magnetic = self.magnetic
         has_b = int(magnetic is not None)
         if magnetic is None:
@@ -316,7 +355,7 @@ class BeamTracer3D:
         initial = (x.copy(), v.copy(), status.copy(), electrode.copy())
         while True:
             capacity, path_capacity = self._capacity
-            charge = np.zeros((threads, int(np.prod(mesh.shape))))
+            charge = np.zeros((threads, int(patch_int[:, 6].sum())))
             hits = np.zeros((n, planes.size, capacity, 8))
             counts = np.zeros((n, planes.size), dtype=np.int64)
             paths = np.zeros((max(saved_ids.size, 1), path_capacity, 3))
@@ -326,7 +365,7 @@ class BeamTracer3D:
             while active.size:
                 trace_trajectories_3d(
                     active, x, v, qm, dq, steps, status, electrode,
-                    field.fx, field.fy, field.fz, magnetic, has_b,
+                    fxs, fys, fzs, patch_int, patch_real, magnetic, has_b,
                     *map(float, mesh.origin), mesh.h, *map(float, mesh.upper),
                     mirror_y, mirror_z, INTEGRATORS.index(self.integrator),
                     self.step_fraction, self.max_steps,
@@ -349,7 +388,19 @@ class BeamTracer3D:
             self._capacity = (max(capacity, most), max(path_capacity, longest))
             x, v, status, electrode = (a.copy() for a in initial)
             steps[:] = 0
-        node_charge: Any = charge.sum(axis=0).reshape(mesh.shape)
+        charge = charge.sum(axis=0)
+        # back from the flat slabs (finest first) to the patches (coarse first)
+        per_patch = [
+            charge[offset : offset + int(np.prod(m.shape))].reshape(m.shape)
+            for m, offset in zip(meshes, patch_int[:, 7], strict=True)
+        ][::-1]
+        layout = field.layout if isinstance(field, PatchedElectricField3D) else None
+        if layout is None:
+            node_charge: Any = per_patch[0]
+        else:  # the boxes' charges without their fields' margins, on the composite nodes
+            node_charge = layout.deposit_total(
+                [c[p.inner] for c, p in zip(per_patch, layout.patches, strict=True)]
+            )
         if self.reduce is not None:
             node_charge = self.reduce(node_charge)
         hit_planes = []
@@ -369,7 +420,11 @@ class BeamTracer3D:
             )
             hit_planes.append(plane)
         return TraceResult(
-            charge_density=self._finalize(node_charge),
+            charge_density=(
+                self._finalize(node_charge)
+                if layout is None
+                else node_charge / layout.volumes
+            ),
             status=status.astype(np.int8),
             electrode=electrode.astype(np.int32),
             planes=hit_planes,
