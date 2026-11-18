@@ -602,6 +602,17 @@ class IonOpticsPoisson:
         """The patches and the composite nodes the potential lives on."""
         return self._field(None, 0.0).layout
 
+    @property
+    def coordinates(self) -> np.ndarray:
+        """The positions of the composite nodes, ``(ndim, nodes)`` [m] (``(x, r)`` in r-z).
+
+        In the mesh's order of axes: patchwork's r-z hierarchies put ``r`` first.
+        """
+        coordinates = np.asarray(self._field(None, 0.0).solver.nodes.coordinates).T
+        if getattr(self.mesh, "cylindrical", False):
+            coordinates = coordinates[::-1]
+        return np.ascontiguousarray(coordinates)
+
     def _newton_krylov(
         self,
         field: _Field | _Field3D,
@@ -623,9 +634,11 @@ class IonOpticsPoisson:
         Jacobian, kept across steps, solves and Vlasov iterations, and built again only
         when GMRES fails or takes more than `NEWTON_KRYLOV_REBUILD` iterations. With
         ``"multigrid"`` (`REFRESHED_BACKENDS`) every step is preconditioned by the
-        geometric multigrid of its own Jacobian: the lumped reaction changes only the
-        diagonal, which patchwork takes without a new Galerkin product
-        (``CompositeMultigrid.update_diagonal``). Returns the unknowns.
+        geometric multigrid of its own Jacobian ``K + T^T diag(V c) T`` (``T`` the
+        hanging nodes from the unknowns, ``V`` the control volumes), which patchwork
+        takes from the weights ``V c`` without a Galerkin product on the finest levels
+        (``CompositeMultigrid.update_reaction``), also with refined boxes. Returns the
+        unknowns.
         """
         from scipy import sparse
         from scipy.sparse.linalg import LinearOperator, gmres
@@ -638,14 +651,20 @@ class IonOpticsPoisson:
         builds = iterations = krylov_iterations = 0
         # a multigrid takes a new diagonal cheaply: every step its own Jacobian
         refresh = self.backend in REFRESHED_BACKENDS
-        diagonal_only = None
-        if refresh and load_unknowns is not None:
-            take = getattr(solver.solver, "update_diagonal", None)
-            load_diagonal = load_unknowns.diagonal()
-            off = load_unknowns - sparse.diags(load_diagonal)
-            if callable(take) and not off.count_nonzero():
-                # the lumped reaction is on the diagonal: hand the multigrid only that
-                diagonal_only = (take, solver.stiffness.diagonal(), load_diagonal)
+        lumped = None
+        take = getattr(solver.solver, "update_reaction", None)
+        if refresh and callable(take):
+            # the lumped reaction is K + T^T diag(V c) T (T: the hanging nodes from the
+            # unknowns): hand the multigrid only the weights V c
+            transfer = solver.nodes.reduction[:, unknowns]
+            volumes = np.asarray(solver.volumes, dtype=float)
+            probe = np.random.default_rng(0).standard_normal(phi.size)
+            loaded = solver.load @ probe
+            if np.allclose(
+                loaded, transfer.T @ (volumes * probe), rtol=0.0,
+                atol=1e-12 * float(np.abs(loaded).max() or 1.0),
+            ):  # fmt: skip
+                lumped = (take, volumes)
         for iterations in range(1, max_newton + 1):  # noqa: B007 (counted after the loop)
             phi[unknowns] = u
             field.fill_hanging(phi)
@@ -656,9 +675,9 @@ class IonOpticsPoisson:
             if solver.solver is None:  # no unknowns
                 break
             reaction = density / temperature
-            if diagonal_only is not None:
-                take, stiffness_diagonal, load_diagonal = diagonal_only
-                take(stiffness_diagonal + load_diagonal * reaction[unknowns])
+            if lumped is not None:
+                take, volumes = lumped
+                take(volumes * reaction)
                 field.jacobian = True
                 builds += 1
                 # this Jacobian, as the multigrid holds it
@@ -681,9 +700,7 @@ class IonOpticsPoisson:
                 operator = LinearOperator((n, n), matvec=jacobian, dtype=float)  # pyright: ignore[reportCallIssue]
             delta = None
             for attempt in range(2):
-                if attempt == 1 or (
-                    diagonal_only is None and (not field.jacobian or refresh)
-                ):
+                if attempt == 1 or (lumped is None and (not field.jacobian or refresh)):
                     take = getattr(solver.solver, "update_operator", None)
                     if load_unknowns is not None and callable(take):
                         take(operator)  # the multigrid of this Jacobian, as assembled
@@ -711,7 +728,7 @@ class IonOpticsPoisson:
                         info = 0
                 # a preconditioner of this very Jacobian is not built again
                 if info == 0 and (
-                    count[0] <= NEWTON_KRYLOV_REBUILD or diagonal_only is not None
+                    count[0] <= NEWTON_KRYLOV_REBUILD or lumped is not None
                 ):
                     delta = step
                     break

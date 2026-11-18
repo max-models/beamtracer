@@ -59,6 +59,18 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Adaptive refinement (`adaptive_refinement=AdaptiveRefinementParams(...)`): every few
+  Vlasov iterations the cells near the beam across which the field strength or the beam's
+  charge density changes by more than a fraction of its largest value are tagged and
+  covered with refined boxes (patchwork's Berger–Rigoutsos clustering); the field solver is
+  rebuilt on them and the potential moved over (`beamtracer.solver.adaptive`). On the 3D
+  extraction benchmark with 3600 trajectories: 0.3% from the mesh with half the cells
+  everywhere in 19 s instead of 42 s. The "Mesh refinement" example shows the boxes it
+  places.
+- With `field_backend="multigrid"` the Newton–Krylov steps take their Jacobian through
+  patchwork's `update_reaction` on refined boxes too (before, a reassembly and a full
+  multigrid setup per step).
+
 - The example "Mesh refinement": a beam extracted through an aperture on a coarse mesh with a
   refined box over the meniscus and the aperture, against uniform meshes (the divergence of
   the mesh with half the cells, with half its nodes).

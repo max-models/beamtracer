@@ -15,6 +15,7 @@ import scope_profiler as sp
 
 from beamtracer._profiling import PROFILE_TAGS
 from beamtracer.config import (
+    AdaptiveRefinementParams,
     AxialField,
     BeamOpticsConfig,
     BeamSpecies,
@@ -63,6 +64,7 @@ __all__ = [
     "ParticleBeam",
     "ShapeParams",
     "Solenoid",
+    "AdaptiveRefinementParams",
     "RefinementParams",
     "SpaceChargeCompensation",
     "SymbolicSpaceFunction",
