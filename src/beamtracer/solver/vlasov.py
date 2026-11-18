@@ -18,6 +18,7 @@ import scope_profiler
 from methodcard import method
 
 from beamtracer._profiling import PROFILE_TAGS
+from beamtracer.solver.adaptive import AdaptiveRefinement, adapted_boxes, sample
 from beamtracer.solver.fields import StaggeredElectricField
 from beamtracer.solver.mesh import IonOpticsMesh
 from beamtracer.solver.mesh3d import IonOpticsMesh3D
@@ -249,6 +250,7 @@ def vlasov_iterate(
     field_backend: str = "lu",
     comm: Any = None,
     refinement: Sequence[Refinement] = (),
+    adaptive: AdaptiveRefinement | None = None,
     callback: Callable[[int, VlasovState], None] | None = None,
 ) -> VlasovState:
     """Run ``iterations`` Vlasov iterations.
@@ -263,7 +265,12 @@ def vlasov_iterate(
     cells: the field is solved on the composite mesh and the trajectories step and deposit
     on the finest box they are in; the state's potential and charge density are then those
     of the base mesh, the composite ones beside them. On an `IonOpticsMesh3D` (with a
-    `BeamTracer3D`) the same iteration runs in 3D, with refined boxes too.
+    `BeamTracer3D`) the same iteration runs in 3D, with refined boxes too. With
+    ``adaptive`` the boxes are placed anew every ``adaptive.every`` iterations where the
+    field changes fastest near the beam (`adapted_boxes`, starting from ``refinement``):
+    the field solver is built for the new boxes, the potential moved onto their composite
+    mesh (`sample`) as the next solve's first guess, and the mixing of the charge starts
+    again from the next deposit.
 
     ``make_particles`` returns the beam and its ``sum J / v`` (the beams' charge density
     magnitude at their start, the density of the Boltzmann plasma species); it is called
@@ -279,10 +286,10 @@ def vlasov_iterate(
     coarse = stride > 1
     if coarse and not coarse_tolerance > 0.0:
         raise ValueError("coarse_particles < 1 needs a positive coarse_tolerance")
-    poisson = IonOpticsPoisson(
-        mesh, backend=field_backend, comm=comm, refinement=refinement
-    )
+    boxes = list(refinement)
+    poisson = IonOpticsPoisson(mesh, backend=field_backend, comm=comm, refinement=boxes)
     layout = poisson.layout
+    restart = False
     rho = np.zeros(layout.size)
 
     def initial_plasma(x: np.ndarray, *rest: np.ndarray) -> np.ndarray:
@@ -295,6 +302,28 @@ def vlasov_iterate(
     boltzmann: BoltzmannElectrons | BoltzmannIons | None = None
     j_over_v: float | None = None
     for iteration in range(iterations):
+        if (
+            adaptive is not None
+            and state is not None
+            and potential is not None
+            and iteration % adaptive.every == 0
+            and iteration // adaptive.every <= adaptive.regrids
+        ):
+            new_boxes = adapted_boxes(
+                state.electric, mesh, adaptive, density=layout.on_base(rho)
+            )
+            if new_boxes != boxes:
+                old_layout, old_potential = layout, potential
+                boxes = new_boxes
+                poisson = IonOpticsPoisson(
+                    mesh, backend=field_backend, comm=comm, refinement=boxes
+                )
+                layout = poisson.layout
+                potential = sample(old_layout, old_potential, poisson.coordinates)
+                rho = sample(old_layout, rho, poisson.coordinates)
+                restart = True
+                if mixer is not None:
+                    mixer.reset()
         if plasma is not None and iteration == 0:
             new = poisson.solve(
                 rho,
@@ -325,8 +354,9 @@ def vlasov_iterate(
         trace = tracer.trace(particles)
         charge = trace.charge_density
         deposited = compensate(layout.x, charge, compensation)
-        if iteration == 0:
+        if iteration == 0 or restart:
             rho = deposited
+            restart = False
         elif mixer is not None:
             rho = mixer.update(rho, deposited)
         else:
@@ -338,6 +368,7 @@ def vlasov_iterate(
                 "newton_iterations": poisson.newton_iterations,
                 "steps": trace.steps,
                 "trajectories": len(particles),
+                "boxes": len(boxes),
             }
         )
         state = VlasovState(

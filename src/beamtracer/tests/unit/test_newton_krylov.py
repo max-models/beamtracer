@@ -36,7 +36,7 @@ def _multigrid_available() -> bool:
 
     from patchwork.solvers.multigrid import CompositeMultigrid
 
-    return hasattr(CompositeMultigrid, "update_diagonal") and "smoother" in str(
+    return hasattr(CompositeMultigrid, "update_reaction") and "smoother" in str(
         inspect.signature(CompositeMultigrid.__init__)
     )
 
@@ -49,7 +49,7 @@ BACKENDS = [
         "multigrid",
         marks=pytest.mark.skipif(
             not _multigrid_available(),
-            reason="needs patchwork's Gauss-Seidel multigrid with diagonal updates",
+            reason="needs patchwork's Gauss-Seidel multigrid with reaction updates",
         ),
     ),
 ]

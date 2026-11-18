@@ -14,6 +14,7 @@ Run it with `BeamOptics.run`::
 
 from __future__ import annotations
 
+import dataclasses
 import pickle
 from collections.abc import Callable
 from pathlib import Path
@@ -56,6 +57,7 @@ from beamtracer.solver import (
     surface_field,
     vlasov_iterate,
 )
+from beamtracer.solver.adaptive import AdaptiveRefinement
 from beamtracer.solver.mesh3d import FACES_3D, Electrode3D, IonOpticsMesh3D
 from beamtracer.solver.refinement import Refinement
 from beamtracer.solver.tracer3d import BeamTracer3D, beam_on_surface
@@ -540,6 +542,13 @@ class BeamOptics:
             refinement=[
                 Refinement(r.level, r.lower, r.upper) for r in config.refinement
             ],
+            adaptive=(
+                None
+                if config.adaptive_refinement is None
+                else AdaptiveRefinement(
+                    **dataclasses.asdict(config.adaptive_refinement)
+                )
+            ),
             comm=self.comm if self._parallel else None,
             callback=callback,
         )

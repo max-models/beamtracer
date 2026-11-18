@@ -408,6 +408,33 @@ class FieldMapParams:
 
 
 @dataclass(frozen=True)
+class AdaptiveRefinementParams:
+    """Refined boxes that the Vlasov iteration places itself where the field changes fastest.
+
+    Every ``every`` iterations the cells near the beam across which the field strength
+    changes by more than ``threshold`` times its largest value are tagged, grown by
+    ``buffer`` cells and covered with boxes (at least ``efficiency`` full of tagged cells,
+    at least ``min_size`` cells long), up to ``max_level`` levels; the field is then solved
+    and the beam traced on the new boxes (`beamtracer.solver.adaptive`).
+    """
+
+    max_level: int = 1
+    threshold: float = 0.02
+    every: int = 4
+    #: The mesh is adapted at most this many times (at iterations ``every``, ``2 every``, ...).
+    regrids: int = 2
+    buffer: int = 2
+    efficiency: float = 0.5
+    min_size: int = 4
+
+    def __post_init__(self) -> None:
+        """Check the settings (as `beamtracer.solver.adaptive.AdaptiveRefinement` does)."""
+        from beamtracer.solver.adaptive import AdaptiveRefinement
+
+        AdaptiveRefinement(**dataclass_to_dict(self))
+
+
+@dataclass(frozen=True)
 class RefinementParams:
     """A box refined to ``level`` (cells ``2**level`` times smaller than the grid's).
 
@@ -568,7 +595,8 @@ class BeamOpticsConfig:
     ``"auto"``. ``refinement``
     lists boxes solved and traced on finer cells (`RefinementParams`): the field on
     patchwork's composite mesh, each trajectory stepping and depositing on the finest box
-    it is in. ``symmetry_plane`` makes a planar grid half of a geometry mirrored at its
+    it is in; ``adaptive_refinement`` (`AdaptiveRefinementParams`) places such boxes
+    during the iteration, where the field changes fastest near the beam. ``symmetry_plane`` makes a planar grid half of a geometry mirrored at its
     ``y`` lower face, which needs a zero normal derivative there: a trajectory crossing
     it continues at negative ``y`` in the mirrored field (as IBSimu's mirrored
     boundaries), instead of leaving.
@@ -606,6 +634,7 @@ class BeamOpticsConfig:
     coarse_tolerance: float = unit_field("V", 0.0)
     field_backend: str = "lu"
     refinement: list[RefinementParams] = field(default_factory=list)
+    adaptive_refinement: AdaptiveRefinementParams | None = None
     symmetry_plane: bool = False
     symmetry_planes: list[str] = field(default_factory=list)
     diagnostic_planes: list[float] = unit_field("m", default_factory=list)
@@ -686,6 +715,9 @@ class BeamOpticsConfig:
             coerce(SpaceChargeCompensation, c) for c in self.compensation
         ]
         self.refinement = [coerce(RefinementParams, r) for r in self.refinement]
+        self.adaptive_refinement = coerce(
+            AdaptiveRefinementParams, self.adaptive_refinement
+        )
         self.charge_changing = coerce(ChargeChangingParams, self.charge_changing)
         self.diagnostic_planes = list(self.diagnostic_planes)
         if (
@@ -753,6 +785,11 @@ class BeamOpticsConfig:
         )
         params["compensation"] = [dataclass_to_dict(c) for c in self.compensation]
         params["refinement"] = [dataclass_to_dict(r) for r in self.refinement]
+        params["adaptive_refinement"] = (
+            None
+            if self.adaptive_refinement is None
+            else dataclass_to_dict(self.adaptive_refinement)
+        )
         params["charge_changing"] = (
             None if self.charge_changing is None else self.charge_changing.to_dict()
         )
