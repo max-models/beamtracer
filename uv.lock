@@ -372,7 +372,7 @@ requires-dist = [
     { name = "nbformat", marker = "extra == 'docs'", specifier = ">=5.11.1" },
     { name = "numpy" },
     { name = "opencr", marker = "extra == 'neutralizer'", git = "https://github.com/max-models/opencr?branch=devel" },
-    { name = "patchwork-amr", git = "https://github.com/max-models/patchwork?branch=claude%2Fcell-grid-visualization-pdmzz4" },
+    { name = "patchwork-amr", git = "https://github.com/max-models/patchwork?branch=devel" },
     { name = "plasma-plots", marker = "extra == 'examples'", git = "https://github.com/max-models/plasma-plots?branch=devel" },
     { name = "plasma-plots", extras = ["web"], marker = "extra == 'docs'", git = "https://github.com/max-models/plasma-plots?branch=devel" },
     { name = "plasmacoll", git = "https://github.com/max-models/plasmacoll?branch=devel" },
@@ -3263,7 +3263,7 @@ wheels = [
 [[package]]
 name = "patchwork-amr"
 version = "0.2.0"
-source = { git = "https://github.com/max-models/patchwork?branch=claude%2Fcell-grid-visualization-pdmzz4#984ce6d2da0236773dd02fb18f4f801d27c12878" }
+source = { git = "https://github.com/max-models/patchwork?branch=devel#42df775adf335c4293f040a079636445068429db" }
 dependencies = [
     { name = "cunumpy" },
     { name = "maybempi" },
