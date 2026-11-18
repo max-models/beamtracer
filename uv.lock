@@ -3263,7 +3263,7 @@ wheels = [
 [[package]]
 name = "patchwork-amr"
 version = "0.2.0"
-source = { git = "https://github.com/max-models/patchwork?branch=devel#ea01eeaf4df3ebe11340f238c02bb53828db1276" }
+source = { git = "https://github.com/max-models/patchwork?branch=devel#ad75f5dc672311cd8158a4a12a112bf268727752" }
 dependencies = [
     { name = "cunumpy" },
     { name = "maybempi" },
