@@ -243,9 +243,13 @@ def test_the_configuration_checks_the_dimension() -> None:
         config.replace(objects=_diode(three=False).objects)
     with pytest.raises(ValueError, match="z faces"):
         config.replace(bcs_field=_diode(three=False).bcs_field)
-    with pytest.raises(ValueError, match="does not take refinement"):
+    with pytest.raises(ValueError, match=r"needs \(x, y, z\) corners"):
         config.replace(
             refinement=[{"level": 1, "lower": (0.0, 0.0), "upper": (1e-3, 1e-3)}]
+        )
+    with pytest.raises(ValueError, match=r"has \(x, y\) corners"):
+        _diode(three=False).replace(
+            refinement=[{"level": 1, "lower": (0, 0, 0), "upper": (1e-3, 1e-3, 1e-3)}]
         )
     with pytest.raises(ValueError, match="symmetry plane is"):
         config.replace(symmetry_planes=["x_min"])

@@ -26,13 +26,27 @@ def _protons(position: np.ndarray, velocity: np.ndarray, current: float = 1e-3):
     )
 
 
-def _kernel_case(integrator: int, magnetic: bool, mirror: bool) -> list:
-    """Random fields on a small mesh, trajectories near the lower faces."""
+def _kernel_case(
+    integrator: int, magnetic: bool, mirror: bool, refined: bool = False
+) -> list:
+    """Random fields on a small mesh (and, ``refined``, a box of half the spacing)."""
     rng = np.random.default_rng(3)
     n, (nx, ny, nz), h = 30, (16, 9, 8), 1e-3
-    fx = rng.normal(size=(nx + 1, ny, nz)) * 1e4 + 3e5
-    fy = rng.normal(size=(nx, ny + 1, nz)) * 1e4
-    fz = rng.normal(size=(nx, ny, nz + 1)) * 1e4
+    # (shape, origin, spacing, box) of every patch, finest first, the mesh last
+    shapes = [((nx, ny, nz), (0.0, 0.0, 0.0), h)]
+    if refined:
+        shapes.insert(0, ((13, 9, 7), (4e-3, 0.0, 0.0), h / 2))
+    fxs, fys, fzs, patch_int, patch_real = [], [], [], [], []
+    offsets = [0, 0, 0, 0]
+    for (px, py, pz), origin, ph in shapes:
+        fxs.append((rng.normal(size=(px + 1, py, pz)) * 1e4 + 3e5).ravel())
+        fys.append((rng.normal(size=(px, py + 1, pz)) * 1e4).ravel())
+        fzs.append((rng.normal(size=(px, py, pz + 1)) * 1e4).ravel())
+        patch_int.append((px, py, pz, *offsets[:3], px * py * pz, offsets[3]))
+        upper = tuple(origin[a] + ((px, py, pz)[a] - 1) * ph for a in range(3))
+        patch_real.append((*origin, ph, *origin, *upper))
+        offsets = [offsets[0] + fxs[-1].size, offsets[1] + fys[-1].size,
+                   offsets[2] + fzs[-1].size, offsets[3] + px * py * pz]  # fmt: skip
     bn = rng.normal(size=(3, nx, ny, nz)) * 0.05 if magnetic else np.zeros((3, 2, 2, 2))
     x = np.stack(
         [rng.uniform(0, 3e-3, n), rng.uniform(0, 3e-3, n), rng.uniform(0, 3e-3, n)]
@@ -43,19 +57,23 @@ def _kernel_case(integrator: int, magnetic: bool, mirror: bool) -> list:
     cells = np.full((nx - 1, ny - 1, nz - 1), -1, dtype=np.int64)
     cells[8, :, :] = np.arange((ny - 1) * (nz - 1)).reshape(ny - 1, nz - 1)
     subcells = rng.choice(
-        np.array([-2, -1, 0], dtype=np.int64), size=(ny - 1) * (nz - 1) * 64
+        np.array([-2, -1, 0], dtype=np.int64),
+        size=(ny - 1) * (nz - 1) * 64,
+        p=[0.1, 0.8, 0.1],
     )
     slot = np.full(n, -1, dtype=np.int64)
     slot[::3] = np.arange(len(slot[::3]))
     return [
         np.arange(n, dtype=np.int64), x, v, np.full(n, 9.6e7), np.ones(n),
         np.zeros(n, dtype=np.int64), np.full(n, -1, dtype=np.int64),
-        np.full(n, -1, dtype=np.int64), fx, fy, fz, bn, int(magnetic),
+        np.full(n, -1, dtype=np.int64), np.concatenate(fxs), np.concatenate(fys),
+        np.concatenate(fzs), np.array(patch_int, dtype=np.int64), np.array(patch_real),
+        bn, int(magnetic),
         0.0, 0.0, 0.0, h, (nx - 1) * h, (ny - 1) * h, (nz - 1) * h,
-        int(mirror), int(mirror), integrator, 0.5, 300, cells, subcells, 4,
+        int(mirror), int(mirror), integrator, 0.5, 700, cells, subcells, 4,
         np.array([5e-3, 11e-3]), np.zeros((n, 2, 3, 8)), np.zeros((n, 2), dtype=np.int64),
         slot, np.zeros((slot.max() + 1, 10, 3)), np.zeros(slot.max() + 1, dtype=np.int64),
-        2, np.zeros((2, nx * ny * nz)),
+        2, np.zeros((2, offsets[3])),
     ]  # fmt: skip
 
 
@@ -65,19 +83,20 @@ def _call(function, args) -> list:
     return args
 
 
-OUTPUTS = (1, 2, 5, 6, 7, 29, 30, 32, 33)
-CHARGE = 35
+OUTPUTS = (1, 2, 5, 6, 7, 31, 32, 34, 35)
+CHARGE = 37
 
 
+@pytest.mark.parametrize("refined", [False, True])
 @pytest.mark.parametrize("mirror", [False, True])
 @pytest.mark.parametrize("magnetic", [False, True])
 @pytest.mark.parametrize("integrator", [0, 1])
-def test_kernel_versions_agree(integrator, magnetic, mirror) -> None:
-    args = _kernel_case(integrator, magnetic, mirror)
+def test_kernel_versions_agree(integrator, magnetic, mirror, refined) -> None:
+    args = _kernel_case(integrator, magnetic, mirror, refined)
     expected = _call(kernel.host_kernel.kernel.python, args)
     result = _call(kernel, args)
     assert set(np.unique(expected[6])) >= {-2, 0}  # stopped at surfaces and transmitted
-    assert expected[33].max() > 10  # some paths outgrow their buffer
+    assert expected[35].max() > 10  # some paths outgrow their buffer
     if not mirror:  # trajectories heading for the lower y face leave through it
         assert (expected[6] == 2).any()
     for i in OUTPUTS:
@@ -88,11 +107,12 @@ def test_kernel_versions_agree(integrator, magnetic, mirror) -> None:
 
 
 @pytest.mark.skipif(emulation_compiler() is None, reason="no C++ compiler")
+@pytest.mark.parametrize("refined", [False, True])
 @pytest.mark.parametrize("mirror", [False, True])
 @pytest.mark.parametrize("magnetic", [False, True])
 @pytest.mark.parametrize("integrator", [0, 1])
-def test_cuda_version_agrees(integrator, magnetic, mirror) -> None:
-    args = _kernel_case(integrator, magnetic, mirror)
+def test_cuda_version_agrees(integrator, magnetic, mirror, refined) -> None:
+    args = _kernel_case(integrator, magnetic, mirror, refined)
     expected = _call(kernel.host_kernel.kernel.python, args)
     result = [a.copy() if isinstance(a, np.ndarray) else a for a in args]
     result[CHARGE] = np.zeros_like(result[CHARGE][:1])  # the GPU deposits into one slab

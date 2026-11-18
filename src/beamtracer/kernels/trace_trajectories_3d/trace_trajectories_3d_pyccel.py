@@ -23,9 +23,11 @@ def trace_trajectories_3d(
     steps: "int[:]",
     status: "int[:]",
     electrode: "int[:]",
-    fx: "float[:,:,:]",
-    fy: "float[:,:,:]",
-    fz: "float[:,:,:]",
+    fxs: "float[:]",
+    fys: "float[:]",
+    fzs: "float[:]",
+    patch_int: "int[:,:]",
+    patch_real: "float[:,:]",
     bn: "float[:,:,:,:]",
     has_b: int,
     origin_x: float,
@@ -56,10 +58,17 @@ def trace_trajectories_3d(
 
     ``x``, ``v`` ``(3, N)`` are the states (updated in place), ``qm`` the charge over mass,
     ``dq`` the signed current deposited per unit time, ``steps`` the steps taken so far.
-    The electric field is the edge fields ``fx`` ``(nx + 1, ny, nz)``, ``fy``
-    ``(nx, ny + 1, nz)`` and ``fz`` ``(nx, ny, nz + 1)`` (as `StaggeredElectricField3D`),
-    gathered trilinearly; with ``has_b`` the magnetic field ``bn`` ``(3, nx, ny, nz)`` on
-    the nodes, gathered trilinearly too. A step is the Runge--Kutta step (``integrator``
+    The electric field lives on patches, finest first and the whole mesh last: their edge
+    fields ``fx`` ``(nx + 1, ny, nz)``, ``fy`` ``(nx, ny + 1, nz)`` and ``fz``
+    ``(nx, ny, nz + 1)`` (as `StaggeredElectricField3D`) flattened one after the other in
+    ``fxs``, ``fys``, ``fzs``; ``patch_int[p]`` holds a patch's node counts, the offsets
+    of its three edge fields, its node count and the offset of its nodes in ``charge[t]``,
+    ``patch_real[p]`` its origin, node spacing and node extent ``x0, y0, z0, x1, y1, z1``.
+    A point takes the field of the finest patch containing it, trilinear, and a step the
+    spacing of the patch at its start; the deposit goes to the patch of its point. With
+    ``has_b`` the magnetic field ``bn`` ``(3, nx, ny, nz)`` on the base mesh's nodes is
+    gathered trilinearly too. The base mesh's ``origin``, ``h`` and ``upper`` decide the
+    exits and the electrode cells. A step is the Runge--Kutta step (``integrator``
     0) of ``dv/dt = qm (E + v x B)`` or Boris's kick--rotate--kick in two half steps of
     ``dt / 2`` around the drift (1, one field evaluation a step: the end's is the next
     start's). The step is ``step_fraction`` of ``min(h / |v|, sqrt(2 h / |a|))``. It
@@ -81,15 +90,16 @@ def trace_trajectories_3d(
     holds, counting all in ``path_count[slot]``. Thread ``t`` traces every
     ``num_threads``-th active trajectory.
     """
-    nx = fy.shape[0]
-    ny = fx.shape[1]
-    nz = fx.shape[2]
+    n_patches = patch_int.shape[0]
+    nx = patch_int[n_patches - 1, 0]
+    ny = patch_int[n_patches - 1, 1]
+    nz = patch_int[n_patches - 1, 2]
     n_active = active.shape[0]
     n_planes = planes.shape[0]
     capacity = hits.shape[2]
     path_capacity = paths.shape[1]
     # fmt: off
-    #$ omp parallel for schedule(static, 1) num_threads(num_threads) private(t, m, k, slot, nstage, have, ce0, ce1, ce2, cb0, cb1, cb2, x0, x1, x2, v0, v1, v2, qmk, ns, st, stage, q0, q1, q2, p0, p1, p2, s1, s2, sx, sy, sz, s, i, j, kz, a, b, c, w000, w001, w010, w011, w100, w101, w110, w111, n0, e0, e1, e2, b0, b1, b2, g0, g1, g2, a0, a1, a2, kx0, kx1, kx2, sx0, sx1, sx2, sv0, sv1, sv2, speed, accel, dt, d2, hdt, dt6, y0, y1, y2, w0, w1, w2, m0, m1, m2, deposit, p, xp, before, after, cc, px, py, pz, cell, si, sj, sk, e, tau, t0, t1, t2, tt, f, u0, u1, u2, r0, r1, r2)
+    #$ omp parallel for schedule(static, 1) num_threads(num_threads) private(t, m, k, slot, nstage, have, ce0, ce1, ce2, cb0, cb1, cb2, x0, x1, x2, v0, v1, v2, qmk, ns, st, stage, q0, q1, q2, p0, p1, p2, s1, s2, sx, sy, sz, s, i, j, kz, a, b, c, w000, w001, w010, w011, w100, w101, w110, w111, n0, e0, e1, e2, b0, b1, b2, g0, g1, g2, a0, a1, a2, kx0, kx1, kx2, sx0, sx1, sx2, sv0, sv1, sv2, speed, accel, dt, d2, hdt, dt6, y0, y1, y2, w0, w1, w2, m0, m1, m2, deposit, p, xp, before, after, cc, px, py, pz, cell, si, sj, sk, e, tau, t0, t1, t2, tt, f, u0, u1, u2, r0, r1, r2, pp, qq, pnx, pny, pnz, ofx, ofy, ofz, ofn, pox, poy, poz, phh, hloc, ci, di, dj)
     # fmt: on
     for t in range(num_threads):
         m = t
@@ -119,6 +129,22 @@ def trace_trajectories_3d(
             cb1 = 0.0
             cb2 = 0.0
             while ns < max_steps:
+                # the spacing of the finest patch at the step's start
+                p1 = x1
+                p2 = x2
+                if mirror_y != 0 and p1 < origin_y:
+                    p1 = 2.0 * origin_y - p1
+                if mirror_z != 0 and p2 < origin_z:
+                    p2 = 2.0 * origin_z - p2
+                hloc = h
+                for qq in range(n_patches - 1):
+                    if (
+                        x0 >= patch_real[qq, 4] and x0 <= patch_real[qq, 7]
+                        and p1 >= patch_real[qq, 5] and p1 <= patch_real[qq, 8]
+                        and p2 >= patch_real[qq, 6] and p2 <= patch_real[qq, 9]
+                    ):  # fmt: skip
+                        hloc = patch_real[qq, 3]
+                        break
                 q0 = x0
                 q1 = x1
                 q2 = x2
@@ -147,85 +173,129 @@ def trace_trajectories_3d(
                         if mirror_z != 0 and p2 < origin_z:
                             p2 = 2.0 * origin_z - p2
                             s2 = -1.0
-                        sx = (p0 - origin_x) / h
-                        sy = (p1 - origin_y) / h
-                        sz = (p2 - origin_z) / h
-                        # E_x on (nx + 1, ny, nz) at (sx + 1/2, sy, sz)
+                        # the finest patch containing the point
+                        pp = n_patches - 1
+                        for qq in range(n_patches - 1):
+                            if (
+                                p0 >= patch_real[qq, 4] and p0 <= patch_real[qq, 7]
+                                and p1 >= patch_real[qq, 5] and p1 <= patch_real[qq, 8]
+                                and p2 >= patch_real[qq, 6] and p2 <= patch_real[qq, 9]
+                            ):  # fmt: skip
+                                pp = qq
+                                break
+                        pnx = patch_int[pp, 0]
+                        pny = patch_int[pp, 1]
+                        pnz = patch_int[pp, 2]
+                        ofx = patch_int[pp, 3]
+                        ofy = patch_int[pp, 4]
+                        ofz = patch_int[pp, 5]
+                        pox = patch_real[pp, 0]
+                        poy = patch_real[pp, 1]
+                        poz = patch_real[pp, 2]
+                        phh = patch_real[pp, 3]
+                        sx = (p0 - pox) / phh
+                        sy = (p1 - poy) / phh
+                        sz = (p2 - poz) / phh
+                        # E_x on (pnx + 1, pny, pnz), flattened, at (sx + 1/2, sy, sz)
                         s = sx + 0.5
                         i = floor(s)
                         if i < 0:
                             i = 0
-                        elif i > nx - 1:
-                            i = nx - 1
+                        elif i > pnx - 1:
+                            i = pnx - 1
                         j = floor(sy)
                         if j < 0:
                             j = 0
-                        elif j > ny - 2:
-                            j = ny - 2
+                        elif j > pny - 2:
+                            j = pny - 2
                         kz = floor(sz)
                         if kz < 0:
                             kz = 0
-                        elif kz > nz - 2:
-                            kz = nz - 2
+                        elif kz > pnz - 2:
+                            kz = pnz - 2
                         a = s - i
                         b = sy - j
                         c = sz - kz
+                        dj = pnz
+                        di = pny * pnz
+                        ci = ofx + i * di + j * dj + kz
                         e0 = (
-                            (1.0 - a) * ((1.0 - b) * ((1.0 - c) * fx[i, j, kz] + c * fx[i, j, kz + 1])
-                                         + b * ((1.0 - c) * fx[i, j + 1, kz] + c * fx[i, j + 1, kz + 1]))
-                            + a * ((1.0 - b) * ((1.0 - c) * fx[i + 1, j, kz] + c * fx[i + 1, j, kz + 1])
-                                   + b * ((1.0 - c) * fx[i + 1, j + 1, kz] + c * fx[i + 1, j + 1, kz + 1]))
+                            (1.0 - a) * ((1.0 - b) * ((1.0 - c) * fxs[ci] + c * fxs[ci + 1])
+                                         + b * ((1.0 - c) * fxs[ci + dj] + c * fxs[ci + dj + 1]))
+                            + a * ((1.0 - b) * ((1.0 - c) * fxs[ci + di] + c * fxs[ci + di + 1])
+                                   + b * ((1.0 - c) * fxs[ci + di + dj] + c * fxs[ci + di + dj + 1]))
                         )  # fmt: skip
-                        # E_y on (nx, ny + 1, nz) at (sx, sy + 1/2, sz)
+                        # E_y on (pnx, pny + 1, pnz) at (sx, sy + 1/2, sz)
                         i = floor(sx)
                         if i < 0:
                             i = 0
-                        elif i > nx - 2:
-                            i = nx - 2
+                        elif i > pnx - 2:
+                            i = pnx - 2
                         s = sy + 0.5
                         j = floor(s)
                         if j < 0:
                             j = 0
-                        elif j > ny - 1:
-                            j = ny - 1
+                        elif j > pny - 1:
+                            j = pny - 1
                         a = sx - i
                         b = s - j
+                        dj = pnz
+                        di = (pny + 1) * pnz
+                        ci = ofy + i * di + j * dj + kz
                         e1 = s1 * (
-                            (1.0 - a) * ((1.0 - b) * ((1.0 - c) * fy[i, j, kz] + c * fy[i, j, kz + 1])
-                                         + b * ((1.0 - c) * fy[i, j + 1, kz] + c * fy[i, j + 1, kz + 1]))
-                            + a * ((1.0 - b) * ((1.0 - c) * fy[i + 1, j, kz] + c * fy[i + 1, j, kz + 1])
-                                   + b * ((1.0 - c) * fy[i + 1, j + 1, kz] + c * fy[i + 1, j + 1, kz + 1]))
+                            (1.0 - a) * ((1.0 - b) * ((1.0 - c) * fys[ci] + c * fys[ci + 1])
+                                         + b * ((1.0 - c) * fys[ci + dj] + c * fys[ci + dj + 1]))
+                            + a * ((1.0 - b) * ((1.0 - c) * fys[ci + di] + c * fys[ci + di + 1])
+                                   + b * ((1.0 - c) * fys[ci + di + dj] + c * fys[ci + di + dj + 1]))
                         )  # fmt: skip
-                        # E_z on (nx, ny, nz + 1) at (sx, sy, sz + 1/2)
+                        # E_z on (pnx, pny, pnz + 1) at (sx, sy, sz + 1/2)
                         j = floor(sy)
                         if j < 0:
                             j = 0
-                        elif j > ny - 2:
-                            j = ny - 2
+                        elif j > pny - 2:
+                            j = pny - 2
                         s = sz + 0.5
                         kz = floor(s)
                         if kz < 0:
                             kz = 0
-                        elif kz > nz - 1:
-                            kz = nz - 1
+                        elif kz > pnz - 1:
+                            kz = pnz - 1
                         b = sy - j
                         c = s - kz
+                        dj = pnz + 1
+                        di = pny * (pnz + 1)
+                        ci = ofz + i * di + j * dj + kz
                         e2 = s2 * (
-                            (1.0 - a) * ((1.0 - b) * ((1.0 - c) * fz[i, j, kz] + c * fz[i, j, kz + 1])
-                                         + b * ((1.0 - c) * fz[i, j + 1, kz] + c * fz[i, j + 1, kz + 1]))
-                            + a * ((1.0 - b) * ((1.0 - c) * fz[i + 1, j, kz] + c * fz[i + 1, j, kz + 1])
-                                   + b * ((1.0 - c) * fz[i + 1, j + 1, kz] + c * fz[i + 1, j + 1, kz + 1]))
+                            (1.0 - a) * ((1.0 - b) * ((1.0 - c) * fzs[ci] + c * fzs[ci + 1])
+                                         + b * ((1.0 - c) * fzs[ci + dj] + c * fzs[ci + dj + 1]))
+                            + a * ((1.0 - b) * ((1.0 - c) * fzs[ci + di] + c * fzs[ci + di + 1])
+                                   + b * ((1.0 - c) * fzs[ci + di + dj] + c * fzs[ci + di + dj + 1]))
                         )  # fmt: skip
                         b0 = 0.0
                         b1 = 0.0
                         b2 = 0.0
                         if has_b != 0:
-                            # B on the nodes (3, nx, ny, nz) at (sx, sy, sz)
+                            # B on the base mesh's nodes (3, nx, ny, nz)
+                            sx = (p0 - origin_x) / h
+                            sy = (p1 - origin_y) / h
+                            sz = (p2 - origin_z) / h
+                            i = floor(sx)
+                            if i < 0:
+                                i = 0
+                            elif i > nx - 2:
+                                i = nx - 2
+                            j = floor(sy)
+                            if j < 0:
+                                j = 0
+                            elif j > ny - 2:
+                                j = ny - 2
                             kz = floor(sz)
                             if kz < 0:
                                 kz = 0
                             elif kz > nz - 2:
                                 kz = nz - 2
+                            a = sx - i
+                            b = sy - j
                             c = sz - kz
                             w000 = (1.0 - a) * (1.0 - b) * (1.0 - c)
                             w001 = (1.0 - a) * (1.0 - b) * c
@@ -260,13 +330,13 @@ def trace_trajectories_3d(
                         accel = sqrt(a0 * a0 + a1 * a1 + a2 * a2)
                         dt = -1.0
                         if speed > 0.0:
-                            dt = h / speed
+                            dt = hloc / speed
                         if accel > 0.0:
-                            d2 = sqrt(2.0 * h / accel)
+                            d2 = sqrt(2.0 * hloc / accel)
                             if dt < 0.0 or d2 < dt:
                                 dt = d2
                         if dt < 0.0:
-                            dt = h
+                            dt = hloc
                         dt = step_fraction * dt
                         hdt = 0.5 * dt
                         dt6 = dt / 6.0
@@ -383,9 +453,23 @@ def trace_trajectories_3d(
                     m1 = 2.0 * origin_y - m1
                 if mirror_z != 0 and m2 < origin_z:
                     m2 = 2.0 * origin_z - m2
-                sx = (m0 - origin_x) / h
-                sy = (m1 - origin_y) / h
-                sz = (m2 - origin_z) / h
+                pp = n_patches - 1
+                for qq in range(n_patches - 1):
+                    if (
+                        m0 >= patch_real[qq, 4] and m0 <= patch_real[qq, 7]
+                        and m1 >= patch_real[qq, 5] and m1 <= patch_real[qq, 8]
+                        and m2 >= patch_real[qq, 6] and m2 <= patch_real[qq, 9]
+                    ):  # fmt: skip
+                        pp = qq
+                        break
+                pnx = patch_int[pp, 0]
+                pny = patch_int[pp, 1]
+                pnz = patch_int[pp, 2]
+                ofn = patch_int[pp, 7]
+                phh = patch_real[pp, 3]
+                sx = (m0 - patch_real[pp, 0]) / phh
+                sy = (m1 - patch_real[pp, 1]) / phh
+                sz = (m2 - patch_real[pp, 2]) / phh
                 i = floor(sx)
                 j = floor(sy)
                 kz = floor(sz)
@@ -395,31 +479,33 @@ def trace_trajectories_3d(
                 if i < 0:
                     a = 0.0
                     i = 0
-                elif i >= nx - 1:
+                elif i >= pnx - 1:
                     a = 1.0
-                    i = nx - 2
+                    i = pnx - 2
                 if j < 0:
                     b = 0.0
                     j = 0
-                elif j >= ny - 1:
+                elif j >= pny - 1:
                     b = 1.0
-                    j = ny - 2
+                    j = pny - 2
                 if kz < 0:
                     c = 0.0
                     kz = 0
-                elif kz >= nz - 1:
+                elif kz >= pnz - 1:
                     c = 1.0
-                    kz = nz - 2
+                    kz = pnz - 2
                 deposit = dq[k] * dt
-                cc = (i * ny + j) * nz + kz
+                dj = pnz
+                di = pny * pnz
+                cc = ofn + i * di + j * dj + kz
                 charge[t, cc] += (1.0 - a) * (1.0 - b) * (1.0 - c) * deposit
                 charge[t, cc + 1] += (1.0 - a) * (1.0 - b) * c * deposit
-                charge[t, cc + nz] += (1.0 - a) * b * (1.0 - c) * deposit
-                charge[t, cc + nz + 1] += (1.0 - a) * b * c * deposit
-                charge[t, cc + ny * nz] += a * (1.0 - b) * (1.0 - c) * deposit
-                charge[t, cc + ny * nz + 1] += a * (1.0 - b) * c * deposit
-                charge[t, cc + ny * nz + nz] += a * b * (1.0 - c) * deposit
-                charge[t, cc + ny * nz + nz + 1] += a * b * c * deposit
+                charge[t, cc + dj] += (1.0 - a) * b * (1.0 - c) * deposit
+                charge[t, cc + dj + 1] += (1.0 - a) * b * c * deposit
+                charge[t, cc + di] += a * (1.0 - b) * (1.0 - c) * deposit
+                charge[t, cc + di + 1] += a * (1.0 - b) * c * deposit
+                charge[t, cc + di + dj] += a * b * (1.0 - c) * deposit
+                charge[t, cc + di + dj + 1] += a * b * c * deposit
                 ns = ns + 1
 
                 for p in range(n_planes):
