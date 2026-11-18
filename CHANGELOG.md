@@ -59,6 +59,13 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `field_backend="multigrid"`: patchwork's geometric multigrid with a compiled Gauss–Seidel
+  V-cycle preconditions the Newton–Krylov steps, each with its own Jacobian (the lumped
+  reaction changes only the diagonal, which the multigrid takes in about 10 ms). On the 3D
+  extraction benchmark (55 000 nodes, 16 iterations) 7.0 s with `"amg"` → 2.6 s, IBSimu
+  4.0 s on the same machine; the electrostatic quadrupole 0.31 s against IBSimu's 2.5 s. The
+  beam is the same to 1e-6.
+
 - Refined boxes on a 3D grid (`refinement` with `(x, y, z)` corners): patchwork's composite
   solve, a staggered field per box with ghost nodes from the coarser boxes, and the compiled
   3D tracer (and its CUDA version) steps and deposits on the finest box at a particle. A box
