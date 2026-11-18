@@ -270,9 +270,12 @@ def _kernel_case(cylindrical: int, integrator: int = 0, refined: bool = False) -
         [
             np.full(n, 3e5),
             rng.normal(size=n) * 1e4,
-            rng.normal(size=n) * 1e4 * cylindrical,
+            rng.normal(size=n) * 1e4 * (cylindrical == 1),
         ]
     )
+    if cylindrical == 2:  # near the symmetry plane and heading for it
+        x[1] *= 0.25
+        v[1] = -3.0 * np.abs(v[1])
     cells = np.full((nx - 1, ny - 1), -1, dtype=np.int64)
     cells[20, :] = np.arange(ny - 1)  # a column of cells near an electrode
     slot = np.full(n, -1, dtype=np.int64)
@@ -302,13 +305,16 @@ CHARGE = 31
 
 @pytest.mark.parametrize("refined", [False, True])
 @pytest.mark.parametrize("integrator", [0, 1])
-@pytest.mark.parametrize("cylindrical", [0, 1])
+@pytest.mark.parametrize("cylindrical", [0, 1, 2])
 def test_kernel_versions_agree(cylindrical, integrator, refined) -> None:
     args = _kernel_case(cylindrical, integrator, refined)
     expected = _call(kernel.host_kernel.kernel.python, args)
     result = _call(kernel, args)
     assert set(np.unique(expected[6])) >= {-2, 0}  # stopped at surfaces and transmitted
     assert expected[29].max() > 30  # some paths outgrow their buffer
+    if cylindrical == 2:  # trajectories leaving a planar mesh at y_min go on here
+        planar = _call(kernel.host_kernel.kernel.python, [*args[:17], 0, *args[18:]])
+        assert (planar[6] == 2).sum() > (expected[6] == 2).sum()
     for i in OUTPUTS:
         np.testing.assert_allclose(result[i], expected[i], rtol=1e-12, atol=1e-12)
     # summed over thread slabs whose split differs between versions: rounding only
@@ -320,7 +326,7 @@ def test_kernel_versions_agree(cylindrical, integrator, refined) -> None:
 @pytest.mark.skipif(emulation_compiler() is None, reason="no C++ compiler")
 @pytest.mark.parametrize("refined", [False, True])
 @pytest.mark.parametrize("integrator", [0, 1])
-@pytest.mark.parametrize("cylindrical", [0, 1])
+@pytest.mark.parametrize("cylindrical", [0, 1, 2])
 def test_cuda_version_agrees(cylindrical, integrator, refined) -> None:
     args = _kernel_case(cylindrical, integrator, refined)
     expected = _call(kernel.host_kernel.kernel.python, args)

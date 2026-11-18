@@ -60,6 +60,13 @@ def _num_threads() -> int:
         return os.cpu_count() or 1
 
 
+def _geometry(mesh: IonOpticsMesh) -> int:
+    """The compiled tracer's geometry: 0 planar, 1 cylindrical, 2 planar with a symmetry plane."""
+    if mesh.symmetry_plane:
+        return 2
+    return int(mesh.cylindrical)
+
+
 def _cartesian(
     components: tuple[np.ndarray, ...], cy: np.ndarray, cz: np.ndarray
 ) -> np.ndarray:
@@ -432,10 +439,12 @@ class BeamTracer:
             "motion": r"\frac{d\mathbf x}{dt} = \mathbf v, \qquad \frac{d\mathbf v}{dt} = \frac{q}{m}\left(\mathbf E + \mathbf v \times \mathbf B\right)",
             "planar": r"\mathbf E = (E_x, E_y, 0)(x, y) + \mathbf E_\mathrm{imp}(x, y), \qquad \mathbf B = \mathbf B(x, y)",
             "cylindrical": r"r = \sqrt{y^2 + z^2}, \qquad \mathbf E = E_x \hat{\mathbf x} + E_r \hat{\mathbf r} + \mathbf E_\mathrm{imp}, \qquad \mathbf B = B_x \hat{\mathbf x} + B_r \hat{\mathbf r} + B_\theta \hat{\boldsymbol\theta}, \qquad \hat{\boldsymbol\theta} = \hat{\mathbf x} \times \hat{\mathbf r}",
+            "symmetry_plane": r"s = \operatorname{sign}(y - y_0), \quad \tilde y = y_0 + |y - y_0|: \qquad \mathbf E = (E_x, s E_y, 0)(x, \tilde y), \qquad \mathbf B = (s B_x, B_y, s B_z)(x, \tilde y)",
             "mean_charge": r"q = \bar q = e \sum_s z_s F_s \quad \text{(charge changes in fractions mode)}",
         },
         assumptions=(
             r"non-relativistic; 3D Cartesian motion in fields of $(x, y)$ or $(x, r)$, so a trajectory crossing the axis continues at negative $y$",
+            r"symmetry plane (planar): the geometry is mirrored at $y = y_0$; a trajectory crossing it continues in the mirrored field and deposits at $\tilde y$",
             r"cylindrical: a trajectory stands for a ring of charge; on the axis $\hat{\mathbf r} = 0$, so $E_r$ and $B_r$ do not act there",
             r"the imposed $\mathbf E_\mathrm{imp}$ and $\mathbf B$ (solenoids, a field map) are static and given in the plane: ``(x, y)`` or ``(x, r)``, the cylindrical ones axial, radial (and azimuthal)",
         ),
@@ -454,13 +463,25 @@ class BeamTracer:
         if electric is None:
             raise RuntimeError("the tracer has no electric field yet")
         if not self.mesh.cylindrical:
-            ex, ey = electric(x[0], x[1])
+            y, s = x[1], None
+            if self.mesh.symmetry_plane:
+                # the mirrored field below the plane: E_y, B_x and B_z change sign
+                y0 = self.mesh.origin[1]
+                s = np.where(x[1] < y0, -1.0, 1.0)
+                y = y0 + np.abs(x[1] - y0)
+            ex, ey = electric(x[0], y)
             e = np.stack([ex, ey, np.zeros_like(ex)], axis=0)
             if self.imposed_electric is not None:
-                e += np.stack(self.imposed_electric(x[0], x[1]), axis=0)
+                e += np.stack(self.imposed_electric(x[0], y), axis=0)
+            if s is not None:
+                e[1] *= s
             if self.magnetic is None:
                 return e, None
-            return e, np.stack(self.magnetic(x[0], x[1]), axis=0)
+            b = np.stack(self.magnetic(x[0], y), axis=0)
+            if s is not None:
+                b[0] *= s
+                b[2] *= s
+            return e, b
         r = np.hypot(x[1], x[2])
         with np.errstate(invalid="ignore", divide="ignore"):
             cy = np.where(r > 0.0, x[1] / r, 0.0)
@@ -531,9 +552,15 @@ class BeamTracer:
         return x_new, self._kick(half, e, b, tau, qm)
 
     def _project(self, x: np.ndarray) -> np.ndarray:
-        """Return the mesh coordinates ``(x, y)`` or ``(x, r)`` of Cartesian points."""
+        """Return the mesh coordinates ``(x, y)`` or ``(x, r)`` of Cartesian points.
+
+        With a symmetry plane, ``y`` below it is mirrored onto the mesh.
+        """
         if self.mesh.cylindrical:
             return np.stack([x[0], np.hypot(x[1], x[2])], axis=0)
+        if self.mesh.symmetry_plane:
+            y0 = self.mesh.origin[1]
+            return np.stack([x[0], y0 + np.abs(x[1] - y0)], axis=0)
         return x[:2]
 
     def _near_electrode(self, px: np.ndarray, py: np.ndarray) -> np.ndarray:
@@ -623,7 +650,8 @@ class BeamTracer:
         mesh = self.mesh
         start, end = self._project(x), self._project(x_new)
         share = np.ones(start.shape[1])
-        lower = (mesh.origin[0], None if mesh.cylindrical else mesh.origin[1])
+        bounded = not (mesh.cylindrical or mesh.symmetry_plane)
+        lower = (mesh.origin[0], mesh.origin[1] if bounded else None)
         for axis in range(2):
             span = end[axis] - start[axis]
             with np.errstate(divide="ignore", invalid="ignore"):
@@ -835,7 +863,10 @@ class BeamTracer:
             done = np.full(index.size, -1, dtype=np.int8)
             done[px >= x1] = TRANSMITTED
             done[(done < 0) & (px < x0)] = BACKWARD
-            out_y = (py > y1) if mesh.cylindrical else ((py > y1) | (py < y0))
+            if mesh.cylindrical or mesh.symmetry_plane:
+                out_y = py > y1
+            else:
+                out_y = (py > y1) | (py < y0)
             done[(done < 0) & out_y] = WALL
             check = (done < 0) & self._near_electrode(px, py)
             hit = np.full(index.size, -1, dtype=np.int32)
@@ -1049,7 +1080,7 @@ class BeamTracer:
                     active, x, v, qm, dq, steps, status, electrode,
                     fxs, fys, patch_int, patch_real,
                     *map(float, mesh.origin), mesh.h, *map(float, mesh.upper),
-                    int(mesh.cylindrical), INTEGRATORS.index(self.integrator),
+                    _geometry(mesh), INTEGRATORS.index(self.integrator),
                     self.step_fraction, self.max_steps,
                     cells, subcells, SUBCELLS, planes, hits, counts,
                     path_slot, paths, path_count, threads, charge,
