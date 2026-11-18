@@ -52,6 +52,11 @@ class Patch:
         return x0, y0, x1, y1
 
 
+def _on_plane(mesh: IonOpticsMesh, y0: float) -> bool:
+    """Whether a box of ``mesh`` starting at ``y0`` lies on its symmetry plane."""
+    return mesh.symmetry_plane and abs(y0 - mesh.origin[1]) <= 1e-9 * mesh.h
+
+
 def patches_of(mesh: IonOpticsMesh, refinement: Sequence[Refinement]) -> list[Patch]:
     """The base patch and one patch per refined box, coarse to fine.
 
@@ -84,6 +89,7 @@ def patches_of(mesh: IonOpticsMesh, refinement: Sequence[Refinement]) -> list[Pa
             geometry=mesh.geometry,
             electrodes=mesh.electrodes,
             patch=True,
+            symmetry_plane=_on_plane(mesh, origin[1]),
         )
         # the field's mesh: two cells (one of the level below) more on each side
         lower_margin = [
@@ -100,6 +106,7 @@ def patches_of(mesh: IonOpticsMesh, refinement: Sequence[Refinement]) -> list[Pa
             geometry=mesh.geometry,
             electrodes=mesh.electrodes,
             patch=True,
+            symmetry_plane=_on_plane(mesh, origin[1] - lower_margin[1] * h),
         )
         inner = (
             slice(lower_margin[0], lower_margin[0] + shape[0]),
@@ -214,9 +221,10 @@ def layout_of(mesh: IonOpticsMesh, patches: list[Patch], nodes) -> Layout:
 
 
 def _extrapolation_of(mesh: IonOpticsMesh) -> list[str]:
-    """The field's treatment of a mesh's faces: symmetric only on the axis."""
+    """The field's treatment of a mesh's faces: symmetric on the axis or a symmetry plane."""
     faces = ["extrapolate"] * 4
-    if mesh.cylindrical and abs(mesh.origin[1]) <= 1e-12 * mesh.h:
+    on_axis = mesh.cylindrical and abs(mesh.origin[1]) <= 1e-12 * mesh.h
+    if on_axis or mesh.symmetry_plane:
         faces[2] = "symmetric"
     return faces
 

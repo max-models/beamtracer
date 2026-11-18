@@ -49,17 +49,32 @@ __device__ static void edge_field_2d(
     *ey = low + u * (high - low);
 }
 
+// The mesh coordinate of (x1, x2) across the axis: y (planar), r (cylindrical) or y
+// mirrored onto the mesh side of the symmetry plane at plane_y (planar, geometry 2).
+__device__ static double mesh_y(double x1, double x2, long long cylindrical, double plane_y) {
+    if (cylindrical == 1) {
+        return hypot(x1, x2);
+    }
+    if (cylindrical == 2) {
+        return plane_y + fabs(x1 - plane_y);
+    }
+    return x1;
+}
+
 __device__ static void acceleration_2d(
     double x0, double x1, double x2, double qm, const Array1D<double>& fxs,
     const Array1D<double>& fys, const Array2D<long long>& patch_int,
     const Array2D<double>& patch_real, long long n_patches,
-    long long cylindrical, double* a0, double* a1, double* a2
+    long long cylindrical, double plane_y, double* a0, double* a1, double* a2
 ) {
     double ex, ey;
-    if (cylindrical == 0) {
-        edge_field_2d(x0, x1, fxs, fys, patch_int, patch_real, n_patches, &ex, &ey);
+    if (cylindrical != 1) {
+        // planar; below a symmetry plane the field is mirrored: E_y changes sign
+        const double sign = (cylindrical == 2 && x1 < plane_y) ? -1.0 : 1.0;
+        edge_field_2d(x0, mesh_y(x1, x2, cylindrical, plane_y), fxs, fys, patch_int,
+                      patch_real, n_patches, &ex, &ey);
         *a0 = qm * ex;
-        *a1 = qm * ey;
+        *a1 = qm * (sign * ey);
         *a2 = qm * 0.0;
         return;
     }
@@ -90,7 +105,7 @@ __device__ static void deposit_point_2d(
     long long j = (long long)floor((y - origin_y) / h);
     double a = (x - (origin_x + h * i)) / h;
     double b;
-    if (cylindrical != 0) {
+    if (cylindrical == 1) {
         const double r1 = origin_y + h * j;
         const double r2 = r1 + h;
         b = (y * y - r1 * r1) / (r2 * r2 - r1 * r1);
@@ -174,9 +189,9 @@ void trace_trajectories_2d(
     while (ns < max_steps) {
         // the spacing of the finest patch at the step's start
         const double hloc = patch_real(
-            patch_of(x0, cylindrical != 0 ? hypot(x1, x2) : x1, patch_real, n_patches), 2);
+            patch_of(x0, mesh_y(x1, x2, cylindrical, origin_y), patch_real, n_patches), 2);
         if (!have) {
-            acceleration_2d(x0, x1, x2, qmk, fxs, fys, patch_int, patch_real, n_patches, cylindrical, &a0, &a1, &a2);
+            acceleration_2d(x0, x1, x2, qmk, fxs, fys, patch_int, patch_real, n_patches, cylindrical, origin_y, &a0, &a1, &a2);
         }
         const double speed = sqrt(v0 * v0 + v1 * v1 + v2 * v2);
         const double accel = sqrt(a0 * a0 + a1 * a1 + a2 * a2);
@@ -199,7 +214,7 @@ void trace_trajectories_2d(
             y1 = x1 + dt * kx1;
             y2 = x2 + dt * kx2;
             double g0, g1, g2;
-            acceleration_2d(y0, y1, y2, qmk, fxs, fys, patch_int, patch_real, n_patches, cylindrical, &g0, &g1, &g2);
+            acceleration_2d(y0, y1, y2, qmk, fxs, fys, patch_int, patch_real, n_patches, cylindrical, origin_y, &g0, &g1, &g2);
             w0 = kx0 + hdt * g0;
             w1 = kx1 + hdt * g1;
             w2 = kx2 + hdt * g2;
@@ -211,19 +226,19 @@ void trace_trajectories_2d(
         const double k2x2 = v2 + 0.5 * dt * a2;
         double k2v0, k2v1, k2v2;
         acceleration_2d(x0 + 0.5 * dt * v0, x1 + 0.5 * dt * v1, x2 + 0.5 * dt * v2, qmk, fxs, fys, patch_int, patch_real, n_patches,
-                        cylindrical, &k2v0, &k2v1, &k2v2);
+                        cylindrical, origin_y, &k2v0, &k2v1, &k2v2);
         const double k3x0 = v0 + 0.5 * dt * k2v0;
         const double k3x1 = v1 + 0.5 * dt * k2v1;
         const double k3x2 = v2 + 0.5 * dt * k2v2;
         double k3v0, k3v1, k3v2;
         acceleration_2d(x0 + 0.5 * dt * k2x0, x1 + 0.5 * dt * k2x1, x2 + 0.5 * dt * k2x2, qmk, fxs, fys, patch_int, patch_real, n_patches,
-                        cylindrical, &k3v0, &k3v1, &k3v2);
+                        cylindrical, origin_y, &k3v0, &k3v1, &k3v2);
         const double k4x0 = v0 + dt * k3v0;
         const double k4x1 = v1 + dt * k3v1;
         const double k4x2 = v2 + dt * k3v2;
         double k4v0, k4v1, k4v2;
         acceleration_2d(x0 + dt * k3x0, x1 + dt * k3x1, x2 + dt * k3x2, qmk, fxs, fys, patch_int, patch_real, n_patches,
-                        cylindrical, &k4v0, &k4v1, &k4v2);
+                        cylindrical, origin_y, &k4v0, &k4v1, &k4v2);
         y0 = x0 + dt / 6.0 * (v0 + 2.0 * k2x0 + 2.0 * k3x0 + k4x0);
         y1 = x1 + dt / 6.0 * (v1 + 2.0 * k2x1 + 2.0 * k3x1 + k4x1);
         y2 = x2 + dt / 6.0 * (v2 + 2.0 * k2x2 + 2.0 * k3x2 + k4x2);
@@ -234,7 +249,7 @@ void trace_trajectories_2d(
         const double m0 = 0.5 * (x0 + y0) + dt * (v0 - w0) / 8.0;
         const double m1 = 0.5 * (x1 + y1) + dt * (v1 - w1) / 8.0;
         const double m2 = 0.5 * (x2 + y2) + dt * (v2 - w2) / 8.0;
-        const double my = cylindrical != 0 ? hypot(m1, m2) : m1;
+        const double my = mesh_y(m1, m2, cylindrical, origin_y);
         deposit_point_2d(m0, my, dqk * dt, patch_int, patch_real, n_patches, cylindrical, charge);
         ns = ns + 1;
         for (long long p = 0; p < n_planes; ++p) {
@@ -260,7 +275,7 @@ void trace_trajectories_2d(
         x0 = y0; x1 = y1; x2 = y2;
         v0 = w0; v1 = w1; v2 = w2;
         const double px = x0;
-        const double py = cylindrical != 0 ? hypot(x1, x2) : x1;
+        const double py = mesh_y(x1, x2, cylindrical, origin_y);
         if (slot >= 0) {
             const long long c = path_count(slot);
             if (c < path_capacity) {

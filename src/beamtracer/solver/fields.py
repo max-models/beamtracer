@@ -102,7 +102,7 @@ class StaggeredElectricField:
     and the electrode's first node, the difference is taken over the distance to the
     surface instead of ``h``, so the field at an electrode surface is that of the surface.
     ``extrapolation`` gives, per face (``x_min, x_max, y_min, y_max``), ``"symmetric"`` (the
-    field vanishes on the face, e.g. the symmetry axis) or ``"extrapolate"`` (linear).
+    field vanishes on the face, e.g. the symmetry axis or a symmetry plane) or ``"extrapolate"`` (linear).
     """
 
     def __init__(
@@ -114,7 +114,7 @@ class StaggeredElectricField:
         """Precompute the edge fields of ``potential`` ``(nx, ny)``."""
         if extrapolation is None:
             extrapolation = ["extrapolate"] * 4
-            if mesh.cylindrical:
+            if mesh.cylindrical or mesh.symmetry_plane:
                 extrapolation[2] = "symmetric"
         self.mesh = mesh
         self.extrapolation = tuple(extrapolation)

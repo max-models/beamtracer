@@ -534,6 +534,8 @@ def run_beamtracer(
         "integrator": integrator,
         "iterations": case.iterations,
         "tolerance": 0.0,
+        # IBSimu mirrors particles at y_min: the planar symmetric cases are half domains
+        "symmetry_plane": case.symmetric and not case.cylindrical,
     }
     if case.plasma:
         args["plasma"] = ExtractionPlasma(

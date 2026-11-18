@@ -49,6 +49,14 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `BeamOpticsConfig(symmetry_plane=True)`: a planar grid is half of a geometry mirrored at
+  its `y` lower face (which needs a zero normal derivative). A trajectory crossing it
+  continues at negative `y` in the mirrored field (E_y, B_x and B_z change sign) and
+  deposits its charge mirrored, in the NumPy tracer and the compiled kernel (and its
+  CUDA version), instead of leaving the mesh; the edge field is symmetric there, as on the
+  axis. Before, a planar half-domain model (as IBSimu's mirrored boundaries make them)
+  lost every trajectory focused across the plane.
+
 - Mesh refinement: `BeamOpticsConfig(refinement=[RefinementParams(level, lower, upper)])`
   solves the field on boxes of finer cells (each level halves them) with patchwork's
   composite `NodalPoisson`, and every trajectory takes the field of, steps with the spacing
