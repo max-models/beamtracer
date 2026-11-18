@@ -10,6 +10,7 @@ passes through a node.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -470,6 +471,7 @@ def run_beamtracer(
         "integrator": integrator,
         "iterations": case.iterations,
         "tolerance": 0.0,
+        "field_backend": os.environ.get("BENCHMARK_FIELD_BACKEND", "lu"),
         "symmetry_planes": list(case.symmetry_planes),
     }
     if case.plasma:

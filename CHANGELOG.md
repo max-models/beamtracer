@@ -54,6 +54,15 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `field_backend="amg"`: patchwork's algebraic-multigrid backend (pyamg's classical AMG
+  preconditioning CG or GMRES) instead of an LU factorisation, and with a plasma a
+  Newton--Krylov method: every Newton step solves the current Jacobian by GMRES to 1e-3,
+  preconditioned by the V-cycle of an AMG hierarchy kept across Newton steps, solves and
+  Vlasov iterations and built again only when a step takes more than 12 iterations. The
+  same potentials as the direct solve (to 2e-5 V on 100 V); on the 3D extraction benchmark
+  (55 000 nodes) 8.5 s instead of 26 s, on the 3D solenoid 0.6 s instead of 3.1 s. Needs
+  the `amg` extra (pyamg).
+
 - `BeamOptics` on a 3D grid (`GridParams(ndim=3)`): electrodes as 3D shapes (`cuboid`,
   `sphere`, `cylinder`, `tube`, `cone`), the z faces in `FieldBCs`, beams emitted from a
   rectangle or a disc (`BeamSpecies3D`), the plasma species, solenoids and an axial profile

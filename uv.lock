@@ -288,6 +288,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+amg = [
+    { name = "pyamg" },
+]
 dev = [
     { name = "astropy", version = "6.1.7", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "astropy", version = "8.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -305,6 +308,7 @@ dev = [
     { name = "plasma-plots", extra = ["web"] },
     { name = "plotly" },
     { name = "pre-commit" },
+    { name = "pyamg" },
     { name = "pyccel" },
     { name = "pyproject-fmt" },
     { name = "pyright" },
@@ -339,6 +343,7 @@ test = [
     { name = "astropy", version = "8.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "methodcard", extra = ["symbolic"] },
     { name = "opencr" },
+    { name = "pyamg" },
     { name = "pyccel" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -349,8 +354,8 @@ test = [
 requires-dist = [
     { name = "astropy" },
     { name = "astropy", marker = "extra == 'test'" },
+    { name = "beamtracer", extras = ["amg", "neutralizer"], marker = "extra == 'test'" },
     { name = "beamtracer", extras = ["docs", "examples", "test"], marker = "extra == 'dev'" },
-    { name = "beamtracer", extras = ["neutralizer"], marker = "extra == 'test'" },
     { name = "cunumpy", git = "https://github.com/max-models/cunumpy?branch=devel" },
     { name = "griffe", marker = "extra == 'docs'" },
     { name = "ipykernel", marker = "extra == 'docs'" },
@@ -373,6 +378,7 @@ requires-dist = [
     { name = "plasmacoll", git = "https://github.com/max-models/plasmacoll?branch=devel" },
     { name = "plotly", marker = "extra == 'examples'" },
     { name = "pre-commit", marker = "extra == 'dev'" },
+    { name = "pyamg", marker = "extra == 'amg'" },
     { name = "pyccel", marker = "extra == 'test'", specifier = ">2.0" },
     { name = "pyproject-fmt", marker = "extra == 'dev'" },
     { name = "pyright", marker = "extra == 'dev'" },
@@ -386,7 +392,7 @@ requires-dist = [
     { name = "wellbalanced", extras = ["cr"], marker = "extra == 'neutralizer'", git = "https://github.com/max-models/wellbalanced?branch=devel" },
     { name = "xarray" },
 ]
-provides-extras = ["neutralizer", "examples", "dev", "docs", "test"]
+provides-extras = ["amg", "neutralizer", "examples", "dev", "docs", "test"]
 
 [[package]]
 name = "beautifulsoup4"
@@ -3614,6 +3620,47 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/da/9f/abfd2959e9261dd5217ca8551d4de211ca6ab26fe9b72cf44731ff6c4442/pure_eval-0.2.4.tar.gz", hash = "sha256:260c2774686e651b79f8b8e7fc9d80b3599ea6a66334b47d5f4abb69fc2c0ea1", size = 20563, upload-time = "2026-09-10T21:41:22.836Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/6d/18/83376915176eb058cb86470eb7396388a13350b09a8f233a79303bbcbc5b/pure_eval-0.2.4-py3-none-any.whl", hash = "sha256:96cae060a313cfaad51bb761278bfb0e62dc0248d9315a81173752dc546cd37a", size = 11893, upload-time = "2026-09-10T21:41:21.532Z" },
+]
+
+[[package]]
+name = "pyamg"
+version = "5.4.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/71/9d/099c69dbde77ea34cc483bba8655847e8fb553a021da68f25bc0f4be45ff/pyamg-5.4.1.tar.gz", hash = "sha256:b5829ce39687655ce68db4415c93ee171056bb4e41e7b798ef4e6e9f9f93beae", size = 4166930, upload-time = "2026-10-30T16:41:34.908Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cb/3b/773b871af5d8c89094bc06d39e435fb8aa6f4a6bce4ae3b4b8e59e26e848/pyamg-5.4.1-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:9fc99452e773dee563f06934d54c35c0a03b399e374dc5b44924b4c9851cfc24", size = 2144412, upload-time = "2026-10-30T16:40:47.644Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/d6/16cd535895ead6bd3163cada852ab5037f4379eaba97268539ba00d06b11/pyamg-5.4.1-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:0b039f77acc59579506339da150085bc2d5ff6535c95493a2cbd5ecdf16755ad", size = 2145127, upload-time = "2026-10-30T16:40:49.764Z" },
+    { url = "https://files.pythonhosted.org/packages/c0/fa/7fa0ec38c71d645200797c26dd057ec565f00db96d8aa3d75fa895a7a800/pyamg-5.4.1-cp310-cp310-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:519b5b52f273726fece9bafd5b56e3d6bb2fdd256f4d2b7d26384c2d7cda335f", size = 2357892, upload-time = "2026-10-30T16:40:51.609Z" },
+    { url = "https://files.pythonhosted.org/packages/d1/c6/7a2679e8e56b3b686e4410a0cb8add51c39dadbdda738b83068680c4d480/pyamg-5.4.1-cp310-cp310-musllinux_1_2_x86_64.whl", hash = "sha256:965eaf08355c02a131f610ef0816d120dc291549bcdaaf8256e43952b69e9e64", size = 3422387, upload-time = "2026-10-30T16:40:53.283Z" },
+    { url = "https://files.pythonhosted.org/packages/81/1f/f5a4447cd238c6019fdc7aa6ebb4fa6c786c0aba49d4ca4a9851a0b87823/pyamg-5.4.1-cp310-cp310-win_amd64.whl", hash = "sha256:a0461bfde6e081cfe5427d71b5c3ee7f7e4f9a4b4b8862d92c68908ec02d2448", size = 2075239, upload-time = "2026-10-30T16:40:55.166Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/0a/b6a7d8da8d0f91e04b0be9484cb78c1553cda65c4d41380993f6436715a0/pyamg-5.4.1-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:b77fe70ce0d77e0d09c6120e2852fe9f30860597c6870f81bab154fc07b9ec8f", size = 2156246, upload-time = "2026-10-30T16:40:57.188Z" },
+    { url = "https://files.pythonhosted.org/packages/d8/15/a066b9ab1a00d08c3fb3778ad054ee0990fa106ccafa581c917598225597/pyamg-5.4.1-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:8bed8e51c21b07464a18dc661c9f7632cdb984c8af47a3194009284a04e37e49", size = 2155927, upload-time = "2026-10-30T16:40:59.192Z" },
+    { url = "https://files.pythonhosted.org/packages/07/94/e3cc3b5cdeb3732f72207bbc548f37d941507f1797787c1bee1d1883b9f1/pyamg-5.4.1-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:418d16823f69d7049f22ea35bba08ed00761a945b58b6089be985427204c9f64", size = 2365127, upload-time = "2026-10-30T16:41:00.941Z" },
+    { url = "https://files.pythonhosted.org/packages/6c/3a/2e3f234c281ad1f8a9302b1c0c7894113ac15e931ac4d56420037bfe4f5e/pyamg-5.4.1-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:b6f8a1d5b738c4911a2b7b43c4ec129f38ef8e0cdb4b2bdb988d3f7c41cf0aed", size = 3429560, upload-time = "2026-10-30T16:41:02.738Z" },
+    { url = "https://files.pythonhosted.org/packages/8e/bd/5a7c98bc5de0c7a865eda1deec66d0076f33cd0cac2a47fc1eddd8a9938c/pyamg-5.4.1-cp311-cp311-win_amd64.whl", hash = "sha256:b1992c2ffb29a1e5df69b8198d297762d153f6475d886e044047a069110c86da", size = 2083425, upload-time = "2026-10-30T16:41:04.834Z" },
+    { url = "https://files.pythonhosted.org/packages/a1/39/bfddd720f54de34141a57c4144a340ea034535e01f679feb67b81b1626da/pyamg-5.4.1-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:6874a9374881d5908fc7f66efee5af2a428b4a826613824a75e775d909fa6b00", size = 2172902, upload-time = "2026-10-30T16:41:06.835Z" },
+    { url = "https://files.pythonhosted.org/packages/b2/6f/fab4fe701d2777f577bc018acc2eeba530b11319ab37e5d9cc1af193f51c/pyamg-5.4.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:acf6268a7d8d97cd76306769aacf04769aa69c5a2486329030c03b872c1fdf45", size = 2168697, upload-time = "2026-10-30T16:41:08.646Z" },
+    { url = "https://files.pythonhosted.org/packages/f1/f3/e7c269e72159702eb4a3c970dfb892b378d1dcf8f5a51508754e7d9c3c18/pyamg-5.4.1-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:91992dd46bae10b01b923c69f0a00bb8700d7c6f8da3098487fa3b7aa3b431fe", size = 2390468, upload-time = "2026-10-30T16:41:10.441Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/11/952c3ef547d09e3c7ea666cfb18ec9dd7c1d133aedb5ba9cbd5fab1094c0/pyamg-5.4.1-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:71d0fcf1bfc93aaf6d857ebc0c8163479f39d9cb00ac42d9b145707528e0d71e", size = 3458701, upload-time = "2026-10-30T16:41:12.472Z" },
+    { url = "https://files.pythonhosted.org/packages/b0/9f/2fc77142cdf59032477fc06af64961b51efc7a819d24e91e24ae95436e56/pyamg-5.4.1-cp312-cp312-win_amd64.whl", hash = "sha256:9ba9a0642dd1def9124a93c253b022d3b1b9f09488381df9159bccc6e92464c9", size = 2096402, upload-time = "2026-10-30T16:41:14.176Z" },
+    { url = "https://files.pythonhosted.org/packages/0e/fb/143b6a89c66d3cccb61fd660d5dfa6975f2b34e93648c8ba8415ef2da4b6/pyamg-5.4.1-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:d33ef24262002583825e4d64b18c5f532780efa012057c58441353558c51b377", size = 2173154, upload-time = "2026-10-30T16:41:15.814Z" },
+    { url = "https://files.pythonhosted.org/packages/61/8f/3bc51376b987876645959b659daca34fa3c42d3b76b756b6c74a2b33935a/pyamg-5.4.1-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:dc116b69dded020081a830b481b9429daae4754a8e3a70fb02133f81de3b5dc7", size = 2169136, upload-time = "2026-10-30T16:41:17.96Z" },
+    { url = "https://files.pythonhosted.org/packages/33/11/892187db57dd5c30a6924f0d21d6e489b97606043b02aee69262d4ff1211/pyamg-5.4.1-cp313-cp313-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:e3189f1c0272b656be9467e9deadbc0b7d7fe7b70a4673a3518d0c6d3a78d79b", size = 2391005, upload-time = "2026-10-30T16:41:19.98Z" },
+    { url = "https://files.pythonhosted.org/packages/93/11/0d82d935833b210c53c7c27dc405430ffc7d432e72896e3325653966ebab/pyamg-5.4.1-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:7d0201edd541d928f71936474ec717ebdc32517b87807b40aea27b5b80c29ed9", size = 3459186, upload-time = "2026-10-30T16:41:21.855Z" },
+    { url = "https://files.pythonhosted.org/packages/6d/fa/1dc34191692817ba5fc8a6eedae7cce9d45e09f7e317bf7e4242e24ce0d0/pyamg-5.4.1-cp313-cp313-win_amd64.whl", hash = "sha256:f5a1b5c3c31480735b5060bc40f73703456700467ad169f3bf97821a84eac3e7", size = 2096710, upload-time = "2026-10-30T16:41:23.856Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/12/ef2f10bacec01e4febf568d12e401d7488b63d28d6ad59af5953c35ae14a/pyamg-5.4.1-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:74a55e4b5053e9890ee9afe61fcc5e3d81757add39ac9f3d8ea211c86b461bab", size = 2173845, upload-time = "2026-10-30T16:41:25.58Z" },
+    { url = "https://files.pythonhosted.org/packages/61/44/b8243a387d951821e863e3a764b971d30a4f9d0b0b012ad960b2820de423/pyamg-5.4.1-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:5c971d54735af4be4c0653a7be37e5c7bb59f3eef47addfaf346a3cce1e54cd8", size = 2170385, upload-time = "2026-10-30T16:41:27.408Z" },
+    { url = "https://files.pythonhosted.org/packages/a2/39/b3c2eb3779a16ca481b1babcd4a465f5ae5bf237c922064832810e820c8e/pyamg-5.4.1-cp314-cp314-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:2b56a96bc7f492ec49377ef537bd74f6ef7e53d8c39222dd8464f000f89d8441", size = 2391769, upload-time = "2026-10-30T16:41:29.386Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/b5/20a1b862b7cab90ce3f4e7640dd3137e9ddb2c3bb8b892b04d7d939937c2/pyamg-5.4.1-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:47a5befac3623fb129af8ac0100a0ff012bc4b7455c611dbcbb67c49958c3e74", size = 3459508, upload-time = "2026-10-30T16:41:31.034Z" },
+    { url = "https://files.pythonhosted.org/packages/28/d2/a6176b3ee2e50f03f885d8a1ad58ebe5fa904893b5254130267100b9cfdf/pyamg-5.4.1-cp314-cp314-win_amd64.whl", hash = "sha256:66a083c4f42d2735c22267f9cb38f1a8f46add355b0a77d29bc10c341ea6e9f7", size = 2133403, upload-time = "2026-10-30T16:41:33.152Z" },
 ]
 
 [[package]]
