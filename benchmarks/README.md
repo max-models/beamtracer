@@ -25,18 +25,32 @@ are 2D (planar and cylindrical), so they follow with a 3D `BeamOptics`.
 Without saved trajectories IBSimu keeps only where every particle ended, so both codes are
 compared at the exit face `x = x_max` of the mesh, on the current-weighted moments of the
 particles crossing it: the current, the mean and rms transverse position (`y` or `r`), the
-rms angle, the rms emittance and the mean energy. The moments of a beam symmetric about
+mean and rms angle, the rms emittance and the mean energy. The moments of a beam symmetric about
 `y = 0` are taken about 0 (a planar trajectory may continue across that plane in one code and
 be mirrored in the other). The potentials are compared at the nodes at least a cell away
 from every electrode, relative to the potential's span: inside and on an electrode the codes
 differ by convention, not by their solutions.
 
-Every case module in `cases/` holds IBSimu's electrodes (its inside tests, as in the
-example) and the same electrodes as beamtracer shapes. A node exactly on a surface is free
-in IBSimu when its test uses a strict inequality and solid otherwise; the shapes are shrunk
-or grown by 1 nm to classify it alike. Where an example traces only a few hundred
-trajectories, the case traces more, so that the moments are not dominated by sampling
-noise; each case lists its tolerances.
+Each case module in `cases/` describes its case once: the electrodes as polygons, the
+faces, the beam, a plasma or a magnetic field. `common.run_ibsimu` and
+`common.run_beamtracer` build it in each code, IBSimu's inside tests from the same polygons.
+Every electrode is shrunk by 0.37 of a cell, in both codes, so that no surface passes
+through a node: there the codes would classify the node by convention (or by rounding)
+rather than by the geometry, and in the examples many surfaces lie on nodes. Where an
+example traces only a few hundred trajectories, the case traces more, so that the moments
+are not dominated by sampling noise. Each case lists its tolerances and where it departs
+from the example (`notes`).
+
+What the cases found:
+
+- beamtracer has no symmetry plane in planar geometry: a trajectory crossing `y = 0`
+  leaves the mesh, where IBSimu mirrors it. `plasma2d`, whose meniscus focuses the beam
+  across the plane, fails for that reason.
+- In `iter_nbi` the outermost trajectories graze a corner of the last electrode; IBSimu,
+  testing for collisions only at its step points, lets them through. Its Gauss-Seidel
+  solver also stops about 35 V short on that long mesh, so the case uses BiCGSTAB.
+- Setups with a magnetic field (`solenoid`, `sector_magnet`) still use beamtracer's NumPy
+  tracer and are slower than IBSimu.
 
 ## Running
 

@@ -1,25 +1,12 @@
 """A 0.2 T sector field bending a 50 keV proton beam (IBSimu's ``sim_sector_magnet``)."""
 
-from __future__ import annotations
-
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import numpy as np
-from common import Case, Outcome, Region, beamtracer_run, ibsimu_run
+from common import Case
 
-FACES = [
-    0.0,
-    0.0,
-    0.0,
-    0.0,
-]  # IBSimu does not solve; grounded faces keep beamtracer's potential zero
-BEAM = {
-    "current_density": 1.0e-3,
-    "energy": 50_000.0,
-    "start": (0.0, 0.095),
-    "end": (0.0, 0.105),
-}
 FIELD, X0, X1 = 0.2, 0.05, 0.1  # Bz in 50 mm < x < 100 mm, set at the nodes
 
 
@@ -30,7 +17,7 @@ def bz(nodes: tuple[int, int], h: float) -> np.ndarray:
     return np.repeat(np.where(inside, FIELD, 0.0)[:, None], nodes[1], axis=1)
 
 
-def magnetic(geom: object, nodes: tuple[int, int], h: float) -> object:
+def ibsimu_magnetic(nodes: tuple[int, int], h: float) -> Any:
     """Return IBSimu's mesh field with Bz at the nodes."""
     import ibsimu
 
@@ -44,31 +31,15 @@ def magnetic(geom: object, nodes: tuple[int, int], h: float) -> object:
     return field
 
 
-def run_ibsimu(
-    nodes: tuple[int, int], h: float, particles: int, threads: int, region: Region
-) -> Outcome:
-    """Run the case in IBSimu: no electrodes and no field solve."""
-    return ibsimu_run(
-        CASE, nodes, h, particles, threads, region,
-        solids=[], faces=FACES, beam=BEAM, magnetic=magnetic, solve=False,
-    )  # fmt: skip
-
-
-def run_beamtracer(
-    nodes: tuple[int, int], h: float, particles: int, integrator: str, region: Region
-) -> Outcome:
-    """Run the case in beamtracer, the field a map at the same nodes."""
+def beamtracer_fields(nodes: tuple[int, int], h: float) -> dict[str, Any]:
+    """Return the same field as a beamtracer field map at the nodes (a netCDF file)."""
     from beamtracer import FieldMapParams
     from beamtracer.field_map import FieldMap
 
+    path = Path(tempfile.mkdtemp()) / "sector.nc"
     x, y = np.arange(nodes[0]) * h, np.arange(nodes[1]) * h
-    with tempfile.TemporaryDirectory() as folder:
-        path = Path(folder) / "sector.nc"
-        FieldMap.from_arrays({"x": x, "y": y}, {"b_field_z": bz(nodes, h)}).write(path)
-        return beamtracer_run(
-            CASE, nodes, h, particles, integrator, region,
-            objects={}, faces=FACES, beam=BEAM, field_map=FieldMapParams(str(path)),
-        )  # fmt: skip
+    FieldMap.from_arrays({"x": x, "y": y}, {"b_field_z": bz(nodes, h)}).write(path)
+    return {"field_map": FieldMapParams(str(path))}
 
 
 CASE = Case(
@@ -82,14 +53,24 @@ CASE = Case(
     iterations=1,
     mass=1.0,
     symmetric=False,
+    electrodes=(),
+    # IBSimu solves no field; grounded faces keep beamtracer's potential zero too
+    faces=(0.0, 0.0, 0.0, 0.0),
+    beam={
+        "current_density": 1.0e-3,
+        "energy": 50_000.0,
+        "start": (0.0, 0.095),
+        "end": (0.0, 0.105),
+    },
     tolerance={
         "current": 0.01,
         "mean": 0.001,
+        "mean_angle": 0.001,
         "rms": 0.01,
-        "rms_angle": 0.01,
         "energy": 0.001,
     },
-    ibsimu=run_ibsimu,
-    beamtracer=run_beamtracer,
+    solve=False,
+    ibsimu_magnetic=ibsimu_magnetic,
+    beamtracer_fields=beamtracer_fields,
     notes="500 trajectories instead of the example's 50.",
 )

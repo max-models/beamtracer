@@ -29,7 +29,15 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from common import Case, Exit, Outcome, away_from_electrodes, compare  # noqa: E402
+from common import (  # noqa: E402
+    Case,
+    Exit,
+    Outcome,
+    away_from_electrodes,
+    compare,
+    run_beamtracer,
+    run_ibsimu,
+)
 
 CASES = (
     "vlasov2d",
@@ -100,19 +108,16 @@ def worker(args: argparse.Namespace) -> None:
         for _ in range(args.repeats):
             with sp.region("bench.total"):
                 if code == "ibsimu":
-                    outcome = case.ibsimu(
-                        nodes, h, particles, args.ibsimu_threads, region
+                    outcome = run_ibsimu(
+                        case, nodes, h, particles, args.ibsimu_threads, region
                     )
                 else:
-                    outcome = case.beamtracer(
-                        nodes, h, particles, args.integrator, region
+                    outcome = run_beamtracer(
+                        case, nodes, h, particles, args.integrator, region
                     )
     assert outcome is not None
     beam = outcome.exit
-    module = importlib.import_module(f"cases.{name}")
-    away = away_from_electrodes(
-        module.solids() if hasattr(module, "solids") else [], nodes, h
-    )
+    away = away_from_electrodes(case, nodes, h)
     np.savez(
         stem.with_suffix(".npz"),
         potential=outcome.potential,

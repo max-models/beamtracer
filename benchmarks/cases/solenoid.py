@@ -1,15 +1,10 @@
 """A 0.5 T solenoid focusing 10 keV protons in a grounded pipe (IBSimu's ``sim_solenoid``)."""
 
-from __future__ import annotations
+from typing import Any
 
 import numpy as np
-from common import Case, Outcome, Region, beamtracer_run, ibsimu_run, rectangle
+from common import Case, Electrode, box
 
-FACES = [None, None, None, None]
-BEAM = {
-    "current_density": 1.0e-3, "energy": 10_000.0, "transverse_temperature": 0.02,
-    "start": (0.0, 0.0), "end": (0.0, 5.0e-3),
-}  # fmt: skip
 PEAK, CENTRE, WIDTH, DZ = 0.5, 0.1, 0.03, 1.0e-3
 
 
@@ -19,7 +14,7 @@ def axial_field() -> np.ndarray:
     return PEAK * np.exp(-((z - CENTRE) ** 2) / WIDTH**2)
 
 
-def magnetic(geom: object, nodes: tuple[int, int], h: float) -> object:
+def ibsimu_magnetic(nodes: tuple[int, int], h: float) -> Any:
     """Return IBSimu's field of the on-axis profile."""
     import ibsimu
 
@@ -28,33 +23,11 @@ def magnetic(geom: object, nodes: tuple[int, int], h: float) -> object:
     )
 
 
-def solids() -> list:
-    """Return IBSimu's electrode, the grounded pipe: inside test and potential."""
-    return [(lambda x, r, z: r > 0.025, 0.0)]
-
-
-def run_ibsimu(
-    nodes: tuple[int, int], h: float, particles: int, threads: int, region: Region
-) -> Outcome:
-    """Run the case in IBSimu: no field solve, the pipe is grounded."""
-    return ibsimu_run(
-        CASE, nodes, h, particles, threads, region,
-        solids=solids(), faces=FACES, beam=BEAM,
-        magnetic=magnetic, solve=False,
-    )  # fmt: skip
-
-
-def run_beamtracer(
-    nodes: tuple[int, int], h: float, particles: int, integrator: str, region: Region
-) -> Outcome:
-    """Run the case in beamtracer."""
+def beamtracer_fields(nodes: tuple[int, int], h: float) -> dict[str, Any]:
+    """Return the same on-axis profile for beamtracer."""
     from beamtracer import AxialField
 
-    return beamtracer_run(
-        CASE, nodes, h, particles, integrator, region,
-        objects={"pipe": rectangle(-0.01, 0.21, 0.025, 0.04, 0.0, strict=True)}, faces=FACES, beam=BEAM,
-        axial_field=AxialField(z0=0.0, dz=DZ, bz=tuple(axial_field())),
-    )  # fmt: skip
+    return {"axial_field": AxialField(z0=0.0, dz=DZ, bz=tuple(axial_field()))}
 
 
 CASE = Case(
@@ -68,8 +41,18 @@ CASE = Case(
     iterations=1,
     mass=1.0,
     symmetric=True,
+    electrodes=(Electrode("pipe", box(-0.01, 0.21, 0.025, 0.04), 0.0),),
+    faces=(None, None, None, None),
+    beam={
+        "current_density": 1.0e-3,
+        "energy": 10_000.0,
+        "transverse_temperature": 0.02,
+        "start": (0.0, 0.0),
+        "end": (0.0, 5.0e-3),
+    },  # fmt: skip
     tolerance={"current": 0.01, "rms": 0.02, "rms_angle": 0.03, "energy": 0.001},
-    ibsimu=run_ibsimu,
-    beamtracer=run_beamtracer,
-    notes="2000 trajectories instead of the example's 100.",
+    solve=False,
+    ibsimu_magnetic=ibsimu_magnetic,
+    beamtracer_fields=beamtracer_fields,
+    notes="2000 trajectories instead of the example's 100; IBSimu solves no field (the pipe is grounded).",
 )
