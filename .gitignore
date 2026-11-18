@@ -176,3 +176,4 @@ junit/
 # Quarto
 .quarto/
 README_files/
+benchmark_results/
