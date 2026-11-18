@@ -43,9 +43,10 @@ from the example (`notes`).
 
 What the cases found:
 
-- beamtracer has no symmetry plane in planar geometry: a trajectory crossing `y = 0`
-  leaves the mesh, where IBSimu mirrors it. `plasma2d`, whose meniscus focuses the beam
-  across the plane, fails for that reason.
+- beamtracer had no symmetry plane in planar geometry: a trajectory crossing `y = 0`
+  left the mesh, where IBSimu mirrors it, and `plasma2d`, whose meniscus focuses the beam
+  across the plane, transmitted a third of IBSimu's current. The planar symmetric cases
+  now run with `symmetry_plane=True`.
 - In `iter_nbi` the outermost trajectories graze a corner of the last electrode; IBSimu,
   testing for collisions only at its step points, lets them through. Its Gauss-Seidel
   solver also stops about 35 V short on that long mesh, so the case uses BiCGSTAB.

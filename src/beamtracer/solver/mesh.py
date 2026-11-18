@@ -81,7 +81,9 @@ class IonOpticsMesh:
     ``shape`` is the number of nodes ``(nx, ny)``, ``origin`` the position of node ``(0, 0)``
     and ``h`` the node spacing. ``faces`` maps ``"x_min"``, ``"x_max"``, ``"y_min"`` and
     ``"y_max"`` to a `FaceCondition` (default: Neumann). In cylindrical geometry the
-    ``y_min`` face is the symmetry axis and must be at ``r = 0``.
+    ``y_min`` face is the symmetry axis and must be at ``r = 0``. A planar mesh with
+    ``symmetry_plane`` is half of a geometry mirrored at its ``y_min`` face, which then has
+    a zero normal derivative: trajectories crossing it continue in the mirrored field.
     """
 
     shape: tuple[int, int]
@@ -92,6 +94,8 @@ class IonOpticsMesh:
     faces: dict[str, FaceCondition] = field(default_factory=dict)
     #: A refined box of a larger mesh: a cylindrical one need not start on the axis.
     patch: bool = False
+    #: Planar: the ``y_min`` face is a symmetry plane of the geometry.
+    symmetry_plane: bool = False
 
     def _neighbour_solid(self, axis: int, step: int) -> np.ndarray:
         """Return the electrode index of the neighbour of every node in one direction."""
@@ -207,6 +211,14 @@ class IonOpticsMesh:
             if self.faces["y_min"] != FaceCondition("neumann", 0.0):
                 raise ValueError(
                     "the y_min face of a cylindrical mesh is the symmetry axis"
+                )
+        if self.symmetry_plane:
+            if self.cylindrical:
+                raise ValueError("a symmetry plane needs planar geometry")
+            if self.faces["y_min"] != FaceCondition("neumann", 0.0):
+                raise ValueError(
+                    "the y_min face of a mesh with a symmetry plane must have a zero "
+                    "normal derivative"
                 )
         self._classify()
 

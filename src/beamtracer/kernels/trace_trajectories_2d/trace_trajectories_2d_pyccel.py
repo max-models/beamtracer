@@ -67,6 +67,9 @@ def trace_trajectories_2d(
     ``path_slot[k] >= 0`` appends the mesh coordinates ``(x, y)`` or ``(x, r)`` of every
     step's end to ``paths[slot]``, as far as it holds, counting all in
     ``path_count[slot]``. Thread ``t`` traces every ``num_threads``-th active trajectory.
+    ``cylindrical`` is the geometry: 0 planar, 1 cylindrical (fields of ``(x, r)``), 2 planar
+    with a symmetry plane at ``y = origin_y`` (fields of ``(x, |y - origin_y|)``, ``E_y``
+    mirrored, only ``upper_y`` an exit).
 
     The field and the charge live on patches, finest first and the whole mesh last:
     ``patch_int[p]`` holds a patch's node counts ``nx, ny``, the offsets of its ``fx``
@@ -112,8 +115,10 @@ def trace_trajectories_2d(
             while ns < max_steps:
                 # the spacing of the finest patch at the step's start
                 rr = x1
-                if cylindrical != 0:
+                if cylindrical == 1:
                     rr = hypot(x1, x2)
+                elif cylindrical == 2:
+                    rr = origin_y + abs(x1 - origin_y)
                 hloc = h
                 for qq in range(n_patches - 1):
                     if (
@@ -141,12 +146,18 @@ def trace_trajectories_2d(
                         qy = q1
                         cy = 0.0
                         cz = 0.0
-                        if cylindrical != 0:
+                        if cylindrical == 1:
                             r = hypot(q1, q2)
                             if r > 0.0:
                                 cy = q1 / r
                                 cz = q2 / r
                             qy = r
+                        elif cylindrical == 2:
+                            # the mirrored field below the symmetry plane: E_y changes sign
+                            cy = 1.0
+                            if q1 < origin_y:
+                                cy = -1.0
+                            qy = origin_y + abs(q1 - origin_y)
                         pp = n_patches - 1
                         for qq in range(n_patches - 1):
                             if (
@@ -307,8 +318,10 @@ def trace_trajectories_2d(
                 m0 = 0.5 * (x0 + y0) + dt * (v0 - w0) / 8.0
                 m1 = 0.5 * (x1 + y1) + dt * (v1 - w1) / 8.0
                 m2 = 0.5 * (x2 + y2) + dt * (v2 - w2) / 8.0
-                if cylindrical != 0:
+                if cylindrical == 1:
                     m1 = hypot(m1, m2)
+                elif cylindrical == 2:
+                    m1 = origin_y + abs(m1 - origin_y)
                 pp = n_patches - 1
                 for qq in range(n_patches - 1):
                     if (
@@ -326,7 +339,7 @@ def trace_trajectories_2d(
                 i = floor((m0 - pox) / phh)
                 j = floor((m1 - poy) / phh)
                 u = (m0 - (pox + phh * i)) / phh
-                if cylindrical != 0:
+                if cylindrical == 1:
                     low = poy + phh * j
                     high = low + phh
                     w = (m1 * m1 - low * low) / (high * high - low * low)
@@ -379,8 +392,10 @@ def trace_trajectories_2d(
                 # the end of the step: off the mesh or in an electrode
                 px = x0
                 py = x1
-                if cylindrical != 0:
+                if cylindrical == 1:
                     py = hypot(x1, x2)
+                elif cylindrical == 2:
+                    py = origin_y + abs(x1 - origin_y)
                 if slot >= 0:
                     c = path_count[slot]
                     if c < path_capacity:
