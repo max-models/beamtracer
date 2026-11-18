@@ -59,6 +59,11 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `Layout.plot_cells(ax, scale=...)`: the cells of the grid and of every refined box, drawn
+  by patchwork's `plot_patches` with `x` horizontal (also in cylindrical geometry);
+  `Layout.hierarchy` is patchwork's hierarchy of the patches. The "Mesh refinement" tutorial
+  draws its cells with it.
+
 - Adaptive refinement (`adaptive_refinement=AdaptiveRefinementParams(...)`): every few
   Vlasov iterations the cells near the beam across which the field strength or the beam's
   charge density changes by more than a fraction of its largest value are tagged and

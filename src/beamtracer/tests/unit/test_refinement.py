@@ -73,6 +73,25 @@ def test_the_volumes_fill_the_domain(geometry) -> None:
         refined.from_base(np.zeros(mesh.shape))
 
 
+@pytest.mark.parametrize("geometry", ["planar", "cylindrical"])
+def test_the_cells_are_plotted_with_x_horizontal(geometry) -> None:
+    pytest.importorskip("matplotlib")
+    import matplotlib
+
+    matplotlib.use("Agg")
+    mesh = _plates(geometry)
+    layout = IonOpticsPoisson(
+        mesh, refinement=[Refinement(1, (5e-3, 0.0), (12e-3, 6e-3))]
+    ).layout
+    ax = layout.plot_cells(scale=1e3, labels=["grid", "box"])
+    # in mm, x horizontal also where patchwork's first axis is r
+    assert ax.get_xlim() == pytest.approx((0.0, 20.0))
+    assert ax.get_ylim() == pytest.approx((0.0, 10.0))
+    assert [t.get_text() for t in ax.get_legend().get_texts()] == ["grid", "box"]
+    assert not any(patch.get_fill() for patch in ax.patches)  # every grid in full
+    matplotlib.pyplot.close(ax.figure)
+
+
 def test_a_uniform_charge_between_plates_on_refined_boxes() -> None:
     """-phi'' = rho / eps0 with phi = 0 at x = 0, L: a parabola.
 
