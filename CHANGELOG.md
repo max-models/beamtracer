@@ -49,6 +49,13 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- 3D ion optics, second part: `BeamTracer3D` and its `trace_trajectories_3d` kernel (Pyccel
+  with OpenMP threads, a CUDA version; without Pyccel its source runs as Python). Every
+  trajectory from start to end: RK4 or Boris (kick--rotate--kick) steps through the staggered
+  electric field and a magnetic field on the nodes, the trilinear space-charge deposit at the
+  Hermite midpoint, diagnostic planes, the exits and an electrode lookup in sub-cells of h/4
+  (shared between MPI ranks), symmetry planes mirroring the field and the deposit.
+
 - 3D ion optics, first part: `IonOpticsMesh3D` (electrodes as `inside(x, y, z)` tests, the
   wall distances bracketed along x, y and z, symmetry planes on the lower y and z faces),
   `IonOpticsPoisson` on it (patchwork's `NodalPoisson` in 3D: electrodes as embedded bodies,

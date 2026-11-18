@@ -39,6 +39,7 @@ from beamtracer.solver.tracer import (
     TraceResult,
     beam_with_energy,
 )
+from beamtracer.solver.tracer3d import BeamTracer3D
 from beamtracer.solver.vlasov import (
     AndersonMixer,
     Compensation,
@@ -57,6 +58,7 @@ __all__ = [
     "BeamMoments",
     "BeamParticles",
     "BeamTracer",
+    "BeamTracer3D",
     "BoltzmannElectrons",
     "BoltzmannIons",
     "ChargeChanging",
