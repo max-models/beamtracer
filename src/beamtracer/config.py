@@ -491,7 +491,10 @@ class BeamOpticsConfig:
     it: Krylov with algebraic multigrid, needs petsc4py) or ``"auto"``. ``refinement``
     lists boxes solved and traced on finer cells (`RefinementParams`): the field on
     patchwork's composite mesh, each trajectory stepping and depositing on the finest box
-    it is in.
+    it is in. ``symmetry_plane`` makes a planar grid half of a geometry mirrored at its
+    ``y`` lower face, which needs a zero normal derivative there: a trajectory crossing
+    it continues at negative ``y`` in the mirrored field (as IBSimu's mirrored
+    boundaries), instead of leaving.
     ``diagnostic_planes`` [m] record the trajectories crossing ``x = const``;
     ``save_trajectories`` keeps every n-th trajectory for plotting (0: none).
     ``tolerance`` and ``diagnostic_planes`` take Quantities or strings too, like the
@@ -524,6 +527,7 @@ class BeamOpticsConfig:
     coarse_tolerance: float = unit_field("V", 0.0)
     field_backend: str = "lu"
     refinement: list[RefinementParams] = field(default_factory=list)
+    symmetry_plane: bool = False
     diagnostic_planes: list[float] = unit_field("m", default_factory=list)
     save_trajectories: int = 0
 
@@ -588,6 +592,8 @@ class BeamOpticsConfig:
             raise ValueError(
                 f"integrator must be 'rk4' or 'boris', got {self.integrator!r}"
             )
+        if self.symmetry_plane and self.grid.coordinates == "cylindrical":
+            raise ValueError("symmetry_plane needs a planar (cartesian) grid")
 
     def replace(self, **changes: Any) -> BeamOpticsConfig:
         """Return a copy with ``changes`` applied (and checked again)."""

@@ -125,6 +125,16 @@ class BeamOptics:
             bc = walls.get_bc(dir=direction, side=side)
             if bc.bc_type == "periodic":
                 raise ValueError("BeamOptics does not support periodic walls")
+            if self.config.symmetry_plane and face == "y_min":
+                samples = np.linspace(0.0, 1.0, 5)
+                derivative = bc.evaluate(
+                    x=samples, y=0.0 * samples, z=0.0 * samples, t=0.0
+                )
+                if bc.bc_type != "neumann" or np.any(np.asarray(derivative) != 0.0):
+                    raise ValueError(
+                        "with symmetry_plane the y lower face needs a zero normal derivative"
+                    )
+                continue  # the symmetry plane: the mesh's default face
 
             def value(x, y, bc=bc):
                 return np.asarray(bc.evaluate(x=x, y=y, z=0.0 * x, t=0.0), dtype=float)
@@ -235,6 +245,7 @@ class BeamOptics:
             geometry="cylindrical" if grid.coordinates == "cylindrical" else "planar",
             electrodes=[_electrode(name, obj) for name, obj in config.objects.items()],
             faces=self._faces(),
+            symmetry_plane=config.symmetry_plane,
         )
         self.axial_magnetic_field = self._magnetic_field()
         self.field_map = self._field_map()
