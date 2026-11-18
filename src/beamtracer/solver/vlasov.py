@@ -19,11 +19,13 @@ from methodcard import method
 
 from beamtracer._profiling import PROFILE_TAGS
 from beamtracer.solver.fields import StaggeredElectricField
+from beamtracer.solver.fields3d import StaggeredElectricField3D
 from beamtracer.solver.mesh import IonOpticsMesh
 from beamtracer.solver.poisson import (
     BoltzmannElectrons,
     BoltzmannIons,
     IonOpticsPoisson,
+    Layout3D,
 )
 from beamtracer.solver.refinement import Layout, PatchedElectricField, Refinement
 from beamtracer.solver.tracer import BeamParticles, BeamTracer, TraceResult
@@ -100,7 +102,7 @@ class VlasovState:
 
     potential: np.ndarray
     charge_density: np.ndarray
-    electric: StaggeredElectricField | PatchedElectricField
+    electric: StaggeredElectricField | PatchedElectricField | StaggeredElectricField3D
     trace: TraceResult
     history: list[dict[str, float]] = field(default_factory=list)
     #: The Boltzmann plasma species of the last solve (``None`` without a plasma, and in
@@ -108,7 +110,7 @@ class VlasovState:
     plasma: BoltzmannElectrons | BoltzmannIons | None = None
     #: The composite nodes (base mesh and refined boxes); `potential` and
     #: `charge_density` are their values on the base mesh.
-    layout: Layout | None = None
+    layout: Layout | Layout3D | None = None
     #: The potential and the charge density on the composite nodes.
     composite_potential: np.ndarray | None = None
     composite_charge_density: np.ndarray | None = None
@@ -309,8 +311,8 @@ def vlasov_iterate(
             else float(np.max(np.abs(new - potential)))
         )
         potential = new
-        efield = PatchedElectricField(layout, potential)
-        tracer.electric = efield
+        efield = layout.field(potential)
+        tracer.electric = efield  # pyright: ignore[reportAttributeAccessIssue]
         if coarse and change < coarse_tolerance:
             coarse = False
             if mixer is not None:

@@ -49,6 +49,14 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- 3D ion optics, first part: `IonOpticsMesh3D` (electrodes as `inside(x, y, z)` tests, the
+  wall distances bracketed along x, y and z, symmetry planes on the lower y and z faces),
+  `IonOpticsPoisson` on it (patchwork's `NodalPoisson` in 3D: electrodes as embedded bodies,
+  the Boltzmann plasma species by Newton's method with the reused Jacobian, the initial
+  plasma region) and `StaggeredElectricField3D` (the edge fields along each axis,
+  trilinear). An extruded planar case solves as in 2D (to 1e-10 V without electrodes), and
+  the potential between concentric spheres converges to the exact one.
+
 - `BeamOpticsConfig(symmetry_plane=True)`: a planar grid is half of a geometry mirrored at
   its `y` lower face (which needs a zero normal derivative). A trajectory crossing it
   continues at negative `y` in the mirrored field (E_y, B_x and B_z change sign) and
