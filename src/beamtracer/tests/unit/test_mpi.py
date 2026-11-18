@@ -1,4 +1,4 @@
-"""BeamOptics under MPI: two ranks give the serial beam (skipped without mpirun and mpi4py).
+"""BeamOptics under MPI: two ranks give the serial beam, in 2D and 3D (skipped without mpirun and mpi4py).
 
 With ``field_backend="petsc"`` the ranks share the field solve (skipped without petsc4py).
 """
@@ -16,6 +16,7 @@ import pytest
 
 from beamtracer import BeamOptics
 from beamtracer.tests.unit.test_beam_optics import _extraction
+from beamtracer.tests.unit.test_beam_optics_3d import _quadrupole
 from beamtracer.tests.unit.test_compiled_tracer import _planar
 
 pytestmark = pytest.mark.skipif(
@@ -32,8 +33,11 @@ from maybempi import MPI
 from beamtracer import BeamOptics
 from beamtracer.tests.unit.test_beam_optics import _extraction
 from beamtracer.tests.unit.test_compiled_tracer import _planar
+from beamtracer.tests.unit.test_beam_optics_3d import _quadrupole
 case, backend, plane = sys.argv[1], sys.argv[2], float(sys.argv[3])
-config = (_planar() if case == "planar" else _extraction(1.0)).replace(field_backend=backend)
+configs = {"planar": _planar, "extraction": lambda: _extraction(1.0),
+           "quadrupole3d": lambda: _quadrupole(quarter=False)}
+config = configs[case]().replace(field_backend=backend)
 model = BeamOptics(config).run()
 m = model.beam_moments(plane)
 if MPI.COMM_WORLD.Get_rank() == 0:
@@ -43,7 +47,11 @@ if MPI.COMM_WORLD.Get_rank() == 0:
                       "potential": float(abs(model.potential).max())}))
 """
 
-CASES = {"planar": (_planar, 0.115), "extraction": (lambda: _extraction(1.0), 7.5e-3)}
+CASES = {
+    "planar": (_planar, 0.115),
+    "extraction": (lambda: _extraction(1.0), 7.5e-3),
+    "quadrupole3d": (lambda: _quadrupole(quarter=False), 0.095),
+}
 
 
 def _ranks(case: str, backend: str) -> dict:
@@ -66,7 +74,9 @@ def _ranks(case: str, backend: str) -> dict:
     ("case", "backend", "tolerance"),
     [
         ("planar", "lu", 1e-12),
+        ("quadrupole3d", "lu", 1e-12),
         pytest.param("planar", "petsc", 1e-6, marks=PETSC),
+        pytest.param("quadrupole3d", "petsc", 1e-6, marks=PETSC),
         pytest.param("extraction", "petsc", 1e-6, marks=PETSC),
     ],
 )

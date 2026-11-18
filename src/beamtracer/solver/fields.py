@@ -19,10 +19,10 @@ def _edge_field(phi, solid, near, dist_lo, dist_hi, h, extrapolation):
     """Return the edge field ``(phi[i-1] - phi[i]) / h`` along axis 0.
 
     The edges next to electrode surfaces are taken from the bracketed surface distance;
-    the result is an ``(n + 1, m)`` array.
+    the result is an ``(n + 1, ...)`` array (of any number of dimensions).
     """
-    n, m = phi.shape
-    out = np.zeros((n + 1, m))
+    n = phi.shape[0]
+    out = np.zeros((n + 1, *phi.shape[1:]))
     a, b = phi[:-1], phi[1:]  # nodes i - 1 and i of the edges i = 1 .. n - 1
     sa, sb = solid[:-1], solid[1:]
     na, nb = near[:-1], near[1:]

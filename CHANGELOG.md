@@ -7,6 +7,11 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Newton's method of the Boltzmann plasma species: where a chord step with the reused
+  Jacobian stops contracting, it takes the Newton step by GMRES preconditioned by that
+  Jacobian (to a relative residual of 1e-3) before refactorising. On the 3D extraction
+  benchmark a fifth less time; the beam unchanged to 1e-7.
+
 - `BeamTracer`'s Boris step (`integrator="boris"`) rotates with the compiled
   `mpiparticles.boris_velocity` instead of its own NumPy copy of the scheme, as `FieldRegion`
   already does (the same velocities to 1e-16).
@@ -48,6 +53,40 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   say that the cusp-confined channel is the beam-driven plasma neutralizer studied for DEMO.
 
 ### Added
+
+- `field_backend="amg"`: patchwork's algebraic-multigrid backend (pyamg's classical AMG
+  preconditioning CG or GMRES) instead of an LU factorisation, and with a plasma a
+  Newton--Krylov method: every Newton step solves the current Jacobian by GMRES to 1e-3,
+  preconditioned by the V-cycle of an AMG hierarchy kept across Newton steps, solves and
+  Vlasov iterations and built again only when a step takes more than 12 iterations. The
+  same potentials as the direct solve (to 2e-5 V on 100 V); on the 3D extraction benchmark
+  (55 000 nodes) 8.5 s instead of 26 s, on the 3D solenoid 0.6 s instead of 3.1 s. Needs
+  the `amg` extra (pyamg).
+
+- `BeamOptics` on a 3D grid (`GridParams(ndim=3)`): electrodes as 3D shapes (`cuboid`,
+  `sphere`, `cylinder`, `tube`, `cone`), the z faces in `FieldBCs`, beams emitted from a
+  rectangle or a disc (`BeamSpecies3D`), the plasma species, solenoids and an axial profile
+  on the x axis and magnetic field maps on (x, y, z) sampled onto the nodes,
+  `symmetry_planes` (`"y_min"`, `"z_min"`), MPI over the trajectories, and the moments in
+  either transverse plane (`beam_moments(x, axis="z")`). `BeamOptics.dataset()` returns the
+  potential and the charge density as an xarray Dataset. A docs notebook runs an
+  electrostatic quadrupole. Refinement, charge changes, an imposed electric field and
+  `surface_fields` are 2D only for now.
+
+- 3D ion optics, second part: `BeamTracer3D` and its `trace_trajectories_3d` kernel (Pyccel
+  with OpenMP threads, a CUDA version; without Pyccel its source runs as Python). Every
+  trajectory from start to end: RK4 or Boris (kick--rotate--kick) steps through the staggered
+  electric field and a magnetic field on the nodes, the trilinear space-charge deposit at the
+  Hermite midpoint, diagnostic planes, the exits and an electrode lookup in sub-cells of h/4
+  (shared between MPI ranks), symmetry planes mirroring the field and the deposit.
+
+- 3D ion optics, first part: `IonOpticsMesh3D` (electrodes as `inside(x, y, z)` tests, the
+  wall distances bracketed along x, y and z, symmetry planes on the lower y and z faces),
+  `IonOpticsPoisson` on it (patchwork's `NodalPoisson` in 3D: electrodes as embedded bodies,
+  the Boltzmann plasma species by Newton's method with the reused Jacobian, the initial
+  plasma region) and `StaggeredElectricField3D` (the edge fields along each axis,
+  trilinear). An extruded planar case solves as in 2D (to 1e-10 V without electrodes), and
+  the potential between concentric spheres converges to the exact one.
 
 - `BeamOpticsConfig(symmetry_plane=True)`: a planar grid is half of a geometry mirrored at
   its `y` lower face (which needs a zero normal derivative). A trajectory crossing it

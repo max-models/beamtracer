@@ -47,6 +47,8 @@ dependencies = [
   # NodeField.evaluate
   "xarray",
 ]
+# field_backend="amg": algebraic multigrid and the Newton-Krylov solve of the plasma
+optional-dependencies.amg = [ "pyamg" ]
 optional-dependencies.neutralizer = [ "opencr", "wellbalanced[cr]>=0.1.0" ]
 optional-dependencies.examples = [
   "matplotlib",
@@ -73,7 +75,7 @@ optional-dependencies.docs = [
 ]
 optional-dependencies.test = [
   "astropy",
-  "beamtracer[neutralizer]",
+  "beamtracer[amg,neutralizer]",
   "methodcard[symbolic]",
   "pyccel>2.0",
   "pytest",

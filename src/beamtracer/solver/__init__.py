@@ -23,7 +23,9 @@ from beamtracer.solver.fields import (
     solenoid_on_axis,
     surface_field,
 )
+from beamtracer.solver.fields3d import StaggeredElectricField3D
 from beamtracer.solver.mesh import Electrode, FaceCondition, IonOpticsMesh
+from beamtracer.solver.mesh3d import Electrode3D, IonOpticsMesh3D
 from beamtracer.solver.poisson import (
     BoltzmannElectrons,
     BoltzmannIons,
@@ -37,6 +39,7 @@ from beamtracer.solver.tracer import (
     TraceResult,
     beam_with_energy,
 )
+from beamtracer.solver.tracer3d import BeamTracer3D
 from beamtracer.solver.vlasov import (
     AndersonMixer,
     Compensation,
@@ -55,19 +58,23 @@ __all__ = [
     "BeamMoments",
     "BeamParticles",
     "BeamTracer",
+    "BeamTracer3D",
     "BoltzmannElectrons",
     "BoltzmannIons",
     "ChargeChanging",
     "ChargeTallies",
     "Compensation",
     "Electrode",
+    "Electrode3D",
     "FaceCondition",
     "IonOpticsMesh",
+    "IonOpticsMesh3D",
     "IonOpticsPoisson",
     "NegativeIonPlasmaModel",
     "PlaneHits",
     "PlasmaModel",
     "StaggeredElectricField",
+    "StaggeredElectricField3D",
     "TraceResult",
     "VlasovState",
     "apply_compensation",

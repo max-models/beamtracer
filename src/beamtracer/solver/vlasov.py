@@ -19,14 +19,18 @@ from methodcard import method
 
 from beamtracer._profiling import PROFILE_TAGS
 from beamtracer.solver.fields import StaggeredElectricField
+from beamtracer.solver.fields3d import StaggeredElectricField3D
 from beamtracer.solver.mesh import IonOpticsMesh
+from beamtracer.solver.mesh3d import IonOpticsMesh3D
 from beamtracer.solver.poisson import (
     BoltzmannElectrons,
     BoltzmannIons,
     IonOpticsPoisson,
+    Layout3D,
 )
 from beamtracer.solver.refinement import Layout, PatchedElectricField, Refinement
 from beamtracer.solver.tracer import BeamParticles, BeamTracer, TraceResult
+from beamtracer.solver.tracer3d import BeamTracer3D
 
 
 @dataclass(frozen=True)
@@ -100,7 +104,7 @@ class VlasovState:
 
     potential: np.ndarray
     charge_density: np.ndarray
-    electric: StaggeredElectricField | PatchedElectricField
+    electric: StaggeredElectricField | PatchedElectricField | StaggeredElectricField3D
     trace: TraceResult
     history: list[dict[str, float]] = field(default_factory=list)
     #: The Boltzmann plasma species of the last solve (``None`` without a plasma, and in
@@ -108,7 +112,7 @@ class VlasovState:
     plasma: BoltzmannElectrons | BoltzmannIons | None = None
     #: The composite nodes (base mesh and refined boxes); `potential` and
     #: `charge_density` are their values on the base mesh.
-    layout: Layout | None = None
+    layout: Layout | Layout3D | None = None
     #: The potential and the charge density on the composite nodes.
     composite_potential: np.ndarray | None = None
     composite_charge_density: np.ndarray | None = None
@@ -230,9 +234,9 @@ def thin_particles(particles: BeamParticles, stride: int) -> BeamParticles:
 )
 @scope_profiler.profile("beamtracer.vlasov_iterate", tags=PROFILE_TAGS)
 def vlasov_iterate(
-    mesh: IonOpticsMesh,
+    mesh: IonOpticsMesh | IonOpticsMesh3D,
     make_particles: Callable[[], tuple[BeamParticles, float]],
-    tracer: BeamTracer,
+    tracer: BeamTracer | BeamTracer3D,
     *,
     iterations: int,
     plasma: PlasmaModel | NegativeIonPlasmaModel | None = None,
@@ -259,7 +263,8 @@ def vlasov_iterate(
     ``comm`` with ``"petsc"`` (`IonOpticsPoisson`). ``refinement`` are boxes of finer
     cells: the field is solved on the composite mesh and the trajectories step and deposit
     on the finest box they are in; the state's potential and charge density are then those
-    of the base mesh, the composite ones beside them.
+    of the base mesh, the composite ones beside them. On an `IonOpticsMesh3D` (with a
+    `BeamTracer3D`) the same iteration runs in 3D, without refinement.
 
     ``make_particles`` returns the beam and its ``sum J / v`` (the beams' charge density
     magnitude at their start, the density of the Boltzmann plasma species); it is called
@@ -281,7 +286,7 @@ def vlasov_iterate(
     layout = poisson.layout
     rho = np.zeros(layout.size)
 
-    def initial_plasma(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    def initial_plasma(x: np.ndarray, *rest: np.ndarray) -> np.ndarray:
         assert plasma is not None
         return x < plasma.initial_plasma_x
 
@@ -309,8 +314,8 @@ def vlasov_iterate(
             else float(np.max(np.abs(new - potential)))
         )
         potential = new
-        efield = PatchedElectricField(layout, potential)
-        tracer.electric = efield
+        efield = layout.field(potential)
+        tracer.electric = efield  # pyright: ignore[reportAttributeAccessIssue]
         if coarse and change < coarse_tolerance:
             coarse = False
             if mixer is not None:
@@ -319,7 +324,10 @@ def vlasov_iterate(
         if coarse:
             particles = thin_particles(particles, stride)
         trace = tracer.trace(particles)
-        deposited = compensate(layout.x, trace.charge_density, compensation)
+        charge = trace.charge_density
+        if isinstance(layout, Layout3D):  # the 3D tracer deposits on the mesh
+            charge = layout.from_base(charge)
+        deposited = compensate(layout.x, charge, compensation)
         if iteration == 0:
             rho = deposited
         elif mixer is not None:

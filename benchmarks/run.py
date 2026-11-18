@@ -29,6 +29,7 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import common3d  # noqa: E402
 from common import (  # noqa: E402
     Case,
     Exit,
@@ -49,11 +50,14 @@ CASES = (
     "plasmacyl",
     "solenoid",
     "sector_magnet",
+    "quad3d",
+    "solenoid3d",
+    "extraction3d",
 )
 CODES = ("ibsimu", "beamtracer")
 
 
-def load(name: str) -> Case:
+def load(name: str) -> Case | common3d.Case3D:
     """Return the case ``name`` of ``benchmarks/cases``."""
     return importlib.import_module(f"cases.{name}").CASE
 
@@ -80,6 +84,12 @@ def arguments(argv: list[str] | None = None) -> argparse.Namespace:
         help="IBSimu threads (default --threads)",
     )
     parser.add_argument("--integrator", default="rk4", choices=("rk4", "boris"))
+    parser.add_argument(
+        "--field-backend",
+        default="lu",
+        choices=("lu", "amg", "petsc", "auto"),
+        help="beamtracer's field solve (field_backend)",
+    )
     parser.add_argument("--out", type=Path, default=Path("benchmark_results"))
     parser.add_argument(
         "--worker", nargs=2, metavar=("CASE", "CODE"), help=argparse.SUPPRESS
@@ -107,7 +117,17 @@ def worker(args: argparse.Namespace) -> None:
     ):
         for _ in range(args.repeats):
             with sp.region("bench.total"):
-                if code == "ibsimu":
+                if isinstance(case, common3d.Case3D):
+                    run = (
+                        common3d.run_ibsimu
+                        if code == "ibsimu"
+                        else common3d.run_beamtracer
+                    )
+                    setting = (
+                        args.ibsimu_threads if code == "ibsimu" else args.integrator
+                    )
+                    outcome = run(case, nodes, h, particles, setting, region)  # type: ignore[arg-type]
+                elif code == "ibsimu":
                     outcome = run_ibsimu(
                         case, nodes, h, particles, args.ibsimu_threads, region
                     )
@@ -117,21 +137,38 @@ def worker(args: argparse.Namespace) -> None:
                     )
     assert outcome is not None
     beam = outcome.exit
-    away = away_from_electrodes(case, nodes, h)
+    if isinstance(case, common3d.Case3D):
+        away = common3d.away_from_electrodes(case, nodes, h)  # type: ignore[arg-type]
+        arrays = {"y": beam.y, "yp": beam.yp, "z": beam.z, "zp": beam.zp}
+    else:
+        away = away_from_electrodes(case, nodes, h)
+        arrays = {"u": beam.u, "up": beam.up}
     np.savez(
         stem.with_suffix(".npz"),
         potential=outcome.potential,
         away=away,
-        u=beam.u,
-        up=beam.up,
         current=beam.current,
         energy=beam.energy,
+        **arrays,
     )
 
 
-def outcome_of(path: Path) -> Outcome:
+def outcome_of(path: Path) -> Outcome | common3d.Outcome3D:
     """Read what a worker saved."""
     data = np.load(path)
+    if "z" in data:
+        return common3d.Outcome3D(
+            data["potential"],
+            common3d.Exit3D(
+                data["y"],
+                data["yp"],
+                data["z"],
+                data["zp"],
+                data["current"],
+                data["energy"],
+            ),
+            data["away"],
+        )
     return Outcome(
         data["potential"],
         Exit(data["u"], data["up"], data["current"], data["energy"]),
@@ -160,7 +197,12 @@ def times(path: Path, code: str) -> dict[str, float | None]:
 
 def run_case(name: str, args: argparse.Namespace) -> dict[str, Any]:
     """Run a case in the codes, each in a worker process, and compare them."""
-    env = dict(os.environ, OMP_NUM_THREADS=str(args.threads), OPENBLAS_NUM_THREADS="1")
+    env = dict(
+        os.environ,
+        OMP_NUM_THREADS=str(args.threads),
+        OPENBLAS_NUM_THREADS="1",
+        BENCHMARK_FIELD_BACKEND=args.field_backend,
+    )
     for code in args.codes:
         command = [
             sys.executable,
@@ -191,8 +233,14 @@ def run_case(name: str, args: argparse.Namespace) -> dict[str, Any]:
     }
     if set(args.codes) == set(CODES):
         outcomes = {c: outcome_of(args.out / f"{name}_{c}.npz") for c in CODES}
-        result["comparison"] = compare(
-            load(name), outcomes["ibsimu"], outcomes["beamtracer"]
+        case = load(name)
+        compare_case = (
+            common3d.compare if isinstance(case, common3d.Case3D) else compare
+        )
+        result["comparison"] = compare_case(
+            case,  # type: ignore[arg-type]
+            outcomes["ibsimu"],  # type: ignore[arg-type]
+            outcomes["beamtracer"],  # type: ignore[arg-type]
         )
     return result
 
@@ -213,7 +261,7 @@ def report(results: list[dict[str, Any]], args: argparse.Namespace) -> str:
         "# IBSimu benchmarks",
         "",
         f"Scale {args.scale}, {args.threads} thread(s) (IBSimu {args.ibsimu_threads}), "
-        f"beamtracer {args.integrator}, best of {args.repeats}.",
+        f"beamtracer {args.integrator} ({args.field_backend} field solve), best of {args.repeats}.",
         "",
         "| Case | Agrees | IBSimu | IBSimu setup | beamtracer | Speedup | Without IBSimu setup |",
         "|---|---|---|---|---|---|---|",
