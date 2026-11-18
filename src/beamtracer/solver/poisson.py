@@ -657,9 +657,8 @@ class IonOpticsPoisson:
                 take(stiffness_diagonal + load_diagonal * reaction[unknowns])
                 field.jacobian = True
                 builds += 1
-                operator = (
-                    solver.solver.matrix
-                )  # this Jacobian, as the multigrid holds it
+                # this Jacobian, as the multigrid holds it
+                operator = solver.solver.matrix  # pyright: ignore[reportAttributeAccessIssue]
             elif load_unknowns is not None:
                 # no hanging nodes: the Jacobian as a sparse matrix
                 operator: Any = solver.stiffness + load_unknowns @ sparse.diags(
