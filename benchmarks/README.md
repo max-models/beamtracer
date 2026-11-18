@@ -17,8 +17,16 @@ off, as beamtracer does.
 | `solenoid` | `sim_solenoid.py` | cylindrical | an axial magnetic field |
 | `sector_magnet` | `sim_sector_magnet.py` | planar | a magnetic field map |
 
-IBSimu has 3D cases too (`sim_3d_quad.py`, `viz_solenoid_3d.py`); beamtracer's ion optics
-are 2D (planar and cylindrical), so they follow with a 3D `BeamOptics`.
+And on 3D grids (`common3d`), against IBSimu's MODE_3D:
+
+| Case | IBSimu example | What it checks |
+|---|---|---|
+| `quad3d` | `sim_3d_quad.py` | an electrostatic quadrupole, focusing in one plane |
+| `solenoid3d` | `viz_solenoid_3d.py` | gyration in an axial magnetic field (a field map) |
+| `extraction3d` | (`plasmacyl.py` made 3D) | positive-ion extraction through round apertures, a quarter with two symmetry planes |
+
+The 3D cases give both codes the same trajectories (IBSimu's `add_particle`), so the
+comparison carries no sampling noise; their electrodes are boxes and tubes.
 
 ## What is compared
 
