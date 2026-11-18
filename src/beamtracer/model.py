@@ -452,7 +452,7 @@ class BeamOptics:
 
         ``y`` is ``r`` in cylindrical geometry.
         """
-        return self.state.electric(x, y)
+        return self.state.electric(x, y)  # pyright: ignore[reportCallIssue]
 
     def surface_fields(self) -> dict[str, float]:
         """Return the largest ``|E|`` [V/m] on the surface of every electrode, by name.

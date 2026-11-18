@@ -174,6 +174,10 @@ class Layout:
             np.add.at(total, patch.index.ravel(), np.asarray(charge).ravel())
         return total
 
+    def field(self, potential: np.ndarray) -> PatchedElectricField:
+        """The electric field of a potential over the composite nodes."""
+        return PatchedElectricField(self, potential)
+
 
 def layout_of(mesh: IonOpticsMesh, patches: list[Patch], nodes) -> Layout:
     """The `Layout` of ``patches`` on patchwork's `CompositeNodes` ``nodes``.

@@ -43,22 +43,24 @@ class FaceCondition:
     """The condition on one face of the mesh.
 
     ``kind`` is ``"dirichlet"`` (``value`` is the potential [V], a number or a vectorised
-    function of ``(x, y)``) or ``"neumann"`` (``value`` is the outward normal derivative
-    [V/m]).
+    function of ``(x, y)``, or ``(x, y, z)`` on a 3D mesh) or ``"neumann"`` (``value`` is
+    the outward normal derivative [V/m]).
     """
 
     kind: str = "neumann"
-    value: float | Callable[[np.ndarray, np.ndarray], np.ndarray] = 0.0
+    value: float | Callable[..., np.ndarray] = 0.0
 
     def __post_init__(self) -> None:
         """Check the kind."""
         if self.kind not in ("dirichlet", "neumann"):
             raise ValueError(f"unknown face condition {self.kind!r}")
 
-    def evaluate(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
-        """Return the face value at the points ``(x, y)``."""
+    def evaluate(self, x: np.ndarray, *rest: np.ndarray) -> np.ndarray:
+        """Return the face value at the points ``(x, y)`` (or ``(x, y, z)``)."""
         if callable(self.value):
-            return np.broadcast_to(np.asarray(self.value(x, y), dtype=float), x.shape)
+            return np.broadcast_to(
+                np.asarray(self.value(x, *rest), dtype=float), x.shape
+            )
         return np.full(x.shape, float(self.value))
 
 

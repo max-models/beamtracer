@@ -35,7 +35,9 @@ from methodcard import ConvergenceProblem, method
 from scipy.constants import epsilon_0
 
 from beamtracer._profiling import PROFILE_TAGS
+from beamtracer.solver.fields3d import StaggeredElectricField3D
 from beamtracer.solver.mesh import IonOpticsMesh
+from beamtracer.solver.mesh3d import FACES_3D, IonOpticsMesh3D
 from beamtracer.solver.refinement import Layout, Refinement, layout_of, patches_of
 
 
@@ -294,6 +296,155 @@ class _Field:
             phi[self.hanging] = self.hang @ phi
 
 
+@dataclass
+class Layout3D:
+    """The nodes of a 3D mesh as patchwork numbers them (no refinement).
+
+    ``index[n]`` is the flat mesh index of patchwork's node ``n``; ``x`` its ``x``.
+    """
+
+    mesh: IonOpticsMesh3D
+    index: np.ndarray
+    x: np.ndarray
+
+    #: No refined boxes in 3D.
+    refined = False
+
+    @property
+    def size(self) -> int:
+        """The number of nodes."""
+        return int(self.index.size)
+
+    def from_base(self, values: np.ndarray) -> np.ndarray:
+        """Mesh values ``(nx, ny, nz)`` as a vector over patchwork's nodes."""
+        return np.asarray(values, dtype=float).reshape(-1)[self.index]
+
+    def on_base(self, values: np.ndarray) -> np.ndarray:
+        """A vector over patchwork's nodes as mesh values ``(nx, ny, nz)``."""
+        out = np.empty(self.mesh.shape)
+        out.reshape(-1)[self.index] = values
+        return out
+
+    def field(self, potential: np.ndarray) -> StaggeredElectricField3D:
+        """The electric field of a potential over patchwork's nodes."""
+        return StaggeredElectricField3D(self.mesh, self.on_base(potential))
+
+
+class _Field3D:
+    """The patchwork `NodalPoisson` of an `IonOpticsMesh3D` (as `_Field` in 2D).
+
+    ``region`` (the initial plasma) is a mask of the mesh's nodes or a function of
+    ``(x, y, z)``.
+    """
+
+    def __init__(
+        self,
+        mesh: IonOpticsMesh3D,
+        region: Any,
+        region_potential: float,
+        backend: str,
+        comm: Any = None,
+    ) -> None:
+        from patchwork import (
+            AMRHierarchy,
+            Dirichlet,
+            EmbeddedDirichlet,
+            Neumann,
+            NodalPoisson,
+        )
+
+        self.mesh = mesh
+        shape, h = mesh.shape, mesh.h
+        origin, upper = np.array(mesh.origin), np.array(mesh.upper)
+        hierarchy = AMRHierarchy(
+            base_shape=tuple(n - 1 for n in shape),
+            bounds=tuple((origin[a], upper[a]) for a in range(3)),
+            comm=comm,
+        )
+
+        def node_index(points: np.ndarray) -> tuple[np.ndarray, ...]:
+            return tuple(
+                np.rint((points[a] - origin[a]) / h).astype(np.int64) for a in range(3)
+            )
+
+        def fraction(start: np.ndarray, end: np.ndarray) -> np.ndarray:
+            """The bracketed distance from a node to the surface towards ``end``."""
+            step = end - start
+            axis = np.argmax(np.abs(step), axis=0)
+            positive = step[axis, np.arange(axis.size)] > 0
+            direction = 2 * axis + positive
+            return mesh.distance[(direction, *node_index(start))]
+
+        faces = {}
+        for face in FACES_3D:
+            condition = mesh.faces[face]
+            value = condition.value
+            given = (
+                (lambda *p, c=condition: c.evaluate(*p))
+                if callable(value)
+                else float(value)
+            )
+            name = face.replace("_min", "_lower").replace("_max", "_upper")
+            faces[name] = (
+                Dirichlet(given) if condition.kind == "dirichlet" else Neumann(given)
+            )
+        bodies = []
+        if region is not None:
+            dirichlet = [
+                FACES_3D.index(f)
+                for f, c in mesh.faces.items()
+                if c.kind == "dirichlet"
+            ]
+
+            def in_region(points: np.ndarray) -> np.ndarray:
+                if not callable(region):
+                    held = np.asarray(region, dtype=bool) & ~mesh.fixed
+                    return held[node_index(points)]
+                inside = np.asarray(region(*points), dtype=bool).copy()
+                tiny = 1e-9 * h
+                for number in dirichlet:
+                    axis, high = divmod(number, 2)
+                    if high:
+                        inside &= points[axis] < upper[axis] - tiny
+                    else:
+                        inside &= points[axis] > origin[axis] + tiny
+                return inside
+
+            bodies.append(
+                EmbeddedDirichlet(
+                    in_region,
+                    float(region_potential),
+                    fraction=lambda start, end: np.ones(start.shape[1]),
+                )
+            )
+        # patchwork lets the last body listed own a node, the mesh the first electrode
+        for electrode in reversed(mesh.electrodes):
+            bodies.append(
+                EmbeddedDirichlet(
+                    lambda points, e=electrode: np.asarray(
+                        e.inside(*points), dtype=bool
+                    ),
+                    float(electrode.potential),
+                    fraction=fraction,
+                )
+            )
+        self.solver = NodalPoisson(
+            hierarchy,
+            faces=faces,
+            embedded=bodies,
+            backend=backend,
+            min_fraction=1.0 / 255.0,
+        )
+        points = np.asarray(self.solver.nodes.coordinates).T
+        flat = np.ravel_multi_index(node_index(points), shape)
+        #: patchwork's nodes on the mesh.
+        self.layout = Layout3D(mesh, flat, points[0].copy())
+        self.jacobian = False
+
+    def fill_hanging(self, phi: np.ndarray) -> None:
+        """No hanging nodes without refinement."""
+
+
 def _poisson_problem() -> ConvergenceProblem:
     """A manufactured potential in cylindrical geometry, against its exact values."""
     from beamtracer.solver.mesh import FaceCondition
@@ -352,7 +503,7 @@ class IonOpticsPoisson:
 
     def __init__(
         self,
-        mesh: IonOpticsMesh,
+        mesh: IonOpticsMesh | IonOpticsMesh3D,
         reuse_jacobian: bool = True,
         backend: str = "lu",
         comm: Any = None,
@@ -370,12 +521,12 @@ class IonOpticsPoisson:
         #: The communicator the solve is distributed over (``"petsc"``), or None.
         self.comm = comm
         self.refinement = tuple(refinement)
-        self._fields: dict[object, _Field] = {}
+        self._fields: dict[object, _Field | _Field3D] = {}
         self.newton_iterations = 0
         #: The Jacobian factorisations of the last solve.
         self.factorisations = 0
 
-    def _field(self, region: Any, potential: float) -> _Field:
+    def _field(self, region: Any, potential: float) -> _Field | _Field3D:
         """The (cached) patchwork solver for a set of fixed nodes."""
         if region is None:
             key: object = b""
@@ -386,13 +537,25 @@ class IonOpticsPoisson:
         if key not in self._fields:
             # the plain one and at most one with an initial plasma
             self._fields = {k: v for k, v in self._fields.items() if k == b""}
-            self._fields[key] = _Field(
-                self.mesh, region, potential, self.backend, self.comm, self.refinement
-            )
+            if isinstance(self.mesh, IonOpticsMesh3D):
+                if self.refinement:
+                    raise ValueError("refinement is not available in 3D")
+                self._fields[key] = _Field3D(
+                    self.mesh, region, potential, self.backend, self.comm
+                )
+            else:
+                self._fields[key] = _Field(
+                    self.mesh,
+                    region,
+                    potential,
+                    self.backend,
+                    self.comm,
+                    self.refinement,
+                )
         return self._fields[key]
 
     @property
-    def layout(self) -> Layout:
+    def layout(self) -> Layout | Layout3D:
         """The patches and the composite nodes the potential lives on."""
         return self._field(None, 0.0).layout
 
