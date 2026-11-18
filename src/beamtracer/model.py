@@ -17,6 +17,7 @@ from __future__ import annotations
 import pickle
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import cunumpy as xp
 import numpy as np
@@ -27,7 +28,12 @@ from mpifield import Field
 from scipy import constants
 
 from beamtracer._profiling import PROFILE_TAGS
-from beamtracer.config import BeamOpticsConfig, BeamSpecies, NegativeExtractionPlasma
+from beamtracer.config import (
+    BeamOpticsConfig,
+    BeamSpecies,
+    BeamSpecies3D,
+    NegativeExtractionPlasma,
+)
 from beamtracer.field_map import FieldMap
 from beamtracer.sections import ObjectParams
 from beamtracer.solver import (
@@ -50,7 +56,9 @@ from beamtracer.solver import (
     surface_field,
     vlasov_iterate,
 )
+from beamtracer.solver.mesh3d import FACES_3D, Electrode3D, IonOpticsMesh3D
 from beamtracer.solver.refinement import Refinement
+from beamtracer.solver.tracer3d import BeamTracer3D, beam_on_surface
 
 _FACES = {
     "x_min": ("x", "min"),
@@ -72,6 +80,20 @@ def _electrode(name: str, params: ObjectParams) -> Electrode:
             return np.asarray(obj.contains_points(np.stack([x, y], axis=0)), dtype=bool)
 
     return Electrode(inside, float(params.bc_value), name)
+
+
+def _electrode_3d(name: str, params: ObjectParams) -> Electrode3D:
+    """Return the `Electrode3D` of a 3D object with a Dirichlet potential."""
+    if params.bc_type != "dirichlet" or params.bc_value is None:
+        raise ValueError("BeamOptics electrodes need a Dirichlet potential")
+    obj = params.build()
+
+    def inside(x: np.ndarray, y: np.ndarray, z: np.ndarray) -> np.ndarray:
+        with xp.use_backend("numpy"):
+            points = np.stack([x, y, z], axis=0)
+            return np.asarray(obj.contains_points(points), dtype=bool)
+
+    return Electrode3D(inside, float(params.bc_value), name)
 
 
 @method(
@@ -175,11 +197,14 @@ class BeamOptics:
                 f"the field map {params.file} is in the {field_map.frame!r} frame; "
                 f"this grid needs {frame!r}"
             )
-        if "z" in field_map.dims:
+        three = self.config.grid.ndim == 3
+        if ("z" in field_map.dims) != three and not (three and len(field_map.dims) < 3):
             raise ValueError(
                 f"the field map {params.file} is on {field_map.dims}; "
-                "BeamOptics needs one on (x[, y])"
+                f"this grid needs one on {'(x, y, z)' if three else '(x[, y])'}"
             )
+        if three and field_map.components("electric"):
+            raise ValueError("an imposed electric field is not available in 3D yet")
         return field_map
 
     def _imposed_fields(self) -> tuple[Callable | None, Callable | None]:
@@ -208,6 +233,60 @@ class BeamOptics:
             return bx + sx, br + sr, btheta
 
         return electric, magnetic
+
+    def _faces_3d(self) -> dict[str, FaceCondition]:
+        """Return the 3D mesh's face conditions from the field walls.
+
+        The symmetry planes keep the mesh's default (a zero normal derivative), after
+        checking the walls give that.
+        """
+        faces = {}
+        walls = self.config.bcs_field
+        assert walls is not None  # filled in by the configuration
+        for face in FACES_3D:
+            direction, side = face.split("_")
+            bc = walls.get_bc(dir=direction, side=side)
+            if bc.bc_type == "periodic":
+                raise ValueError("BeamOptics does not support periodic walls")
+
+            def value(x, y, z, bc=bc):
+                return np.asarray(bc.evaluate(x=x, y=y, z=z, t=0.0 * x), dtype=float)
+
+            if face in self.config.symmetry_planes:
+                samples = np.linspace(0.0, 1.0, 5)
+                if bc.bc_type != "neumann" or np.any(value(samples, samples, samples)):
+                    raise ValueError(
+                        f"the symmetry plane {face} needs a zero normal derivative"
+                    )
+                continue
+            faces[face] = FaceCondition(bc.bc_type, value)
+        return faces
+
+    def _magnetic_nodes(self) -> np.ndarray | None:
+        """B [T] on the 3D mesh's nodes ``(3, nx, ny, nz)``: solenoids and a field map.
+
+        The solenoids and the axial profile are axisymmetric about the ``x`` axis.
+        """
+        mesh = self.mesh
+        axial = self.axial_magnetic_field
+        field_map = self.field_map
+        if axial is None and (
+            field_map is None or not field_map.components("magnetic")
+        ):
+            return None
+        assert isinstance(mesh, IonOpticsMesh3D)
+        x, y, z = mesh.nodes()
+        b = np.zeros((3, *mesh.shape))
+        if axial is not None:
+            r = np.hypot(y, z)
+            bx, br = axial(x.ravel(), r.ravel())
+            safe = np.where(r > 0.0, r, 1.0)
+            b[0] += bx.reshape(mesh.shape)
+            b[1] += (br.reshape(mesh.shape) * y / safe) * (r > 0.0)
+            b[2] += (br.reshape(mesh.shape) * z / safe) * (r > 0.0)
+        if field_map is not None and field_map.components("magnetic"):
+            b += np.moveaxis(field_map.evaluate((x, y, z), "magnetic"), -1, 0)
+        return b
 
     def __init__(
         self,
@@ -238,6 +317,37 @@ class BeamOptics:
         self.rank = 0 if self.comm is None else self.comm.Get_rank()
         self.verbose = verbose
         grid = config.grid
+        self.species_names = [beam.name for beam in config.beams]
+        self.species_mass = np.array(
+            [beam.mass * constants.atomic_mass for beam in config.beams]
+        )
+        self._state: VlasovState | None = None
+        self._is_finished = False
+        self._fields: dict[tuple[str, bool], Field] = {}
+        if grid.ndim == 3:
+            self.mesh: IonOpticsMesh | IonOpticsMesh3D = IonOpticsMesh3D(
+                shape=grid.num_gridpoints,
+                origin=grid.lower_bound,
+                h=grid.deltas[0],
+                electrodes=[
+                    _electrode_3d(name, obj) for name, obj in config.objects.items()
+                ],
+                faces=self._faces_3d(),
+                symmetry_planes=tuple(config.symmetry_planes),
+            )
+            self.axial_magnetic_field = self._magnetic_field()
+            self.field_map = self._field_map()
+            self.tracer: BeamTracer | BeamTracer3D = BeamTracer3D(
+                self.mesh,
+                None,
+                self._magnetic_nodes(),
+                step_fraction=config.step_fraction,
+                integrator=config.integrator,
+                max_steps=config.max_steps,
+                planes=config.diagnostic_planes,
+                save_trajectories=config.save_trajectories,
+            )
+            return
         self.mesh = IonOpticsMesh(
             shape=grid.num_gridpoints,
             origin=grid.lower_bound,
@@ -267,13 +377,6 @@ class BeamOptics:
             ),
         )
         self.tracer.stream = self.rank  # every rank its own analog charge changes
-        self.species_names = [beam.name for beam in config.beams]
-        self.species_mass = np.array(
-            [beam.mass * constants.atomic_mass for beam in config.beams]
-        )
-        self._state: VlasovState | None = None
-        self._is_finished = False
-        self._fields: dict[tuple[str, bool], Field] = {}
 
     def _particles(self) -> tuple[BeamParticles, float]:
         """Return this rank's share of the beams and the total ``sum J / v``."""
@@ -281,7 +384,22 @@ class BeamOptics:
         j_over_v = 0.0
         cylindrical = self.mesh.cylindrical
         for number, beam in enumerate(self.config.beams):
-            if isinstance(beam, BeamSpecies):
+            if isinstance(beam, BeamSpecies3D):
+                particles, jv = beam_on_surface(
+                    beam.num_particles,
+                    beam.current_density,
+                    beam.charge,
+                    beam.mass,
+                    beam.energy,
+                    beam.parallel_temperature,
+                    beam.transverse_temperature,
+                    beam.centre,
+                    beam.size,
+                    beam.shape,
+                    species=number,
+                )
+                j_over_v += jv
+            elif isinstance(beam, BeamSpecies):
                 particles, jv = beam_with_energy(
                     beam.num_particles,
                     beam.current_density,
@@ -446,22 +564,24 @@ class BeamOptics:
         return self.state.potential
 
     def electric_field_at(
-        self, x: np.ndarray, y: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Return ``(E_x, E_y)`` [V/m] at the points ``(x, y)``.
+        self, x: np.ndarray, y: np.ndarray, *z: np.ndarray
+    ) -> tuple[np.ndarray, ...]:
+        """Return ``(E_x, E_y)`` [V/m] at the points ``(x, y)``, ``(E_x, E_y, E_z)`` in 3D.
 
-        ``y`` is ``r`` in cylindrical geometry.
+        ``y`` is ``r`` in cylindrical geometry; a 3D grid takes ``(x, y, z)``.
         """
-        return self.state.electric(x, y)  # pyright: ignore[reportCallIssue]
+        return self.state.electric(x, y, *z)  # pyright: ignore[reportCallIssue]
 
     def surface_fields(self) -> dict[str, float]:
-        """Return the largest ``|E|`` [V/m] on the surface of every electrode, by name.
+        """Return the largest ``|E|`` [V/m] on the surface of every electrode, by name (2D).
 
         From the solved potential at the free nodes next to each electrode (see
         `beamtracer.solver.surface_field`); for voltage holding, e.g. a limit of
         some kV/mm. The field at a sharp corner is singular and grows as the mesh is
         refined: round the edges whose field matters.
         """
+        if isinstance(self.mesh, IonOpticsMesh3D):
+            raise NotImplementedError("surface_fields is not available in 3D yet")
         magnitude, electrode = surface_field(self.mesh, self.state.electric)
         fields = {}
         for number, name in enumerate(self.config.objects):
@@ -545,7 +665,7 @@ class BeamOptics:
 
         The trajectories are weighted by their fraction in it.
         """
-        changing = self.tracer.charge_changing
+        changing = getattr(self.tracer, "charge_changing", None)
         if changing is None:
             raise ValueError("the beam has no charge changes")
         hits = self.plane(x)
@@ -570,10 +690,13 @@ class BeamOptics:
                 return hits
         raise KeyError(f"no diagnostic plane at x = {x}")
 
-    def beam_moments(self, x: float, species: str | None = None) -> BeamMoments:
+    def beam_moments(
+        self, x: float, species: str | None = None, axis: str = "y"
+    ) -> BeamMoments:
         """Return the current, emittance and Twiss parameters at the plane ``x``.
 
-        Of one beam (by name) or of all.
+        Of one beam (by name) or of all; in the ``y``-``y'`` plane, or with ``axis="z"``
+        (3D) in ``z``-``z'``.
         """
         index = None if species is None else self.species_names.index(species)
         return plane_moments(
@@ -581,7 +704,36 @@ class BeamOptics:
             cylindrical=self.mesh.cylindrical,
             mass=self.species_mass,
             species=index,
+            axis=axis,
         )
+
+    def dataset(self) -> Any:
+        """Return the potential and the charge density as an `xarray.Dataset` on the nodes.
+
+        Coordinates ``x``, ``y`` (``r`` in cylindrical geometry) and, in 3D, ``z`` [m];
+        the variables carry ``units`` and a ``long_name`` for the plots.
+        """
+        import xarray as xr
+
+        mesh = self.mesh
+        if isinstance(mesh, IonOpticsMesh3D):
+            axes = {"x": mesh.x, "y": mesh.y, "z": mesh.z}
+        else:
+            axes = {"x": mesh.x, "r" if mesh.cylindrical else "y": mesh.y}
+        dims = tuple(axes)
+        coords = {
+            name: (name, values, {"units": "m", "long_name": f"${name}$"})
+            for name, values in axes.items()
+        }
+        data = {
+            "potential": (dims, self.potential, {"units": "V", "long_name": r"$\phi$"}),
+            "charge_density": (
+                dims,
+                self.state.charge_density,
+                {"units": "C/m^3", "long_name": r"$\rho_b$"},
+            ),
+        }
+        return xr.Dataset(data, coords=coords)
 
     def write_files(self, path: Path) -> None:
         """Write the fields, the trajectories and the plane crossings as a pickle."""
@@ -590,6 +742,11 @@ class BeamOptics:
                 {
                     "x": self.mesh.x,
                     "y": self.mesh.y,
+                    **(
+                        {"z": self.mesh.z}
+                        if isinstance(self.mesh, IonOpticsMesh3D)
+                        else {}
+                    ),
                     "potential": self.potential,
                     "charge_density": self.state.charge_density,
                     "trajectories": self.trajectories,

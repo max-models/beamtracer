@@ -29,7 +29,19 @@ ConfigDict: TypeAlias = dict[str, Any]
 FaceType = Literal["dirichlet", "neumann"]
 
 #: The 2D objects an electrode can be, by configuration-file ``type``.
-OBJECT_TYPES = ("line", "rectangle", "triangle", "polygon", "circle", "aperture2d")
+OBJECT_TYPES = (
+    "line",
+    "rectangle",
+    "triangle",
+    "polygon",
+    "circle",
+    "aperture2d",
+    "cuboid",
+    "sphere",
+    "cylinder",
+    "tube",
+    "cone",
+)
 
 
 def plain_value(value: Any) -> Any:
@@ -49,24 +61,24 @@ def _is_number(value: Any) -> bool:
     return True
 
 
-def _per_axis(value: Any) -> tuple:
+def _per_axis(value: Any, ndim: int = 2) -> tuple:
     if isinstance(value, (int, float, bool)):
-        return (value, value)
+        return (value,) * ndim
     values = tuple(np.asarray(value).ravel().tolist())
-    if len(values) != 2:
-        raise ValueError(f"need one value per axis (2), got {value!r}")
+    if len(values) != ndim:
+        raise ValueError(f"need one value per axis ({ndim}), got {value!r}")
     return values
 
 
 @dataclass
 class GridParams:
-    """The 2D grid of nodes: nodes per axis and extent in metres.
+    """The grid of nodes: nodes per axis and extent in metres.
 
-    ``coordinates`` is ``"cartesian"`` (planar, per unit depth) or ``"cylindrical"``
-    (``(x, r)`` with the axis at ``r = 0``). A scalar ``num_gridpoints`` or bound
-    applies to both axes; the bounds are lengths in m, or Quantities or strings such
-    as ``"5 mm"`` (also per axis, ``("0 mm", "5 mm")``).
-    ``ndim`` is always 2 (kept so that picnic's grid entries read unchanged).
+    ``ndim`` is 2 or 3. In 2D ``coordinates`` is ``"cartesian"`` (planar, per unit depth)
+    or ``"cylindrical"`` (``(x, r)`` with the axis at ``r = 0``); a 3D grid is
+    ``"cartesian"``. A scalar ``num_gridpoints`` or bound applies to every axis; the
+    bounds are lengths in m, or Quantities or strings such as ``"5 mm"`` (also per axis,
+    ``("0 mm", "5 mm")``).
     """
 
     ndim: int = 2
@@ -78,12 +90,17 @@ class GridParams:
     def __post_init__(self) -> None:
         """Convert the bounds to metres, normalize every per-axis value to a tuple."""
         convert_units(self)
-        if int(self.ndim) != 2:
-            raise ValueError(f"the beam tracer needs a 2D grid, got ndim={self.ndim}")
-        self.ndim = 2
-        self.num_gridpoints = tuple(int(n) for n in _per_axis(self.num_gridpoints))
-        self.lower_bound = _per_axis(self.lower_bound)
-        self.upper_bound = _per_axis(self.upper_bound)
+        if int(self.ndim) not in (2, 3):
+            raise ValueError(
+                f"the beam tracer needs a 2D or 3D grid, got ndim={self.ndim}"
+            )
+        self.ndim = int(self.ndim)
+        if self.ndim == 3 and self.coordinates != "cartesian":
+            raise ValueError("a 3D grid is cartesian")
+        n = self.ndim
+        self.num_gridpoints = tuple(int(k) for k in _per_axis(self.num_gridpoints, n))
+        self.lower_bound = _per_axis(self.lower_bound, n)
+        self.upper_bound = _per_axis(self.upper_bound, n)
         if any(
             hi <= lo for lo, hi in zip(self.lower_bound, self.upper_bound, strict=True)
         ):
@@ -275,7 +292,7 @@ class FieldBoundaryCondition:
 
 
 class FieldBCs:
-    """The conditions on the four faces of the grid."""
+    """The conditions on the faces of the grid: four in 2D, six with ``z`` in 3D."""
 
     def __init__(
         self,
@@ -283,18 +300,30 @@ class FieldBCs:
         x_upper: FieldBoundaryCondition,
         y_lower: FieldBoundaryCondition,
         y_upper: FieldBoundaryCondition,
+        z_lower: FieldBoundaryCondition | None = None,
+        z_upper: FieldBoundaryCondition | None = None,
     ) -> None:
-        """Store the four faces."""
+        """Store the faces; the ``z`` ones only for a 3D grid (both or neither)."""
         self._bc = {
             "x": {"min": x_lower, "max": x_upper},
             "y": {"min": y_lower, "max": y_upper},
         }
+        if (z_lower is None) != (z_upper is None):
+            raise ValueError("give both z faces or neither")
+        if z_lower is not None:
+            assert z_upper is not None
+            self._bc["z"] = {"min": z_lower, "max": z_upper}
+
+    @property
+    def has_z(self) -> bool:
+        """Whether the ``z`` faces are given (a 3D grid)."""
+        return "z" in self._bc
 
     @staticmethod
-    def grounded() -> FieldBCs:
-        """Return 0 V on every face."""
+    def grounded(ndim: int = 2) -> FieldBCs:
+        """Return 0 V on every face of a ``ndim``-dimensional grid."""
         zero = FieldBoundaryCondition.dirichlet(0.0)
-        return FieldBCs(zero, zero, zero, zero)
+        return FieldBCs(*([zero] * (2 * ndim)))
 
     def get_bc(self, dir: str, side: str) -> FieldBoundaryCondition:
         """Return the condition of one side (``"min"``, ``"max"``) of one axis."""
@@ -325,8 +354,10 @@ class FieldBCs:
             x: {type: dirichlet, min: 0 V, max: 5 kV}
         """
         faces: dict[str, FieldBoundaryCondition] = {}
-        for axis in ("x", "y"):
+        for axis in ("x", "y", "z"):
             if axis not in params:
+                if axis == "z":
+                    continue  # a 2D grid
                 raise ValueError(f"field boundaries need the {axis!r} axis")
             item = params[axis]
             axis_type = item.get("type")
@@ -352,10 +383,31 @@ _OBJECT_ARGUMENTS = {
     "polygon": ("vertices",),
     "circle": ("midpoint", "radius"),
     "aperture2d": ("axis", "position", "vertices"),
+    "cuboid": ("midpoint", "side_lengths"),
+    "sphere": ("midpoint", "radius"),
+    "cylinder": ("start", "end", "radius"),
+    "tube": ("start", "end", "inner_radius", "outer_radius"),
+    "cone": ("start", "end", "start_radius", "end_radius"),
 }
 
 #: The geometry entries of a shape, in the order of `ShapeParams`.
-_GEOMETRY = ("vertices", "midpoint", "side_lengths", "radius", "axis", "position")
+_GEOMETRY = (
+    "vertices",
+    "midpoint",
+    "side_lengths",
+    "radius",
+    "axis",
+    "position",
+    "start",
+    "end",
+    "inner_radius",
+    "outer_radius",
+    "start_radius",
+    "end_radius",
+)
+
+#: The shapes of a 3D grid (the others are 2D).
+OBJECT_TYPES_3D = ("cuboid", "sphere", "cylinder", "tube", "cone")
 
 
 @dataclass
@@ -375,6 +427,12 @@ class ShapeParams:
     radius: float | None = unit_field("m", None)
     axis: str | None = None
     position: float | None = unit_field("m", None)
+    start: Any = unit_field("m", None)
+    end: Any = unit_field("m", None)
+    inner_radius: float | None = unit_field("m", None)
+    outer_radius: float | None = unit_field("m", None)
+    start_radius: float | None = unit_field("m", None)
+    end_radius: float | None = unit_field("m", None)
 
     def __post_init__(self) -> None:
         """Convert the lengths to metres and check the type."""
@@ -393,10 +451,15 @@ class ShapeParams:
         from simgeometry.objects import (
             Aperture2D,
             Circle,
+            Cone,
+            Cuboid,
+            Cylinder,
             Line,
             Polygon,
             Rectangle,
+            Sphere,
             Triangle,
+            Tube,
         )
 
         classes = {
@@ -406,6 +469,11 @@ class ShapeParams:
             "polygon": Polygon,
             "circle": Circle,
             "aperture2d": Aperture2D,
+            "cuboid": Cuboid,
+            "sphere": Sphere,
+            "cylinder": Cylinder,
+            "tube": Tube,
+            "cone": Cone,
         }
         return classes[self.type](**self.arguments(), bc=bc)
 
@@ -414,7 +482,9 @@ class ShapeParams:
         params: ConfigDict = {"type": self.type}
         if self.axis is not None:
             params["axis"] = self.axis
-        for key in ("vertices", "midpoint", "side_lengths", "radius", "position"):
+        for key in _GEOMETRY:
+            if key == "axis":
+                continue
             value = getattr(self, key)
             if value is not None:
                 params[key] = with_unit(value, "m")
@@ -453,6 +523,12 @@ class ObjectParams:
     radius: float | None = unit_field("m", None)
     axis: str | None = None
     position: float | None = unit_field("m", None)
+    start: Any = unit_field("m", None)
+    end: Any = unit_field("m", None)
+    inner_radius: float | None = unit_field("m", None)
+    outer_radius: float | None = unit_field("m", None)
+    start_radius: float | None = unit_field("m", None)
+    end_radius: float | None = unit_field("m", None)
     shapes: list[ShapeParams] | None = None
 
     def __post_init__(self) -> None:
