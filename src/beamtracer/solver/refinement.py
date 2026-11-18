@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -125,13 +126,15 @@ class Layout:
     ``volumes`` are the control volumes the deposit divides by: a quarter of every leaf
     cell (of its ring volume ``2 pi r_c |K|`` in cylindrical geometry) at each corner, the
     volumes the area-weighted (in r**2) deposit is consistent with. ``x`` and ``y`` are the
-    nodes' coordinates.
+    nodes' coordinates, ``hierarchy`` patchwork's `AMRHierarchy` of the patches (its axes
+    ``(r, x)`` in cylindrical geometry).
     """
 
     patches: list[Patch]
     x: np.ndarray
     y: np.ndarray
     volumes: np.ndarray
+    hierarchy: Any = None
 
     @property
     def size(self) -> int:
@@ -147,6 +150,28 @@ class Layout:
     def refined(self) -> bool:
         """Whether there is a patch besides the base."""
         return len(self.patches) > 1
+
+    def plot_cells(self, ax: Any = None, *, scale: float = 1.0, **kwargs: Any) -> Any:
+        """Draw the cells of every patch on ``ax`` with patchwork's `plot_patches`.
+
+        The mesh's ``x`` is horizontal, ``y`` (or ``r``) vertical, the coordinates times
+        ``scale`` (``1e3`` for mm). Every level's grid is drawn in full, the finer ones on
+        top; ``kwargs`` go to `plot_patches` (e.g. ``colors``, ``labels``, ``grid_alpha``).
+        Returns the axes.
+        """
+        from patchwork import plot_patches
+
+        if self.hierarchy is None:
+            raise ValueError("the layout has no patchwork hierarchy")
+        options = {"mask_covered": False, "title": ""} | kwargs
+        _, ax = plot_patches(
+            self.hierarchy,
+            ax=ax,
+            transpose=self.base.mesh.cylindrical,
+            scale=scale,
+            **options,
+        )
+        return ax
 
     def on_base(self, values: np.ndarray) -> np.ndarray:
         """The ``(nx, ny)`` array of composite values on the base mesh."""
@@ -221,7 +246,7 @@ def layout_of(mesh: IonOpticsMesh, patches: list[Patch], nodes) -> Layout:
         weights=np.repeat(cell / corners.shape[1], corners.shape[1]),
         minlength=x.size,
     )
-    return Layout(patches, x.copy(), y.copy(), volumes)
+    return Layout(patches, x.copy(), y.copy(), volumes, nodes.hierarchy)
 
 
 def _extrapolation_of(mesh: IonOpticsMesh) -> list[str]:
