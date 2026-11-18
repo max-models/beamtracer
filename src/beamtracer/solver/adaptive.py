@@ -120,6 +120,14 @@ def _grow(tags: np.ndarray, width: int) -> np.ndarray:
     return grown
 
 
+def _outer(masks: list[np.ndarray]) -> np.ndarray:
+    """The tensor product of one boolean mask per axis."""
+    result = masks[0]
+    for mask in masks[1:]:
+        result = result[..., None] & mask
+    return result
+
+
 def _inside(boxes: Sequence[Refinement], mesh: Any, level: int) -> np.ndarray:
     """The cells of ``level`` inside the boxes of ``level`` (all of them for level 0)."""
     axes, h = _grid(mesh, level)
@@ -137,14 +145,6 @@ def _inside(boxes: Sequence[Refinement], mesh: Any, level: int) -> np.ndarray:
         ]
         inside |= _outer(masks)
     return inside
-
-
-def _outer(masks: list[np.ndarray]) -> np.ndarray:
-    """The tensor product of one boolean mask per axis."""
-    result = masks[0]
-    for mask in masks[1:]:
-        result = result[..., None] & mask
-    return result
 
 
 def _density_variation(density: np.ndarray, level: int) -> np.ndarray:
@@ -180,6 +180,14 @@ def _beam_cells(density: np.ndarray, level: int, width: int) -> np.ndarray:
     for axis in range(ndim):
         beam = np.repeat(beam, 2**level, axis=axis)
     return _grow(beam, width)
+
+
+def _largest_strength(field: Callable[..., tuple[np.ndarray, ...]], mesh: Any) -> float:
+    """The largest field strength at the base mesh's nodes."""
+    axes, _ = _grid(mesh, 0)
+    points = np.meshgrid(*axes, indexing="ij")
+    components = field(*(p.ravel() for p in points))
+    return float(np.sqrt(sum(np.asarray(c) ** 2 for c in components)).max())
 
 
 def adapted_boxes(
@@ -232,14 +240,6 @@ def adapted_boxes(
             upper = tuple(a[hi] for a, (_, hi) in zip(axes, found, strict=True))
             boxes.append(Refinement(level, lower, upper))
     return boxes
-
-
-def _largest_strength(field: Callable[..., tuple[np.ndarray, ...]], mesh: Any) -> float:
-    """The largest field strength at the base mesh's nodes."""
-    axes, _ = _grid(mesh, 0)
-    points = np.meshgrid(*axes, indexing="ij")
-    components = field(*(p.ravel() for p in points))
-    return float(np.sqrt(sum(np.asarray(c) ** 2 for c in components)).max())
 
 
 def sample(layout: Any, values: np.ndarray, points: np.ndarray) -> np.ndarray:
