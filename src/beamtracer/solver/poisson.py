@@ -40,6 +40,13 @@ from beamtracer.solver.mesh import IonOpticsMesh
 from beamtracer.solver.mesh3d import FACES_3D, IonOpticsMesh3D
 from beamtracer.solver.refinement import Layout, Refinement, layout_of, patches_of
 
+#: The relative residual of a Newton step by GMRES with ``backend="amg"`` (an inexact
+#: Newton step: near the solution each step gains this factor).
+NEWTON_KRYLOV_RTOL = 1e-3
+#: GMRES iterations after which the kept AMG preconditioner is built again (a build of
+#: the classical AMG hierarchy costs about as much as a dozen iterations).
+NEWTON_KRYLOV_REBUILD = 12
+
 
 @dataclass(frozen=True)
 @method(
@@ -498,7 +505,10 @@ class IonOpticsPoisson:
     is an optional mask of extra nodes held at ``fixed_potential`` (the initial plasma), or
     a function of ``(x, y)``. The factorisation is reused between solves; ``backend`` is
     patchwork's: ``"lu"`` (every rank solves the whole mesh), ``"petsc"`` (with ``comm``,
-    the ranks share the mesh's rows: a Krylov method with algebraic multigrid) or ``"auto"``.
+    the ranks share the mesh's rows: a Krylov method with algebraic multigrid), ``"amg"``
+    (every rank, algebraic multigrid preconditioning a Krylov method: no factorisation,
+    for large and 3D meshes; with a plasma a Newton--Krylov method whose AMG
+    preconditioner is kept, `_newton_krylov`) or ``"auto"``.
     """
 
     def __init__(
@@ -561,6 +571,95 @@ class IonOpticsPoisson:
     def layout(self) -> Layout | Layout3D:
         """The patches and the composite nodes the potential lives on."""
         return self._field(None, 0.0).layout
+
+    def _newton_krylov(
+        self,
+        field: _Field | _Field3D,
+        phi: np.ndarray,
+        u: np.ndarray,
+        base: np.ndarray,
+        amplitude: float,
+        temperature: float,
+        up: float,
+        sign: int,
+        stop: float,
+        max_newton: int,
+    ) -> np.ndarray:
+        """Newton's method with every step by GMRES, preconditioned by a kept AMG cycle.
+
+        The step solves the current Jacobian ``K + L diag(c)`` (a sparse matrix without
+        hanging nodes) to a relative residual of `NEWTON_KRYLOV_RTOL`; its preconditioner is the V-cycle of the algebraic-multigrid
+        hierarchy (patchwork's ``"amg"`` backend) of an earlier Jacobian, kept across steps,
+        solves and Vlasov iterations, and built again only when GMRES fails or takes more
+        than `NEWTON_KRYLOV_REBUILD` iterations. Returns the unknowns.
+        """
+        from scipy import sparse
+        from scipy.sparse.linalg import LinearOperator, gmres
+
+        solver = field.solver
+        unknowns = solver.unknowns
+        n = unknowns.size
+        hanging = getattr(field, "hanging", np.zeros(0))
+        load_unknowns = None if np.size(hanging) else solver.load[:, unknowns].tocsr()
+        builds = iterations = krylov_iterations = 0
+        for iterations in range(1, max_newton + 1):  # noqa: B007 (counted after the loop)
+            phi[unknowns] = u
+            field.fill_hanging(phi)
+            density = amplitude * np.exp(
+                np.minimum(-sign * (phi - up) / temperature, 50.0)
+            )
+            residual = solver.stiffness @ u - base - solver.load @ (sign * density)
+            if solver.solver is None:  # no unknowns
+                break
+            reaction = density / temperature
+            if load_unknowns is not None:
+                # no hanging nodes: the Jacobian as a sparse matrix
+                operator: Any = solver.stiffness + load_unknowns @ sparse.diags(
+                    reaction[unknowns]
+                )
+            else:
+
+                def jacobian(
+                    v: np.ndarray, reaction: np.ndarray = reaction
+                ) -> np.ndarray:
+                    spread = np.zeros_like(phi)
+                    spread[unknowns] = v
+                    field.fill_hanging(spread)
+                    return solver.stiffness @ v + solver.load @ (reaction * spread)
+
+                operator = LinearOperator((n, n), matvec=jacobian, dtype=float)  # pyright: ignore[reportCallIssue]
+            delta = None
+            for attempt in range(2):
+                if not field.jacobian or attempt == 1:
+                    solver.set_reaction(reaction)  # the hierarchy of this Jacobian
+                    field.jacobian = True
+                    builds += 1
+                count = [0]
+
+                def counter(_: Any, count: list[int] = count) -> None:
+                    count[0] += 1
+
+                step, info = gmres(
+                    operator, -residual, M=solver.solver.preconditioner,  # pyright: ignore[reportAttributeAccessIssue]
+                    rtol=NEWTON_KRYLOV_RTOL, restart=40, maxiter=2,
+                    callback=counter, callback_type="pr_norm",
+                )  # fmt: skip
+                krylov_iterations += count[0]
+                if info == 0 and count[0] <= NEWTON_KRYLOV_REBUILD:
+                    delta = step
+                    break
+                delta = step if info == 0 else None
+            if delta is None:
+                raise RuntimeError(
+                    "the Newton-Krylov step did not converge, even with a new preconditioner"
+                )
+            u = u + delta
+            if float(np.max(np.abs(delta))) < stop:
+                break
+        self.newton_iterations = iterations
+        self.factorisations = builds
+        self.krylov_steps = krylov_iterations
+        return u
 
     @staticmethod
     def _krylov_step(
@@ -681,6 +780,14 @@ class IonOpticsPoisson:
         scale = max(
             float(np.ptp(prescribed)) if prescribed.size else 0.0, temperature, 1.0
         )
+        if self.backend == "amg":
+            u = self._newton_krylov(
+                field, phi, u, base, amplitude, temperature, up, sign,
+                tolerance * scale, max_newton,
+            )  # fmt: skip
+            phi[unknowns] = u
+            field.fill_hanging(phi)
+            return layout.on_base(phi) if on_mesh else phi
         iteration = 0
         factorisations = 0
         krylov = 0

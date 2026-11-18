@@ -559,7 +559,10 @@ class BeamOpticsConfig:
     changes by less than ``coarse_tolerance`` [V], then all of them (see
     `beamtracer.solver.vlasov_iterate`). ``field_backend`` solves the field with
     patchwork's ``"lu"`` (every MPI rank the whole mesh), ``"petsc"`` (the ranks share
-    it: Krylov with algebraic multigrid, needs petsc4py) or ``"auto"``. ``refinement``
+    it: Krylov with algebraic multigrid, needs petsc4py), ``"amg"`` (every rank, algebraic
+    multigrid preconditioning a Krylov method, no factorisation; with a plasma a
+    Newton--Krylov method keeping its preconditioner; needs pyamg; for 3D and large
+    meshes) or ``"auto"``. ``refinement``
     lists boxes solved and traced on finer cells (`RefinementParams`): the field on
     patchwork's composite mesh, each trajectory stepping and depositing on the finest box
     it is in. ``symmetry_plane`` makes a planar grid half of a geometry mirrored at its
@@ -700,9 +703,10 @@ class BeamOpticsConfig:
             )
         if self.coarse_particles < 1.0 and not self.coarse_tolerance > 0.0:
             raise ValueError("coarse_particles < 1 needs a positive coarse_tolerance")
-        if self.field_backend not in ("lu", "petsc", "auto"):
+        if self.field_backend not in ("lu", "petsc", "amg", "auto"):
             raise ValueError(
-                f"field_backend must be 'lu', 'petsc' or 'auto', got {self.field_backend!r}"
+                "field_backend must be 'lu', 'petsc', 'amg' or 'auto', got "
+                f"{self.field_backend!r}"
             )
         if self.integrator not in ("rk4", "boris"):
             raise ValueError(

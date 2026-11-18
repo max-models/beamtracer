@@ -10,6 +10,7 @@ beam at the exit face ``x = x_max``, where IBSimu keeps the final state of every
 from __future__ import annotations
 
 import contextlib
+import os
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -534,6 +535,7 @@ def run_beamtracer(
         "integrator": integrator,
         "iterations": case.iterations,
         "tolerance": 0.0,
+        "field_backend": os.environ.get("BENCHMARK_FIELD_BACKEND", "lu"),
         # IBSimu mirrors particles at y_min: the planar symmetric cases are half domains
         "symmetry_plane": case.symmetric and not case.cylindrical,
     }

@@ -84,6 +84,12 @@ def arguments(argv: list[str] | None = None) -> argparse.Namespace:
         help="IBSimu threads (default --threads)",
     )
     parser.add_argument("--integrator", default="rk4", choices=("rk4", "boris"))
+    parser.add_argument(
+        "--field-backend",
+        default="lu",
+        choices=("lu", "amg", "petsc", "auto"),
+        help="beamtracer's field solve (field_backend)",
+    )
     parser.add_argument("--out", type=Path, default=Path("benchmark_results"))
     parser.add_argument(
         "--worker", nargs=2, metavar=("CASE", "CODE"), help=argparse.SUPPRESS
@@ -191,7 +197,12 @@ def times(path: Path, code: str) -> dict[str, float | None]:
 
 def run_case(name: str, args: argparse.Namespace) -> dict[str, Any]:
     """Run a case in the codes, each in a worker process, and compare them."""
-    env = dict(os.environ, OMP_NUM_THREADS=str(args.threads), OPENBLAS_NUM_THREADS="1")
+    env = dict(
+        os.environ,
+        OMP_NUM_THREADS=str(args.threads),
+        OPENBLAS_NUM_THREADS="1",
+        BENCHMARK_FIELD_BACKEND=args.field_backend,
+    )
     for code in args.codes:
         command = [
             sys.executable,
@@ -250,7 +261,7 @@ def report(results: list[dict[str, Any]], args: argparse.Namespace) -> str:
         "# IBSimu benchmarks",
         "",
         f"Scale {args.scale}, {args.threads} thread(s) (IBSimu {args.ibsimu_threads}), "
-        f"beamtracer {args.integrator}, best of {args.repeats}.",
+        f"beamtracer {args.integrator} ({args.field_backend} field solve), best of {args.repeats}.",
         "",
         "| Case | Agrees | IBSimu | IBSimu setup | beamtracer | Speedup | Without IBSimu setup |",
         "|---|---|---|---|---|---|---|",
