@@ -74,7 +74,9 @@ python benchmarks/run.py vlasov2d --scale 4 --repeats 3 --threads 4 --integrator
 python benchmarks/run.py --codes beamtracer     # beamtracer alone, no comparison
 ```
 
-`--scale n` divides the cells by `n`, `--particles` overrides the trajectories, `--threads`
+`--field-backend amg` solves beamtracer's field with algebraic multigrid and its plasma
+with the Newton--Krylov method (the default is the LU factorisation; `amg` is faster in
+3D). `--scale n` divides the cells by `n`, `--particles` overrides the trajectories, `--threads`
 sets the threads of both codes (`--ibsimu-threads` IBSimu's alone). Each code runs each case
 in its own process under a scope-profiler session; the profiles (`<case>_<code>.h5`), the
 potentials and exit beams (`.npz`) and the report (`results.md`, `results.json`) go to
