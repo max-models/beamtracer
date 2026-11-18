@@ -7,6 +7,11 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Newton's method of the Boltzmann plasma species: where a chord step with the reused
+  Jacobian stops contracting, it takes the Newton step by GMRES preconditioned by that
+  Jacobian (to a relative residual of 1e-3) before refactorising. On the 3D extraction
+  benchmark a fifth less time; the beam unchanged to 1e-7.
+
 - `BeamTracer`'s Boris step (`integrator="boris"`) rotates with the compiled
   `mpiparticles.boris_velocity` instead of its own NumPy copy of the scheme, as `FieldRegion`
   already does (the same velocities to 1e-16).

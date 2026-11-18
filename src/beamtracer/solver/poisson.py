@@ -525,6 +525,9 @@ class IonOpticsPoisson:
         self.newton_iterations = 0
         #: The Jacobian factorisations of the last solve.
         self.factorisations = 0
+        #: The Newton steps of the last solve taken by GMRES with the factorised Jacobian
+        #: as preconditioner, where the chord step stopped contracting.
+        self.krylov_steps = 0
 
     def _field(self, region: Any, potential: float) -> _Field | _Field3D:
         """The (cached) patchwork solver for a set of fixed nodes."""
@@ -558,6 +561,41 @@ class IonOpticsPoisson:
     def layout(self) -> Layout | Layout3D:
         """The patches and the composite nodes the potential lives on."""
         return self._field(None, 0.0).layout
+
+    @staticmethod
+    def _krylov_step(
+        field: _Field | _Field3D,
+        phi: np.ndarray,
+        reaction: np.ndarray,
+        residual: np.ndarray,
+    ) -> np.ndarray | None:
+        """A Newton step by GMRES, preconditioned by the field's factorised Jacobian.
+
+        The Jacobian is patchwork's operator plus the reaction on the unknowns (and, through
+        their interpolation, on the hanging nodes): ``K v + L (c * phi(v))``. Returns None
+        when GMRES does not reach a relative residual of 1e-3 (an inexact Newton step) in
+        20 iterations.
+        """
+        from scipy.sparse.linalg import LinearOperator, gmres
+
+        solver = field.solver
+        unknowns = solver.unknowns
+        n = unknowns.size
+
+        def jacobian(v: np.ndarray) -> np.ndarray:
+            spread = np.zeros_like(phi)
+            spread[unknowns] = v
+            field.fill_hanging(spread)
+            return solver.stiffness @ v + solver.load @ (reaction * spread)
+
+        factorised = solver.solver
+        assert factorised is not None
+        operator = LinearOperator((n, n), matvec=jacobian, dtype=float)  # pyright: ignore[reportCallIssue]
+        preconditioner = LinearOperator((n, n), matvec=factorised.solve, dtype=float)  # pyright: ignore[reportCallIssue]
+        delta, info = gmres(
+            operator, -residual, M=preconditioner, rtol=1e-3, restart=20, maxiter=1
+        )
+        return delta if info == 0 else None
 
     @method(
         equations={
@@ -645,6 +683,7 @@ class IonOpticsPoisson:
         )
         iteration = 0
         factorisations = 0
+        krylov = 0
         # chord steps contract linearly, not quadratically: they stop ten times tighter
         stop = tolerance * scale * (0.1 if self.reuse_jacobian else 1.0)
         refresh = not self.reuse_jacobian or not field.jacobian
@@ -668,10 +707,16 @@ class IonOpticsPoisson:
             delta = solver.solver.solve(-residual)
             size = float(np.max(np.abs(delta)))
             if self.reuse_jacobian and not fresh and not size < 0.5 * previous:
-                # a stale Jacobian that no longer contracts: redo the step with a new one
-                refresh = True
-                previous = np.inf
-                continue
+                # a stale Jacobian that no longer contracts: a Newton step with the
+                # current Jacobian by GMRES, preconditioned by the stale one; if that
+                # does not converge, redo the step with a new factorisation
+                delta = self._krylov_step(field, phi, density / temperature, residual)
+                if delta is None:
+                    refresh = True
+                    previous = np.inf
+                    continue
+                krylov += 1
+                size = float(np.max(np.abs(delta)))
             u += delta
             if size < stop:
                 break
@@ -682,4 +727,5 @@ class IonOpticsPoisson:
         field.fill_hanging(phi)
         self.newton_iterations = iteration
         self.factorisations = factorisations
+        self.krylov_steps = krylov
         return layout.on_base(phi) if on_mesh else phi

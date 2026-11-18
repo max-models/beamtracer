@@ -29,6 +29,7 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import common3d  # noqa: E402
 from common import (  # noqa: E402
     Case,
     Exit,
@@ -49,11 +50,14 @@ CASES = (
     "plasmacyl",
     "solenoid",
     "sector_magnet",
+    "quad3d",
+    "solenoid3d",
+    "extraction3d",
 )
 CODES = ("ibsimu", "beamtracer")
 
 
-def load(name: str) -> Case:
+def load(name: str) -> Case | common3d.Case3D:
     """Return the case ``name`` of ``benchmarks/cases``."""
     return importlib.import_module(f"cases.{name}").CASE
 
@@ -107,7 +111,17 @@ def worker(args: argparse.Namespace) -> None:
     ):
         for _ in range(args.repeats):
             with sp.region("bench.total"):
-                if code == "ibsimu":
+                if isinstance(case, common3d.Case3D):
+                    run = (
+                        common3d.run_ibsimu
+                        if code == "ibsimu"
+                        else common3d.run_beamtracer
+                    )
+                    setting = (
+                        args.ibsimu_threads if code == "ibsimu" else args.integrator
+                    )
+                    outcome = run(case, nodes, h, particles, setting, region)  # type: ignore[arg-type]
+                elif code == "ibsimu":
                     outcome = run_ibsimu(
                         case, nodes, h, particles, args.ibsimu_threads, region
                     )
@@ -117,21 +131,38 @@ def worker(args: argparse.Namespace) -> None:
                     )
     assert outcome is not None
     beam = outcome.exit
-    away = away_from_electrodes(case, nodes, h)
+    if isinstance(case, common3d.Case3D):
+        away = common3d.away_from_electrodes(case, nodes, h)  # type: ignore[arg-type]
+        arrays = {"y": beam.y, "yp": beam.yp, "z": beam.z, "zp": beam.zp}
+    else:
+        away = away_from_electrodes(case, nodes, h)
+        arrays = {"u": beam.u, "up": beam.up}
     np.savez(
         stem.with_suffix(".npz"),
         potential=outcome.potential,
         away=away,
-        u=beam.u,
-        up=beam.up,
         current=beam.current,
         energy=beam.energy,
+        **arrays,
     )
 
 
-def outcome_of(path: Path) -> Outcome:
+def outcome_of(path: Path) -> Outcome | common3d.Outcome3D:
     """Read what a worker saved."""
     data = np.load(path)
+    if "z" in data:
+        return common3d.Outcome3D(
+            data["potential"],
+            common3d.Exit3D(
+                data["y"],
+                data["yp"],
+                data["z"],
+                data["zp"],
+                data["current"],
+                data["energy"],
+            ),
+            data["away"],
+        )
     return Outcome(
         data["potential"],
         Exit(data["u"], data["up"], data["current"], data["energy"]),
@@ -191,8 +222,14 @@ def run_case(name: str, args: argparse.Namespace) -> dict[str, Any]:
     }
     if set(args.codes) == set(CODES):
         outcomes = {c: outcome_of(args.out / f"{name}_{c}.npz") for c in CODES}
-        result["comparison"] = compare(
-            load(name), outcomes["ibsimu"], outcomes["beamtracer"]
+        case = load(name)
+        compare_case = (
+            common3d.compare if isinstance(case, common3d.Case3D) else compare
+        )
+        result["comparison"] = compare_case(
+            case,  # type: ignore[arg-type]
+            outcomes["ibsimu"],  # type: ignore[arg-type]
+            outcomes["beamtracer"],  # type: ignore[arg-type]
         )
     return result
 
