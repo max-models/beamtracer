@@ -7,6 +7,11 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The negative-ion beamlet example (`negative_ion_extraction_optics`) emits its beams an
+  `emission_margin` (0.1 mm) inside the plasma grid's aperture instead of one cell inside
+  it, so a finer mesh changes the discretisation, not the beam; the default beam is
+  unchanged.
+
 - Newton's method of the Boltzmann plasma species: where a chord step with the reused
   Jacobian stops contracting, it takes the Newton step by GMRES preconditioned by that
   Jacobian (to a relative residual of 1e-3) before refactorising. On the 3D extraction

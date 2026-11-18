@@ -37,3 +37,13 @@ def test_a_coarse_beamlet_solves() -> None:
     assert 0.5 < run["transmitted"] <= 1.0 + 1e-9
     assert np.isfinite(run["divergence"]) and run["divergence"] > 0.0
     assert run["energy"] == pytest.approx(case.grounded_grid_voltage, rel=0.02)
+
+
+def test_the_emission_radius_does_not_follow_the_mesh() -> None:
+    from dataclasses import replace
+
+    from beamtracer.examples.negative_ion_extraction_optics import BeamletCase
+
+    case = BeamletCase()
+    finer = replace(case, cell=0.5 * case.cell)
+    assert finer.emission_radius == case.emission_radius == case.pg_radius - 0.1e-3
