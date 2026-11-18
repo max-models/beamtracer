@@ -87,6 +87,9 @@ class BeamletCase:
     electron_energy: float = 1.0
     electron_temperature: float = 2.0
     ion_temperature: float = 1.0
+    #: How far inside the PG aperture the beams start emitting (independent of the mesh, so
+    #: a finer mesh changes only the discretisation, not the beam).
+    emission_margin: float = 0.1e-3
     #: Mesh: spacing, length, outer radius; trajectories per species.
     cell: float = 0.1e-3
     length: float = 24.0e-3
@@ -103,8 +106,8 @@ class BeamletCase:
 
     @property
     def emission_radius(self) -> float:
-        """The beams leave the plasma side over the PG aperture, one cell inside it."""
-        return self.pg_radius - self.cell
+        """The beams leave the plasma side over the PG aperture, ``emission_margin`` inside it."""
+        return self.pg_radius - self.emission_margin
 
     @property
     def child_langmuir(self) -> float:
