@@ -47,8 +47,12 @@ def _run(implementation, args):
 
 
 def test_the_catalog_has_every_kernel():
-    # the trace kernel is tested in test_compiled_tracer
-    assert set(KERNEL_NAMES) == {*NAMES, "trace_trajectories_2d"}
+    # the trace kernels are tested in test_compiled_tracer and test_tracer3d
+    assert set(KERNEL_NAMES) == {
+        *NAMES,
+        "trace_trajectories_2d",
+        "trace_trajectories_3d",
+    }
     assert all(KERNELS[name] is not None for name in KERNEL_NAMES)
 
 
