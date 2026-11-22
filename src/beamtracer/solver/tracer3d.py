@@ -169,6 +169,11 @@ class BeamTracer3D:
         self.planes = tuple(float(p) for p in planes)
         self.save_trajectories = int(save_trajectories)
         self.integrator = integrator
+        #: The beam's own magnetic field ``(3, nx, ny, nz)`` [T] on the nodes, added to
+        #: ``magnetic`` (set by the Vlasov iteration, `beamtracer.solver.self_field`).
+        self.self_magnetic: np.ndarray | None = None
+        #: Whether a trace also deposits the current density (`TraceResult.current_density`).
+        self.deposit_current = False
         self._lookup: tuple[np.ndarray, np.ndarray] | None = None
         #: Buffer sizes: crossings per plane and trajectory, points per kept trajectory;
         #: grown when a trace needs more.
@@ -345,9 +350,17 @@ class BeamTracer3D:
         cells, subcells = self._electrode_lookup()
         meshes, (fxs, fys, fzs), patch_int, patch_real = self._patch_arrays()
         magnetic = self.magnetic
+        if self.self_magnetic is not None:
+            magnetic = (
+                self.self_magnetic
+                if magnetic is None
+                else magnetic + self.self_magnetic
+            )
+            magnetic = np.ascontiguousarray(magnetic, dtype=float)
         has_b = int(magnetic is not None)
         if magnetic is None:
             magnetic = np.zeros((3, 2, 2, 2))
+        has_j = int(self.deposit_current)
         planes = np.array(self.planes or (np.nan,), dtype=float)
         threads = max(1, min(_num_threads(), start.size))
         mirror_y = int("y_min" in mesh.symmetry_planes)
@@ -356,6 +369,9 @@ class BeamTracer3D:
         while True:
             capacity, path_capacity = self._capacity
             charge = np.zeros((threads, int(patch_int[:, 6].sum())))
+            current_nodes = np.zeros(
+                (threads, 3 * int(np.prod(mesh.shape))) if has_j else (1, 1)
+            )
             hits = np.zeros((n, planes.size, capacity, 8))
             counts = np.zeros((n, planes.size), dtype=np.int64)
             paths = np.zeros((max(saved_ids.size, 1), path_capacity, 3))
@@ -371,6 +387,7 @@ class BeamTracer3D:
                     self.step_fraction, self.max_steps,
                     cells, subcells, SUBCELLS_3D, planes, hits, counts,
                     path_slot, paths, path_count, threads, charge,
+                    has_j, current_nodes,
                 )  # fmt: skip
                 paused = active[status[active] == _PAUSED]
                 if not paused.size:
@@ -401,8 +418,15 @@ class BeamTracer3D:
             node_charge = layout.deposit_total(
                 [c[p.inner] for c, p in zip(per_patch, layout.patches, strict=True)]
             )
+        current_density = None
+        if has_j:
+            current_density = current_nodes.sum(axis=0).reshape(3, *mesh.shape)
         if self.reduce is not None:
             node_charge = self.reduce(node_charge)
+            if current_density is not None:
+                current_density = self.reduce(current_density)
+        if current_density is not None:
+            current_density = np.stack([self._finalize(c) for c in current_density])
         hit_planes = []
         slots = np.arange(capacity)
         for p, position in enumerate(self.planes):
@@ -433,4 +457,5 @@ class BeamTracer3D:
             ],
             trajectory_species=species[saved_ids],
             steps=int(steps.max()) if n else 0,
+            current_density=current_density,
         )
