@@ -245,8 +245,14 @@ def test_compiled_needs_the_solved_field_alone() -> None:
     assert tracer.trace(particles).status[0] == 0
 
 
-def _kernel_case(cylindrical: int, integrator: int = 0, refined: bool = False) -> list:
-    """Random fields on the mesh (and, ``refined``, a box of half the spacing)."""
+def _kernel_case(
+    cylindrical: int, integrator: int = 0, refined: bool = False, graded: bool = False
+) -> list:
+    """Random fields on the mesh (and, ``refined``, a box of half the spacing).
+
+    With ``graded`` the mesh's x axis has nodes crowded at its start (cells from a third
+    of ``h`` up), and the patches are given in its uniform coordinate.
+    """
     rng = np.random.default_rng(7)
     n, nx, ny, h = 40, 30, 12, 1e-3
     # (nx, ny, origin_x, origin_y, h) of every patch, finest first, the mesh last
@@ -265,6 +271,8 @@ def _kernel_case(cylindrical: int, integrator: int = 0, refined: bool = False) -
         fx_offset += fxs[-1].size
         fy_offset += fys[-1].size
         node_offset += pnx * pny
+    s = np.linspace(0.0, 1.0, nx)
+    x_nodes = (nx - 1) * h * (s + 2.0 * s**2) / 3.0 if graded else np.zeros(2)
     x = np.stack([rng.uniform(0, 3e-3, n), rng.uniform(0, 8e-3, n), np.zeros(n)])
     v = np.stack(
         [
@@ -290,6 +298,7 @@ def _kernel_case(cylindrical: int, integrator: int = 0, refined: bool = False) -
         np.array([5e-3, 15e-3]), np.zeros((n, 2, 3, 8)), np.zeros((n, 2), dtype=np.int64),
         slot, np.zeros((slot.max() + 1, 30, 2)), np.zeros(slot.max() + 1, dtype=np.int64),
         2, np.zeros((2, node_offset)),
+        int(graded), x_nodes,
     ]  # fmt: skip
 
 
@@ -300,14 +309,16 @@ def _call(function, args) -> list:
 
 
 OUTPUTS = (1, 2, 5, 6, 7, 25, 26, 28, 29)
+GRADED = (False, True)
 CHARGE = 31
 
 
+@pytest.mark.parametrize("graded", GRADED)
 @pytest.mark.parametrize("refined", [False, True])
 @pytest.mark.parametrize("integrator", [0, 1])
 @pytest.mark.parametrize("cylindrical", [0, 1, 2])
-def test_kernel_versions_agree(cylindrical, integrator, refined) -> None:
-    args = _kernel_case(cylindrical, integrator, refined)
+def test_kernel_versions_agree(cylindrical, integrator, refined, graded) -> None:
+    args = _kernel_case(cylindrical, integrator, refined, graded)
     expected = _call(kernel.host_kernel.kernel.python, args)
     result = _call(kernel, args)
     assert set(np.unique(expected[6])) >= {-2, 0}  # stopped at surfaces and transmitted
@@ -324,11 +335,12 @@ def test_kernel_versions_agree(cylindrical, integrator, refined) -> None:
 
 
 @pytest.mark.skipif(emulation_compiler() is None, reason="no C++ compiler")
+@pytest.mark.parametrize("graded", GRADED)
 @pytest.mark.parametrize("refined", [False, True])
 @pytest.mark.parametrize("integrator", [0, 1])
 @pytest.mark.parametrize("cylindrical", [0, 1, 2])
-def test_cuda_version_agrees(cylindrical, integrator, refined) -> None:
-    args = _kernel_case(cylindrical, integrator, refined)
+def test_cuda_version_agrees(cylindrical, integrator, refined, graded) -> None:
+    args = _kernel_case(cylindrical, integrator, refined, graded)
     expected = _call(kernel.host_kernel.kernel.python, args)
     result = [a.copy() if isinstance(a, np.ndarray) else a for a in args]
     result[CHARGE] = np.zeros_like(result[CHARGE][:1])  # the GPU deposits into one slab

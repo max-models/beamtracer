@@ -79,6 +79,13 @@ class GridParams:
     ``"cartesian"``. A scalar ``num_gridpoints`` or bound applies to every axis; the
     bounds are lengths in m, or Quantities or strings such as ``"5 mm"`` (also per axis,
     ``("0 mm", "5 mm")``).
+
+    ``x_spacing`` grades the beam axis of a 2D grid: ``(x, dx)`` pairs [m], the node
+    spacing wanted at ``x``, linear between the pairs and constant beyond. The nodes along
+    ``x`` then follow it (`patchwork.graded_nodes`), and ``num_gridpoints`` along ``x`` is
+    their number; the spacing along ``y`` is that of ``num_gridpoints`` along ``y``.
+    ``x_through`` [m] are positions along ``x`` that must be nodes (electrode faces and
+    aperture edges), each stretch between them graded on its own.
     """
 
     ndim: int = 2
@@ -86,6 +93,8 @@ class GridParams:
     lower_bound: Any = unit_field("m", 0.0)
     upper_bound: Any = unit_field("m", 32.0e-3)
     coordinates: str = "cartesian"
+    x_spacing: Any = None
+    x_through: Any = ()
 
     def __post_init__(self) -> None:
         """Convert the bounds to metres, normalize every per-axis value to a tuple."""
@@ -108,10 +117,46 @@ class GridParams:
                 f"upper_bound {self.upper_bound} must exceed lower_bound "
                 f"{self.lower_bound} on every axis"
             )
+        if self.x_spacing is None and len(np.ravel(self.x_through)):
+            raise ValueError("x_through needs x_spacing")
+        if self.x_spacing is not None:
+            if n != 2:
+                raise ValueError("x_spacing grades the x axis of a 2D grid")
+            pairs = tuple(
+                (float(x), float(dx))
+                for x, dx in np.asarray(self.x_spacing, dtype=float)
+            )
+            if not pairs:
+                raise ValueError("x_spacing needs at least one (x, dx) pair")
+            self.x_spacing = pairs
+            self.x_through = tuple(float(x) for x in np.ravel(self.x_through))
+            self.num_gridpoints = (self.x_nodes.size, self.num_gridpoints[1])
+
+    @property
+    def graded(self) -> bool:
+        """Whether the x axis is graded (``x_spacing``)."""
+        return self.x_spacing is not None
+
+    @property
+    def x_nodes(self) -> np.ndarray | None:
+        """The node positions along a graded x axis; None for a uniform one."""
+        if self.x_spacing is None:
+            return None
+        from patchwork import graded_nodes
+
+        return graded_nodes(
+            self.lower_bound[0],
+            self.upper_bound[0],
+            self.x_spacing,
+            through=self.x_through,
+        )
 
     @property
     def deltas(self) -> list[float]:
-        """Return the node spacing along each axis, ``(upper - lower) / (n - 1)``."""
+        """Return the node spacing along each axis, ``(upper - lower) / (n - 1)``.
+
+        Along a graded x axis the mean spacing.
+        """
         return [
             (b1 - b0) / (n - 1)
             for b0, b1, n in zip(
@@ -127,6 +172,14 @@ class GridParams:
             "lower_bound": with_unit(self.lower_bound, "m"),
             "upper_bound": with_unit(self.upper_bound, "m"),
             "coordinates": self.coordinates,
+            **(
+                {
+                    "x_spacing": [list(pair) for pair in self.x_spacing],
+                    "x_through": list(self.x_through),
+                }
+                if self.x_spacing is not None
+                else {}
+            ),
         }
 
     @classmethod
@@ -135,7 +188,15 @@ class GridParams:
 
         picnic's entries ``nvel`` and ``domain_decomposition`` are accepted and ignored.
         """
-        keys = ("ndim", "num_gridpoints", "lower_bound", "upper_bound", "coordinates")
+        keys = (
+            "ndim",
+            "num_gridpoints",
+            "lower_bound",
+            "upper_bound",
+            "coordinates",
+            "x_spacing",
+            "x_through",
+        )
         unknown = set(params) - set(keys) - {"nvel", "domain_decomposition"}
         if unknown:
             raise KeyError(f"unknown grid entries {sorted(unknown)}")

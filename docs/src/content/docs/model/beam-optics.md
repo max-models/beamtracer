@@ -91,6 +91,31 @@ Python or in the file, takes an astropy Quantity (`2 * u.mm`), a quantity string
 or a bare number in its documented unit (SI, energies and temperatures in eV, masses in u),
 and is stored in that unit; `to_dict` writes the quantity strings (`"0.002 m"`).
 
+## A graded beam axis
+
+The beam's optics are set where the potential changes fast (the meniscus, the gaps between
+the grids) and hardly change along a drift. `GridParams(x_spacing=...)` grades the beam axis:
+`(x, dx)` pairs give the node spacing wanted at `x`, linear between them and constant beyond,
+and the nodes along `x` follow it with cells that change in size smoothly
+(`patchwork.graded_nodes`); the spacing across the beam is that of `num_gridpoints` along `y`.
+`x_through` puts nodes at given positions, the faces and tips of the electrodes, so that their
+surfaces fall on the mesh. The field solve (patchwork's `NodalPoisson` on a graded axis), the
+staggered field, the space charge and both tracers use the physical cell sizes; refinement
+boxes split the graded cells evenly.
+
+```python
+grid = GridParams(
+    num_gridpoints=(2, 81),  # along x set by x_spacing
+    upper_bound=(0.120, 0.020),
+    x_spacing=[(0.0, 0.5e-3), (0.012, 0.25e-3), (0.037, 0.25e-3), (0.060, 2.0e-3)],
+    x_through=(0.014, 0.016, 0.018, 0.030, 0.033, 0.036),
+)
+```
+
+The example script "Graded beam axis" compares it with uniform meshes on an extraction followed
+by a drift: the beam of a uniform 0.25 mm mesh with 40 % of its nodes. 2D only, and not with
+adaptive refinement.
+
 ## Electrodes of several shapes
 
 An electrode is one entry of `objects`: one name and one potential. `ObjectParams.union`
