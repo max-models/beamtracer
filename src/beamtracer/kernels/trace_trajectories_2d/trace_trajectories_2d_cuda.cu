@@ -61,13 +61,39 @@ __device__ static double mesh_y(double x1, double x2, long long cylindrical, dou
     return x1;
 }
 
+// the edge [nodes(c), nodes(c + 1)] of the sorted nodes that holds x (the ends' beyond)
+__device__ static long long node_cell(double x, const Array1D<double>& nodes) {
+    const long long n = nodes.shape[0];
+    long long lo = 0, hi = n - 1;
+    if (x >= nodes(n - 1)) {
+        lo = n - 2;
+    } else if (x > nodes(0)) {
+        while (hi - lo > 1) {
+            const long long mid = (lo + hi) / 2;
+            if (nodes(mid) <= x) lo = mid; else hi = mid;
+        }
+    }
+    return lo;
+}
+
+// the uniform coordinate x0 + h * index of x on the graded axis of the nodes
+__device__ static double uniform_x(double x, long long graded, const Array1D<double>& nodes,
+                                   double x0, double h) {
+    if (graded == 0) return x;
+    const long long c = node_cell(x, nodes);
+    return x0 + h * (c + (x - nodes(c)) / (nodes(c + 1) - nodes(c)));
+}
+
 __device__ static void acceleration_2d(
     double x0, double x1, double x2, double qm, const Array1D<double>& fxs,
     const Array1D<double>& fys, const Array2D<long long>& patch_int,
     const Array2D<double>& patch_real, long long n_patches,
-    long long cylindrical, double plane_y, double* a0, double* a1, double* a2
+    long long cylindrical, double plane_y, long long graded,
+    const Array1D<double>& x_nodes, double origin_x, double h,
+    double* a0, double* a1, double* a2
 ) {
     double ex, ey;
+    x0 = uniform_x(x0, graded, x_nodes, origin_x, h);
     if (cylindrical != 1) {
         // planar; below a symmetry plane the field is mirrored: E_y changes sign
         const double sign = (cylindrical == 2 && x1 < plane_y) ? -1.0 : 1.0;
@@ -166,7 +192,9 @@ void trace_trajectories_2d(
     Array3D<double> paths,
     Array1D<long long> path_count,
     long long num_threads,
-    Array2D<double> charge
+    Array2D<double> charge,
+    long long graded,
+    Array1D<double> x_nodes
 ) {
     const long long m = blockDim.x * (long long)blockIdx.x + threadIdx.x;
     if (m >= active.shape[0]) return;
@@ -188,10 +216,17 @@ void trace_trajectories_2d(
     double a0 = 0.0, a1 = 0.0, a2 = 0.0;
     while (ns < max_steps) {
         // the spacing of the finest patch at the step's start
-        const double hloc = patch_real(
-            patch_of(x0, mesh_y(x1, x2, cylindrical, origin_y), patch_real, n_patches), 2);
+        double hloc = patch_real(
+            patch_of(uniform_x(x0, graded, x_nodes, origin_x, h),
+                     mesh_y(x1, x2, cylindrical, origin_y), patch_real, n_patches), 2);
+        if (graded != 0) {
+            // the patch's cells are shorter along x where the base edge is
+            const long long cg = node_cell(x0, x_nodes);
+            const double ratio = (x_nodes(cg + 1) - x_nodes(cg)) / h;
+            if (ratio < 1.0) hloc = hloc * ratio;
+        }
         if (!have) {
-            acceleration_2d(x0, x1, x2, qmk, fxs, fys, patch_int, patch_real, n_patches, cylindrical, origin_y, &a0, &a1, &a2);
+            acceleration_2d(x0, x1, x2, qmk, fxs, fys, patch_int, patch_real, n_patches, cylindrical, origin_y, graded, x_nodes, origin_x, h, &a0, &a1, &a2);
         }
         const double speed = sqrt(v0 * v0 + v1 * v1 + v2 * v2);
         const double accel = sqrt(a0 * a0 + a1 * a1 + a2 * a2);
@@ -214,7 +249,7 @@ void trace_trajectories_2d(
             y1 = x1 + dt * kx1;
             y2 = x2 + dt * kx2;
             double g0, g1, g2;
-            acceleration_2d(y0, y1, y2, qmk, fxs, fys, patch_int, patch_real, n_patches, cylindrical, origin_y, &g0, &g1, &g2);
+            acceleration_2d(y0, y1, y2, qmk, fxs, fys, patch_int, patch_real, n_patches, cylindrical, origin_y, graded, x_nodes, origin_x, h, &g0, &g1, &g2);
             w0 = kx0 + hdt * g0;
             w1 = kx1 + hdt * g1;
             w2 = kx2 + hdt * g2;
@@ -226,19 +261,19 @@ void trace_trajectories_2d(
         const double k2x2 = v2 + 0.5 * dt * a2;
         double k2v0, k2v1, k2v2;
         acceleration_2d(x0 + 0.5 * dt * v0, x1 + 0.5 * dt * v1, x2 + 0.5 * dt * v2, qmk, fxs, fys, patch_int, patch_real, n_patches,
-                        cylindrical, origin_y, &k2v0, &k2v1, &k2v2);
+                        cylindrical, origin_y, graded, x_nodes, origin_x, h, &k2v0, &k2v1, &k2v2);
         const double k3x0 = v0 + 0.5 * dt * k2v0;
         const double k3x1 = v1 + 0.5 * dt * k2v1;
         const double k3x2 = v2 + 0.5 * dt * k2v2;
         double k3v0, k3v1, k3v2;
         acceleration_2d(x0 + 0.5 * dt * k2x0, x1 + 0.5 * dt * k2x1, x2 + 0.5 * dt * k2x2, qmk, fxs, fys, patch_int, patch_real, n_patches,
-                        cylindrical, origin_y, &k3v0, &k3v1, &k3v2);
+                        cylindrical, origin_y, graded, x_nodes, origin_x, h, &k3v0, &k3v1, &k3v2);
         const double k4x0 = v0 + dt * k3v0;
         const double k4x1 = v1 + dt * k3v1;
         const double k4x2 = v2 + dt * k3v2;
         double k4v0, k4v1, k4v2;
         acceleration_2d(x0 + dt * k3x0, x1 + dt * k3x1, x2 + dt * k3x2, qmk, fxs, fys, patch_int, patch_real, n_patches,
-                        cylindrical, origin_y, &k4v0, &k4v1, &k4v2);
+                        cylindrical, origin_y, graded, x_nodes, origin_x, h, &k4v0, &k4v1, &k4v2);
         y0 = x0 + dt / 6.0 * (v0 + 2.0 * k2x0 + 2.0 * k3x0 + k4x0);
         y1 = x1 + dt / 6.0 * (v1 + 2.0 * k2x1 + 2.0 * k3x1 + k4x1);
         y2 = x2 + dt / 6.0 * (v2 + 2.0 * k2x2 + 2.0 * k3x2 + k4x2);
@@ -250,7 +285,7 @@ void trace_trajectories_2d(
         const double m1 = 0.5 * (x1 + y1) + dt * (v1 - w1) / 8.0;
         const double m2 = 0.5 * (x2 + y2) + dt * (v2 - w2) / 8.0;
         const double my = mesh_y(m1, m2, cylindrical, origin_y);
-        deposit_point_2d(m0, my, dqk * dt, patch_int, patch_real, n_patches, cylindrical, charge);
+        deposit_point_2d(uniform_x(m0, graded, x_nodes, origin_x, h), my, dqk * dt, patch_int, patch_real, n_patches, cylindrical, charge);
         ns = ns + 1;
         for (long long p = 0; p < n_planes; ++p) {
             const double xp = planes(p);
@@ -284,18 +319,19 @@ void trace_trajectories_2d(
             }
             path_count(slot) = c + 1;
         }
-        if (px >= upper_x) {
+        const double lpx = uniform_x(px, graded, x_nodes, origin_x, h);
+        if (lpx >= upper_x) {
             st = 0;
-        } else if (px < origin_x) {
+        } else if (lpx < origin_x) {
             st = 1;
         } else if (py > upper_y || (cylindrical == 0 && py < origin_y)) {
             st = 2;
         } else {
-            const long long i = min(max((long long)((px - origin_x) / h), 0LL), nx - 2);
+            const long long i = min(max((long long)((lpx - origin_x) / h), 0LL), nx - 2);
             const long long j = min(max((long long)((py - origin_y) / h), 0LL), ny - 2);
             const long long cell = cells(i, j);
             if (cell >= 0) {
-                const long long si = min(max((long long)(((px - origin_x) / h - i) * refine), 0LL), refine - 1);
+                const long long si = min(max((long long)(((lpx - origin_x) / h - i) * refine), 0LL), refine - 1);
                 const long long sj = min(max((long long)(((py - origin_y) / h - j) * refine), 0LL), refine - 1);
                 const long long e = subcells((cell * refine + si) * refine + sj);
                 if (e >= 0) {

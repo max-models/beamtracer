@@ -704,7 +704,8 @@ class BeamOpticsConfig:
                 f"BeamOptics needs cartesian or cylindrical coordinates, got "
                 f"{self.grid.coordinates!r}"
             )
-        deltas = self.grid.deltas
+        # a graded x axis has its own spacing; the others are equal
+        deltas = self.grid.deltas[1:] if self.grid.graded else self.grid.deltas
         if max(deltas) - min(deltas) > 1e-9 * max(deltas):
             raise ValueError(f"BeamOptics needs equal node spacing, got {deltas}")
         self.beams = [beam_from_value(beam) for beam in self.beams]
@@ -721,6 +722,11 @@ class BeamOpticsConfig:
         self.adaptive_refinement = coerce(
             AdaptiveRefinementParams, self.adaptive_refinement
         )
+        if self.grid.graded and self.adaptive_refinement is not None:
+            raise ValueError(
+                "adaptive refinement needs a uniform grid: use refinement boxes with "
+                "x_spacing"
+            )
         self.charge_changing = coerce(ChargeChangingParams, self.charge_changing)
         self.diagnostic_planes = list(self.diagnostic_planes)
         if (

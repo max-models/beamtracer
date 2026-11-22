@@ -58,6 +58,28 @@ def _on_plane(mesh: IonOpticsMesh, y0: float) -> bool:
     return mesh.symmetry_plane and abs(y0 - mesh.origin[1]) <= 1e-9 * mesh.h
 
 
+def _part(
+    mesh: IonOpticsMesh, first: int, count: int, first_y: int, level: int
+) -> dict[str, Any]:
+    """The settings of a box of ``mesh`` refined to ``level``: ``count`` nodes along x.
+
+    From node ``first`` along x and ``first_y`` along y of the level. Along a graded x the
+    base nodes, and those of the level evenly between them.
+    """
+    h = mesh.h / 2**level
+    y0 = mesh.origin[1] + first_y * h
+    if not mesh.graded:
+        x0 = mesh.origin[0] + first * h
+        return {"origin": (x0, y0), "symmetry_plane": _on_plane(mesh, y0)}
+    x_nodes = mesh.position_x(np.arange(first, first + count) / 2**level)
+    return {
+        "origin": (float(x_nodes[0]), y0),
+        "x_nodes": x_nodes,
+        "logical_x0": mesh.logical_x0 + first * h,
+        "symmetry_plane": _on_plane(mesh, y0),
+    }
+
+
 def patches_of(mesh: IonOpticsMesh, refinement: Sequence[Refinement]) -> list[Patch]:
     """The base patch and one patch per refined box, coarse to fine.
 
@@ -68,46 +90,56 @@ def patches_of(mesh: IonOpticsMesh, refinement: Sequence[Refinement]) -> list[Pa
     patches = [Patch(0, ((0, nx - 1), (0, ny - 1)), mesh)]
     for box in sorted(refinement, key=lambda b: b.level):
         level = int(box.level)
-        parent_h = mesh.h / 2 ** (level - 1)
+        scale = 2 ** (level - 1)
         cells = []
         for axis in range(2):
             lower = max(mesh.origin[axis], box.lower[axis])
             upper = min(mesh.upper[axis], box.upper[axis])
-            n_parent = round((mesh.upper[axis] - mesh.origin[axis]) / parent_h)
-            i0 = int(np.floor((lower - mesh.origin[axis]) / parent_h + 1e-9))
-            i1 = int(np.ceil((upper - mesh.origin[axis]) / parent_h - 1e-9))
+            n_parent = (mesh.shape[axis] - 1) * scale
+            # the box in the parent level's cells (along a graded x, by node index)
+            if axis == 0:
+                s0, s1 = mesh.index_x(lower) * scale, mesh.index_x(upper) * scale
+            else:
+                parent_h = mesh.h / scale
+                s0 = (lower - mesh.origin[1]) / parent_h
+                s1 = (upper - mesh.origin[1]) / parent_h
+            i0 = int(np.floor(s0 + 1e-9))
+            i1 = int(np.ceil(s1 - 1e-9))
             i0, i1 = max(i0, 0), min(i1, n_parent)
             if i1 <= i0:
                 raise ValueError(f"the refined box {box} is outside the mesh")
             cells.append((2 * i0, 2 * i1))
         h = mesh.h / 2**level
-        origin = tuple(mesh.origin[a] + cells[a][0] * h for a in range(2))
+        fine = 2**level
         shape = tuple(cells[a][1] - cells[a][0] + 1 for a in range(2))
+        # the field's mesh: two cells (one of the level below) more on each side
+        lower_margin = [min(2, cells[a][0]) for a in range(2)]
+        upper_margin = [
+            min(2, (mesh.shape[a] - 1) * fine - cells[a][1]) for a in range(2)
+        ]
+
         patch_mesh = IonOpticsMesh(
             shape=shape,
-            origin=origin,
             h=h,
             geometry=mesh.geometry,
             electrodes=mesh.electrodes,
             patch=True,
-            symmetry_plane=_on_plane(mesh, origin[1]),
+            **_part(mesh, cells[0][0], shape[0], cells[1][0], level),
         )
-        # the field's mesh: two cells (one of the level below) more on each side
-        lower_margin = [
-            min(2, round((origin[a] - mesh.origin[a]) / h)) for a in range(2)
-        ]
-        upper_margin = [
-            min(2, round((mesh.upper[a] - (origin[a] + (shape[a] - 1) * h)) / h))
-            for a in range(2)
-        ]
+        settings = _part(
+            mesh,
+            cells[0][0] - lower_margin[0],
+            shape[0] + lower_margin[0] + upper_margin[0],
+            cells[1][0] - lower_margin[1],
+            level,
+        )
         field_mesh = IonOpticsMesh(
             shape=tuple(shape[a] + lower_margin[a] + upper_margin[a] for a in range(2)),
-            origin=tuple(origin[a] - lower_margin[a] * h for a in range(2)),
             h=h,
             geometry=mesh.geometry,
             electrodes=mesh.electrodes,
             patch=True,
-            symmetry_plane=_on_plane(mesh, origin[1] - lower_margin[1] * h),
+            **settings,
         )
         inner = (
             slice(lower_margin[0], lower_margin[0] + shape[0]),
@@ -270,7 +302,7 @@ def _bilinear(
         if not inside.any():
             continue
         nxp, nyp = mesh.shape
-        s = (x[inside] - mesh.origin[0]) / mesh.h
+        s = mesh.index_x(x[inside])
         t = (y[inside] - mesh.origin[1]) / mesh.h
         i = np.clip(np.floor(s).astype(np.int64), 0, nxp - 2)
         j = np.clip(np.floor(t).astype(np.int64), 0, nyp - 2)
@@ -332,9 +364,14 @@ class PatchedElectricField:
         return which
 
     def spacing(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
-        """The node spacing of the finest patch at each point."""
-        h = np.array([patch.mesh.h for patch in self.patches])
-        return h[self.patch_of(x, y)]
+        """The node spacing of the finest patch at each point (its smallest edge there)."""
+        which = self.patch_of(x, y)
+        out = np.empty(np.shape(x))
+        for number, patch in enumerate(self.patches):
+            mine = which == number
+            if mine.any():
+                out[mine] = patch.mesh.spacing_at(np.asarray(x)[mine])
+        return out
 
     def __call__(self, x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Return ``(E_x, E_y)`` [V/m] at the points ``(x, y)``."""

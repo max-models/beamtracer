@@ -7,6 +7,18 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- A graded beam axis: `GridParams(x_spacing=[(x, dx), ...])` gives the node spacing wanted
+  along `x` (linear between the pairs), and `x_through` positions that must be nodes (the
+  electrodes' faces and tips); the nodes come from `patchwork.graded_nodes`.
+  `IonOpticsMesh(x_nodes=...)` takes them: the electrode distances are fractions of each
+  edge, `StaggeredElectricField` differences over the physical edges, the field is solved by
+  patchwork's `NodalPoisson` on a graded axis, refinement boxes split the graded cells evenly,
+  and the space charge is divided by the physical node volumes. Both tracers locate points by
+  the uniform coordinate of the graded axis (`IonOpticsMesh.logical_x`); the compiled kernel
+  (Pyccel and CUDA) takes the axis's nodes and a flag, and a step the shorter of the patch's
+  spacing and the local edge. Uniform meshes run as before. 2D only, not with adaptive
+  refinement. Example script "Graded beam axis": an extraction and a 120 mm drift with the beam
+  of a uniform 0.25 mm mesh on 40 % of its nodes.
 - The beam's own magnetic field (`self_magnetic_field=True`): the tracer deposits the
   beam's current as well, and its field, from Ampère's law of magnetostatics, acts on the
   next trace (`beamtracer.solver.self_field`): Ampère's integral in cylindrical and planar

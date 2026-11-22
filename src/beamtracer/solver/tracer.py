@@ -594,9 +594,7 @@ class BeamTracer:
     def _near_electrode(self, px: np.ndarray, py: np.ndarray) -> np.ndarray:
         """Return whether points lie in a cell that touches an electrode."""
         mesh = self.mesh
-        i = np.clip(
-            ((px - mesh.origin[0]) / mesh.h).astype(np.int64), 0, mesh.shape[0] - 2
-        )
+        i = np.clip(mesh.index_x(px).astype(np.int64), 0, mesh.shape[0] - 2)
         j = np.clip(
             ((py - mesh.origin[1]) / mesh.h).astype(np.int64), 0, mesh.shape[1] - 2
         )
@@ -612,19 +610,21 @@ class BeamTracer:
         mesh = self.mesh
         h = mesh.h
         density = charge.copy()
+        # the length of every node's cell along x: half of each edge (an end node's half)
+        length = np.zeros(mesh.shape[0])
+        length[:-1] += 0.5 * mesh.dx
+        length[1:] += 0.5 * mesh.dx
         if mesh.cylindrical:
             j = np.arange(mesh.shape[1])
             r1 = (j - 0.5) * h + mesh.origin[1]
             r2 = (j + 0.5) * h + mesh.origin[1]
-            volume = np.pi * h * (r2 * r2 - r1 * r1)
-            volume[0] = np.pi * h * (h + mesh.origin[1]) ** 2
-            density /= volume[None, :]
+            ring = np.pi * (r2 * r2 - r1 * r1)
+            ring[0] = np.pi * (h + mesh.origin[1]) ** 2
+            density /= length[:, None] * ring[None, :]
         else:
-            density /= h * h
+            density /= length[:, None] * h
         density[:, 0] *= 2.0
         density[:, -1] *= 2.0
-        density[0, :] *= 2.0
-        density[-1, :] *= 2.0
         return density
 
     def _finalize(self, charge: np.ndarray) -> np.ndarray:
@@ -710,7 +710,7 @@ class BeamTracer:
         field = self.electric
         if isinstance(field, PatchedElectricField):
             return field.spacing(*self._project(x))
-        return self.mesh.h
+        return self.mesh.spacing_at(x[0])
 
     @scope_profiler.profile("beamtracer.deposit", tags=PROFILE_TAGS)
     def _deposit(
@@ -738,11 +738,12 @@ class BeamTracer:
         for mesh, target, mine in parts:
             if isinstance(mine, np.ndarray) and not mine.any():
                 continue
+            # on a graded axis the kernel locates the points by their uniform coordinate
             deposit_trajectories_2d(
-                np.ascontiguousarray(px[mine]),
+                np.ascontiguousarray(mesh.logical_x(px[mine])),
                 np.ascontiguousarray(py[mine]),
                 np.ascontiguousarray(q[mine]),
-                *map(float, mesh.origin),
+                *map(float, mesh.logical_origin),
                 mesh.h,
                 int(mesh.cylindrical),
                 target,
@@ -756,11 +757,12 @@ class BeamTracer:
             return
         px, py = self._project(points)
         mesh = self.mesh
+        # on a graded axis the kernel locates the points by their uniform coordinate
         deposit_trajectories_2d(
-            np.ascontiguousarray(px),
+            np.ascontiguousarray(mesh.logical_x(px)),
             np.ascontiguousarray(py),
             np.ascontiguousarray(q, dtype=float),
-            *map(float, mesh.origin),
+            *map(float, mesh.logical_origin),
             mesh.h,
             int(mesh.cylindrical),
             target,
@@ -1007,7 +1009,7 @@ class BeamTracer:
         mesh = self.mesh
 
         def sample(fraction: np.ndarray) -> np.ndarray:
-            px = mesh.origin[0] + mesh.h * (ci[:, None, None] + fraction[None, :, None])
+            px = mesh.position_x(ci[:, None, None] + fraction[None, :, None])
             py = mesh.origin[1] + mesh.h * (cj[:, None, None] + fraction[None, None, :])
             px, py = np.broadcast_arrays(px, py)
             return mesh.inside_solid(px.ravel(), py.ravel()).reshape(px.shape)
@@ -1067,6 +1069,12 @@ class BeamTracer:
             fields, meshes = [field], [self.mesh]
             (bx0, by0), (bx1, by1) = self.mesh.origin, self.mesh.upper
             boxes = [(bx0, by0, bx1, by1)]
+        # the kernel works in the uniform coordinate along a graded x (`logical_x`)
+        base = self.mesh
+        boxes = [
+            (float(base.logical_x(x0)), y0, float(base.logical_x(x1)), y1)
+            for x0, y0, x1, y1 in boxes
+        ]
         patch_int = np.zeros((len(fields), 6), dtype=np.int64)
         patch_real = np.zeros((len(fields), 7))
         fx_offset = fy_offset = node_offset = 0
@@ -1076,7 +1084,7 @@ class BeamTracer:
             fx_offset += f.fx.size
             fy_offset += f.fy.size
             node_offset += nxp * nyp
-            patch_real[k] = (*m.origin, m.h, *box)
+            patch_real[k] = (*m.logical_origin, m.h, *box)
         fxs = np.concatenate(
             [np.ascontiguousarray(f.fx, dtype=float).ravel() for f in fields]
         )
@@ -1120,6 +1128,8 @@ class BeamTracer:
         first = self._project(x[:, saved_ids])
 
         fields, meshes, fxs, fys, patch_int, patch_real = self._patch_arrays()
+        # the nodes of a graded x (Pyccel takes no empty arrays: two unused otherwise)
+        x_nodes = np.ascontiguousarray(mesh.x if mesh.graded else np.zeros(2))
         cells, subcells = self._electrode_lookup()
         # without planes one that is never crossed (NaN)
         planes = np.array(self.planes or (np.nan,), dtype=float)
@@ -1138,11 +1148,13 @@ class BeamTracer:
                 trace_trajectories_2d(
                     active, x, v, qm, dq, steps, status, electrode,
                     fxs, fys, patch_int, patch_real,
-                    *map(float, mesh.origin), mesh.h, *map(float, mesh.upper),
+                    *map(float, mesh.logical_origin), mesh.h,
+                    *map(float, mesh.logical_upper),
                     _geometry(mesh), INTEGRATORS.index(self.integrator),
                     self.step_fraction, self.max_steps,
                     cells, subcells, SUBCELLS, planes, hits, counts,
                     path_slot, paths, path_count, threads, charge,
+                    int(mesh.graded), x_nodes,
                 )  # fmt: skip
                 paused = active[status[active] == _PAUSED]
                 if not paused.size:

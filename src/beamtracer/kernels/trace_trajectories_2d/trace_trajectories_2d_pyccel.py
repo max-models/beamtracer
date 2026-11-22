@@ -14,6 +14,29 @@ costs more than the interpolation itself.
 from math import floor, hypot, sqrt
 
 
+def node_cell(x: float, nodes: "float[:]") -> int:
+    """The edge ``[nodes[c], nodes[c + 1]]`` of sorted ``nodes`` that holds ``x`` (the ends' beyond)."""
+    n = nodes.shape[0]
+    lo = 0
+    hi = n - 1
+    if x >= nodes[n - 1]:
+        lo = n - 2
+    elif x > nodes[0]:
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            if nodes[mid] <= x:
+                lo = mid
+            else:
+                hi = mid
+    return lo
+
+
+def uniform_x(x: float, nodes: "float[:]", x0: float, h: float) -> float:
+    """The uniform coordinate ``x0 + h * index`` of ``x`` on the graded axis of ``nodes``."""
+    c = node_cell(x, nodes)
+    return x0 + h * (c + (x - nodes[c]) / (nodes[c + 1] - nodes[c]))
+
+
 def trace_trajectories_2d(
     active: "int[:]",
     x: "float[:,:]",
@@ -47,6 +70,8 @@ def trace_trajectories_2d(
     path_count: "int[:]",
     num_threads: int,
     charge: "float[:,:]",
+    graded: int,
+    x_nodes: "float[:]",
 ) -> None:
     """Trace the ``active`` trajectories until they end, or reach a surface.
 
@@ -71,6 +96,12 @@ def trace_trajectories_2d(
     with a symmetry plane at ``y = origin_y`` (fields of ``(x, |y - origin_y|)``, ``E_y``
     mirrored, only ``upper_y`` an exit).
 
+    With ``graded`` the ``x`` axis is graded: ``x_nodes`` holds the mesh's node positions
+    along it, and every ``x`` is located by its uniform coordinate ``origin_x + h * index``
+    (the patches' origins, spacings and extents along ``x`` are given in it, as are
+    ``origin_x`` and ``upper_x``); a step takes the shorter of the patch's spacing and the
+    local edge along ``x``. The trajectories, planes and paths stay in ``x``.
+
     The field and the charge live on patches, finest first and the whole mesh last:
     ``patch_int[p]`` holds a patch's node counts ``nx, ny``, the offsets of its ``fx``
     ``(nx + 1, ny)`` in ``fxs`` and ``fy`` ``(nx, ny + 1)`` in ``fys``, its node count and
@@ -87,7 +118,7 @@ def trace_trajectories_2d(
     capacity = hits.shape[2]
     path_capacity = paths.shape[1]
     # fmt: off
-    #$ omp parallel for schedule(static, 1) num_threads(num_threads) private(pp, qq, pnx, pny, ofx, ofy, ofn, pox, poy, phh, hloc, rr, t, m, k, slot, nstage, have, ca0, ca1, ca2, x0, x1, x2, v0, v1, v2, qmk, ns, st, stage, q0, q1, q2, qy, r, cy, cz, sx, sy, s, w, u, i, j, low, high, ex, ey, g0, g1, g2, a0, a1, a2, kx0, kx1, kx2, sx0, sx1, sx2, sv0, sv1, sv2, speed, accel, dt, d2, hdt, dt6, y0, y1, y2, w0, w1, w2, m0, m1, m2, deposit, p, xp, before, after, c, px, py, cell, si, sj, e)
+    #$ omp parallel for schedule(static, 1) num_threads(num_threads) private(lx, lq, cg, pp, qq, pnx, pny, ofx, ofy, ofn, pox, poy, phh, hloc, rr, t, m, k, slot, nstage, have, ca0, ca1, ca2, x0, x1, x2, v0, v1, v2, qmk, ns, st, stage, q0, q1, q2, qy, r, cy, cz, sx, sy, s, w, u, i, j, low, high, ex, ey, g0, g1, g2, a0, a1, a2, kx0, kx1, kx2, sx0, sx1, sx2, sv0, sv1, sv2, speed, accel, dt, d2, hdt, dt6, y0, y1, y2, w0, w1, w2, m0, m1, m2, deposit, p, xp, before, after, c, px, py, cell, si, sj, e)
     # fmt: on
     for t in range(num_threads):
         m = t
@@ -119,14 +150,23 @@ def trace_trajectories_2d(
                     rr = hypot(x1, x2)
                 elif cylindrical == 2:
                     rr = origin_y + abs(x1 - origin_y)
+                lx = x0
+                if graded != 0:
+                    lx = uniform_x(x0, x_nodes, origin_x, h)
                 hloc = h
                 for qq in range(n_patches - 1):
                     if (
-                        x0 >= patch_real[qq, 3] and x0 <= patch_real[qq, 5]
+                        lx >= patch_real[qq, 3] and lx <= patch_real[qq, 5]
                         and rr >= patch_real[qq, 4] and rr <= patch_real[qq, 6]
                     ):  # fmt: skip
                         hloc = patch_real[qq, 2]
                         break
+                if graded != 0:
+                    # the patch's cells are shorter along x where the base edge is
+                    cg = node_cell(x0, x_nodes)
+                    d2 = (x_nodes[cg + 1] - x_nodes[cg]) / h
+                    if d2 < 1.0:
+                        hloc = hloc * d2
                 # classical Runge--Kutta as BeamTracer._rk4: stage s samples the field at
                 # q, its velocity is kx; sx and sv sum the stages with weights 1, 2, 2, 1
                 q0 = x0
@@ -158,10 +198,13 @@ def trace_trajectories_2d(
                             if q1 < origin_y:
                                 cy = -1.0
                             qy = origin_y + abs(q1 - origin_y)
+                        lq = q0
+                        if graded != 0:
+                            lq = uniform_x(q0, x_nodes, origin_x, h)
                         pp = n_patches - 1
                         for qq in range(n_patches - 1):
                             if (
-                                q0 >= patch_real[qq, 3] and q0 <= patch_real[qq, 5]
+                                lq >= patch_real[qq, 3] and lq <= patch_real[qq, 5]
                                 and qy >= patch_real[qq, 4] and qy <= patch_real[qq, 6]
                             ):  # fmt: skip
                                 pp = qq
@@ -173,7 +216,7 @@ def trace_trajectories_2d(
                         pox = patch_real[pp, 0]
                         poy = patch_real[pp, 1]
                         phh = patch_real[pp, 2]
-                        sx = (q0 - pox) / phh
+                        sx = (lq - pox) / phh
                         sy = (qy - poy) / phh
                         s = sx + 0.5
                         i = floor(s)
@@ -322,6 +365,8 @@ def trace_trajectories_2d(
                     m1 = hypot(m1, m2)
                 elif cylindrical == 2:
                     m1 = origin_y + abs(m1 - origin_y)
+                if graded != 0:
+                    m0 = uniform_x(m0, x_nodes, origin_x, h)
                 pp = n_patches - 1
                 for qq in range(n_patches - 1):
                     if (
@@ -402,6 +447,8 @@ def trace_trajectories_2d(
                         paths[slot, c, 0] = px
                         paths[slot, c, 1] = py
                     path_count[slot] = c + 1
+                if graded != 0:
+                    px = uniform_x(px, x_nodes, origin_x, h)
                 if px >= upper_x:
                     st = 0
                 elif px < origin_x:

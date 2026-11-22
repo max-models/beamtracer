@@ -100,7 +100,7 @@ class NodeMagneticField:
         """The field at the points ``(x, y)``, constant beyond the mesh."""
         mesh = self.mesh
         nx, ny = mesh.shape
-        sx = np.clip((np.asarray(x) - mesh.origin[0]) / mesh.h, 0.0, nx - 1.0)
+        sx = np.clip(mesh.index_x(x), 0.0, nx - 1.0)
         sy = np.clip((np.asarray(y) - mesh.origin[1]) / mesh.h, 0.0, ny - 1.0)
         i = np.minimum(sx.astype(np.int64), nx - 2)
         j = np.minimum(sy.astype(np.int64), ny - 2)

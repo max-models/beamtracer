@@ -353,7 +353,9 @@ class BeamOptics:
         self.mesh = IonOpticsMesh(
             shape=grid.num_gridpoints,
             origin=grid.lower_bound,
-            h=grid.deltas[0],
+            # along a graded x the spacing of y (the nodes along x are given)
+            h=grid.deltas[1] if grid.graded else grid.deltas[0],
+            x_nodes=grid.x_nodes,
             geometry="cylindrical" if grid.coordinates == "cylindrical" else "planar",
             electrodes=[_electrode(name, obj) for name, obj in config.objects.items()],
             faces=self._faces(),

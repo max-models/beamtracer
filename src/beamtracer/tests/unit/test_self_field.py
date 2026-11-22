@@ -101,8 +101,13 @@ def test_the_vector_potential_converges_to_a_manufactured_field(planes) -> None:
     assert coarse / fine > 3.0  # second order
 
 
-def _drift(coordinates: str, *, fraction: float, own: bool) -> float:
-    """The edge of a uniform proton beam after drifting 0.1 m: its growth [m]."""
+def _drift(
+    coordinates: str, *, fraction: float, own: bool, graded: bool = False
+) -> float:
+    """The edge of a uniform proton beam after drifting 0.1 m: its growth [m].
+
+    With ``graded`` the beam axis is graded from 0.5 mm to 2 mm cells.
+    """
     neumann = FieldBoundaryCondition.neumann(0.0)
     radius = 2e-3
     config = BeamOpticsConfig(
@@ -112,6 +117,7 @@ def _drift(coordinates: str, *, fraction: float, own: bool) -> float:
             lower_bound=(0.0, 0.0),
             upper_bound=(0.1, 10e-3),
             coordinates=coordinates,
+            x_spacing=[(0.0, 0.5e-3), (0.1, 2e-3)] if graded else None,
         ),
         bcs_field=FieldBCs(
             x_lower=neumann,
@@ -156,6 +162,13 @@ def test_the_pinch_scales_the_space_charge_by_one_minus_f_minus_beta_squared(
     with_field = _drift(coordinates, fraction=fraction, own=True)
     expected = (1.0 - fraction - BETA2) / (1.0 - fraction)
     assert with_field / without == pytest.approx(expected, rel=0.02)
+
+
+@pytest.mark.parametrize("coordinates", ["cylindrical", "cartesian"])
+def test_the_pinch_on_a_graded_beam_axis(coordinates) -> None:
+    without = _drift(coordinates, fraction=0.0, own=False, graded=True)
+    with_field = _drift(coordinates, fraction=0.0, own=True, graded=True)
+    assert with_field / without == pytest.approx(1.0 - BETA2, rel=0.02)
 
 
 def test_the_pinch_in_3d() -> None:

@@ -195,16 +195,25 @@ class _Field:
         (x0, y0), (x1, y1) = mesh.origin, mesh.upper
         cylindrical = mesh.cylindrical
         self.mesh = mesh
+        # a graded beam axis: its nodes are the base nodes of patchwork's axis
+        graded = {}
+        if mesh.graded:
+            nodes = (None, mesh.x_nodes) if cylindrical else (mesh.x_nodes, None)
+            graded["axis_nodes"] = nodes
         if cylindrical:
             hierarchy = AMRHierarchy(
                 base_shape=(ny - 1, nx - 1),
                 bounds=((y0, y1), (x0, x1)),
                 geometry="cylindrical",
                 comm=comm,
+                **graded,
             )
         else:
             hierarchy = AMRHierarchy(
-                base_shape=(nx - 1, ny - 1), bounds=((x0, x1), (y0, y1)), comm=comm
+                base_shape=(nx - 1, ny - 1),
+                bounds=((x0, x1), (y0, y1)),
+                comm=comm,
+                **graded,
             )
         patches = patches_of(mesh, refinement)
         for patch in patches[1:]:
@@ -223,13 +232,15 @@ class _Field:
             """
             xs, ys = mesh_points(start)
             xe, ye = mesh_points(end)
-            dx, dy = xe - xs, ye - ys
-            length = np.maximum(np.abs(dx), np.abs(dy))
-            level = np.rint(np.log2(mesh.h / length)).astype(np.int64)
+            # the edge in base-node units: its level, and along x or y
+            di = mesh.index_x(xe) - mesh.index_x(xs)
+            dj = (ye - ys) / mesh.h
+            length = np.maximum(np.abs(di), np.abs(dj))
+            level = np.rint(np.log2(1.0 / length)).astype(np.int64)
             direction = np.where(
-                np.abs(dx) >= np.abs(dy),
-                np.where(dx < 0, 0, 1),
-                np.where(dy < 0, 2, 3),
+                np.abs(di) >= np.abs(dj),
+                np.where(di < 0, 0, 1),
+                np.where(dj < 0, 2, 3),
             )
             out = np.ones(xs.size)
             done = np.zeros(xs.size, dtype=bool)
@@ -246,7 +257,7 @@ class _Field:
                     & (ys <= py1 + tiny)
                 )
                 if mine.any():
-                    i = np.rint((xs[mine] - px0) / h).astype(np.int64)
+                    i = np.rint(patch.mesh.index_x(xs[mine])).astype(np.int64)
                     j = np.rint((ys[mine] - py0) / h).astype(np.int64)
                     out[mine] = patch.mesh.distance[direction[mine], i, j]
                     done |= mine
@@ -274,7 +285,7 @@ class _Field:
                 x, y = mesh_points(points)
                 if not callable(region):
                     held = np.asarray(region, dtype=bool) & ~mesh.fixed
-                    i = np.rint((x - x0) / mesh.h).astype(np.int64)
+                    i = np.rint(mesh.index_x(x)).astype(np.int64)
                     j = np.rint((y - y0) / mesh.h).astype(np.int64)
                     return held[i, j]
                 inside = np.asarray(region(x, y), dtype=bool).copy()

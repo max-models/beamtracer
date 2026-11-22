@@ -19,10 +19,18 @@ def _edge_field(phi, solid, near, dist_lo, dist_hi, h, extrapolation):
     """Return the edge field ``(phi[i-1] - phi[i]) / h`` along axis 0.
 
     The edges next to electrode surfaces are taken from the bracketed surface distance;
-    the result is an ``(n + 1, ...)`` array (of any number of dimensions).
+    the result is an ``(n + 1, ...)`` array (of any number of dimensions). ``h`` is the
+    spacing, or the ``n - 1`` lengths of the edges along a graded axis.
     """
     n = phi.shape[0]
     out = np.zeros((n + 1, *phi.shape[1:]))
+    column = (-1,) + (1,) * (phi.ndim - 1)
+    lengths = np.broadcast_to(np.asarray(h, dtype=float), (n - 1,)).reshape(column)
+    h = lengths  # edge i - 1 .. i
+    h_before = np.ones_like(lengths)  # edge i - 2 .. i - 1
+    h_before[1:] = lengths[:-1]
+    h_after = np.ones_like(lengths)  # edge i .. i + 1
+    h_after[:-1] = lengths[1:]
     a, b = phi[:-1], phi[1:]  # nodes i - 1 and i of the edges i = 1 .. n - 1
     sa, sb = solid[:-1], solid[1:]
     na, nb = near[:-1], near[1:]
@@ -47,8 +55,8 @@ def _edge_field(phi, solid, near, dist_lo, dist_hi, h, extrapolation):
     d3 = np.ones_like(a)
     d3[:-1] = dist_lo[2:]
     inside = np.zeros_like(field)
-    inside = np.where(near0 & ~near3, (phi0 - a) / (d0 * h), inside)
-    inside = np.where(near3 & ~near0, (b - phi3) / (d3 * h), inside)
+    inside = np.where(near0 & ~near3, (phi0 - a) / (d0 * h_before), inside)
+    inside = np.where(near3 & ~near0, (b - phi3) / (d3 * h_after), inside)
     field = np.where(both, inside, field)
     out[1:-1] = field
     for end, (edge, first, second) in enumerate(((0, 1, 2), (n, n - 1, n - 2))):
@@ -81,10 +89,10 @@ def _staggered_problem() -> ConvergenceProblem:
 
 @method(
     equations={
-        "edges": r"E_{x,\, i-1/2,\, j} = \frac{\phi_{i-1,j} - \phi_{i,j}}{h}, \qquad E_{y,\, i,\, j-1/2} = \frac{\phi_{i,j-1} - \phi_{i,j}}{h}",
+        "edges": r"E_{x,\, i-1/2,\, j} = \frac{\phi_{i-1,j} - \phi_{i,j}}{x_i - x_{i-1}}, \qquad E_{y,\, i,\, j-1/2} = \frac{\phi_{i,j-1} - \phi_{i,j}}{h}",
         "surface": r"E_\text{edge} = \pm\frac{\phi_\text{near} - \phi_\text{electrode}}{d\, h} \quad \text{between a near-solid node and its electrode node}",
         "faces": r"E_\text{face} = -E_\text{first} \ \text{(mirror: the axis)} \quad \text{or} \quad E_\text{face} = 2 E_\text{first} - E_\text{second} \ \text{(linear)}",
-        "interpolation": r"E(x, y) = \text{bilinear interpolation on each staggered grid}, \qquad E_x \text{ at the index } \frac{x - x_0}{h} + \tfrac12",
+        "interpolation": r"E(x, y) = \text{bilinear interpolation on each staggered grid}, \qquad E_x \text{ at the index } \frac{x - x_0}{h} + \tfrac12 \ \text{(the fractional node index on a graded axis)}",
     },
     order=2,
     assumptions=(
@@ -128,7 +136,7 @@ class StaggeredElectricField:
             near,
             mesh.distance[0],
             mesh.distance[1],
-            mesh.h,
+            mesh.dx,
             self.extrapolation[0:2],
         )
         self.fy = np.ascontiguousarray(
@@ -150,9 +158,11 @@ class StaggeredElectricField:
         y = np.ascontiguousarray(y, dtype=float).ravel()
         ex, ey = np.empty_like(x), np.empty_like(y)
         if x.size:
+            # on a graded axis the kernel locates the points by their uniform coordinate
             staggered_field_2d(
-                x, y, self.fx, self.fy, *map(float, mesh.origin), mesh.h, ex, ey
-            )
+                np.ascontiguousarray(mesh.logical_x(x)),
+                y, self.fx, self.fy, *map(float, mesh.logical_origin), mesh.h, ex, ey,
+            )  # fmt: skip
         return ex, ey
 
 
