@@ -5,6 +5,15 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- The beam's own magnetic field (`self_magnetic_field=True`): the tracer deposits the
+  beam's current as well, and its field, from Ampère's law of magnetostatics, acts on the
+  next trace (`beamtracer.solver.self_field`): Ampère's integral in cylindrical and planar
+  geometry, the vector potential on patchwork's `NodalPoisson` in 3D. The 3D kernel
+  (Pyccel and CUDA) takes `has_j` and `current`. Checked against the generalised perveance
+  `K (1 - f - beta^2)` of a drifting beam in all three geometries.
+
 ### Changed
 
 - The negative-ion beamlet example (`negative_ion_extraction_optics`) emits its beams an

@@ -1,7 +1,7 @@
 // The CUDA version (GPU) of the trace_trajectories_3d kernel; trace_trajectories_3d_pyccel.py
 // next to this file is the Pyccel version (CPU), with the same arguments.  Launch with
 // n_threads=number of active trajectories: one thread per trajectory, depositing atomically
-// into charge(0, :) (num_threads is the number of host threads and is ignored here).
+// into charge(0, :) (and with has_j the current elements into current(0, :)) (num_threads is the number of host threads and is ignored here).
 
 #include "cunumpy/array_view.cuh"
 #include "cunumpy/atomic.cuh"
@@ -150,7 +150,9 @@ void trace_trajectories_3d(
     Array3D<double> paths,
     Array1D<long long> path_count,
     long long num_threads,
-    Array2D<double> charge
+    Array2D<double> charge,
+    long long has_j,
+    Array2D<double> current
 ) {
     const long long m = blockDim.x * (long long)blockIdx.x + threadIdx.x;
     if (m >= active.shape[0]) return;
@@ -267,6 +269,44 @@ void trace_trajectories_3d(
                     const double wk = dk ? frac[2] : 1.0 - frac[2];
                     cunumpy_atomic_add(&charge(0, c + di * n[1] * n[2] + dj * n[2] + dk),
                                        wi * wj * wk * deposit);
+                }
+            }
+        }
+        if (has_j != 0) {
+            // the current element dq (x' - x), on the base mesh
+            double jd[3];
+            for (int d = 0; d < 3; ++d) jd[d] = dqk * (y[d] - xs[d]);
+            if (mirror_y != 0 && 0.5 * (xs[1] + y[1]) < origin_y) jd[1] = -jd[1];
+            if (mirror_z != 0 && 0.5 * (xs[2] + y[2]) < origin_z) jd[2] = -jd[2];
+            const long long nb[3] = {nx, ny, nz};
+            const double ob[3] = {origin_x, origin_y, origin_z};
+            long long bidx[3];
+            double bfrac[3];
+            for (int d = 0; d < 3; ++d) {
+                const double s = (mid[d] - ob[d]) / h;
+                bidx[d] = (long long)floor(s);
+                bfrac[d] = s - bidx[d];
+                if (bidx[d] < 0) {
+                    bfrac[d] = 0.0;
+                    bidx[d] = 0;
+                } else if (bidx[d] >= nb[d] - 1) {
+                    bfrac[d] = 1.0;
+                    bidx[d] = nb[d] - 2;
+                }
+            }
+            const long long nodes = nx * ny * nz;
+            const long long cb = (bidx[0] * ny + bidx[1]) * nz + bidx[2];
+            for (int comp = 0; comp < 3; ++comp) {
+                for (int di = 0; di < 2; ++di) {
+                    const double wi = di ? bfrac[0] : 1.0 - bfrac[0];
+                    for (int dj = 0; dj < 2; ++dj) {
+                        const double wj = dj ? bfrac[1] : 1.0 - bfrac[1];
+                        for (int dk = 0; dk < 2; ++dk) {
+                            const double wk = dk ? bfrac[2] : 1.0 - bfrac[2];
+                            cunumpy_atomic_add(&current(0, comp * nodes + cb + di * ny * nz + dj * nz + dk),
+                                               wi * wj * wk * jd[comp]);
+                        }
+                    }
                 }
             }
         }

@@ -53,6 +53,8 @@ def trace_trajectories_3d(
     path_count: "int[:]",
     num_threads: int,
     charge: "float[:,:]",
+    has_j: int,
+    current: "float[:,:]",
 ) -> None:
     """Trace the ``active`` trajectories until they end, or reach a surface.
 
@@ -89,6 +91,11 @@ def trace_trajectories_3d(
     appends the mesh coordinates of every step's end to ``paths[slot]``, as far as it
     holds, counting all in ``path_count[slot]``. Thread ``t`` traces every
     ``num_threads``-th active trajectory.
+
+    With ``has_j`` every step also deposits its current element ``dq (x' - x)`` (three
+    components, the component normal to a symmetry plane mirrored with the point) on the
+    base mesh's nodes, trilinear at the same midpoint, into ``current[t]`` (component
+    ``c`` at ``c * nx * ny * nz`` plus the flattened node).
     """
     n_patches = patch_int.shape[0]
     nx = patch_int[n_patches - 1, 0]
@@ -99,7 +106,7 @@ def trace_trajectories_3d(
     capacity = hits.shape[2]
     path_capacity = paths.shape[1]
     # fmt: off
-    #$ omp parallel for schedule(static, 1) num_threads(num_threads) private(t, m, k, slot, nstage, have, ce0, ce1, ce2, cb0, cb1, cb2, x0, x1, x2, v0, v1, v2, qmk, ns, st, stage, q0, q1, q2, p0, p1, p2, s1, s2, sx, sy, sz, s, i, j, kz, a, b, c, w000, w001, w010, w011, w100, w101, w110, w111, n0, e0, e1, e2, b0, b1, b2, g0, g1, g2, a0, a1, a2, kx0, kx1, kx2, sx0, sx1, sx2, sv0, sv1, sv2, speed, accel, dt, d2, hdt, dt6, y0, y1, y2, w0, w1, w2, m0, m1, m2, deposit, p, xp, before, after, cc, px, py, pz, cell, si, sj, sk, e, tau, t0, t1, t2, tt, f, u0, u1, u2, r0, r1, r2, pp, qq, pnx, pny, pnz, ofx, ofy, ofz, ofn, pox, poy, poz, phh, hloc, ci, di, dj)
+    #$ omp parallel for schedule(static, 1) num_threads(num_threads) private(t, m, k, slot, nstage, have, ce0, ce1, ce2, cb0, cb1, cb2, x0, x1, x2, v0, v1, v2, qmk, ns, st, stage, q0, q1, q2, p0, p1, p2, s1, s2, sx, sy, sz, s, i, j, kz, a, b, c, w000, w001, w010, w011, w100, w101, w110, w111, n0, e0, e1, e2, b0, b1, b2, g0, g1, g2, a0, a1, a2, kx0, kx1, kx2, sx0, sx1, sx2, sv0, sv1, sv2, speed, accel, dt, d2, hdt, dt6, y0, y1, y2, w0, w1, w2, m0, m1, m2, deposit, p, xp, before, after, cc, px, py, pz, cell, si, sj, sk, e, tau, t0, t1, t2, tt, f, u0, u1, u2, r0, r1, r2, pp, qq, jd0, jd1, jd2, bi, bj, bk, ba, bbb, bc, bcc, nb, jc, pnx, pny, pnz, ofx, ofy, ofz, ofn, pox, poy, poz, phh, hloc, ci, di, dj)
     # fmt: on
     for t in range(num_threads):
         m = t
@@ -506,6 +513,63 @@ def trace_trajectories_3d(
                 charge[t, cc + di + 1] += a * (1.0 - b) * c * deposit
                 charge[t, cc + di + dj] += a * b * (1.0 - c) * deposit
                 charge[t, cc + di + dj + 1] += a * b * c * deposit
+                if has_j != 0:
+                    # the current element dq (x' - x), on the base mesh
+                    jd0 = dq[k] * (y0 - x0)
+                    jd1 = dq[k] * (y1 - x1)
+                    jd2 = dq[k] * (y2 - x2)
+                    if mirror_y != 0 and 0.5 * (x1 + y1) < origin_y:
+                        jd1 = -jd1
+                    if mirror_z != 0 and 0.5 * (x2 + y2) < origin_z:
+                        jd2 = -jd2
+                    sx = (m0 - origin_x) / h
+                    sy = (m1 - origin_y) / h
+                    sz = (m2 - origin_z) / h
+                    bi = floor(sx)
+                    bj = floor(sy)
+                    bk = floor(sz)
+                    ba = sx - bi
+                    bbb = sy - bj
+                    bc = sz - bk
+                    if bi < 0:
+                        ba = 0.0
+                        bi = 0
+                    elif bi >= nx - 1:
+                        ba = 1.0
+                        bi = nx - 2
+                    if bj < 0:
+                        bbb = 0.0
+                        bj = 0
+                    elif bj >= ny - 1:
+                        bbb = 1.0
+                        bj = ny - 2
+                    if bk < 0:
+                        bc = 0.0
+                        bk = 0
+                    elif bk >= nz - 1:
+                        bc = 1.0
+                        bk = nz - 2
+                    nb = nx * ny * nz
+                    dj = nz
+                    di = ny * nz
+                    for jc in range(3):
+                        if jc == 0:
+                            deposit = jd0
+                        elif jc == 1:
+                            deposit = jd1
+                        else:
+                            deposit = jd2
+                        bcc = jc * nb + bi * di + bj * dj + bk
+                        current[t, bcc] += (
+                            (1.0 - ba) * (1.0 - bbb) * (1.0 - bc) * deposit
+                        )
+                        current[t, bcc + 1] += (1.0 - ba) * (1.0 - bbb) * bc * deposit
+                        current[t, bcc + dj] += (1.0 - ba) * bbb * (1.0 - bc) * deposit
+                        current[t, bcc + dj + 1] += (1.0 - ba) * bbb * bc * deposit
+                        current[t, bcc + di] += ba * (1.0 - bbb) * (1.0 - bc) * deposit
+                        current[t, bcc + di + 1] += ba * (1.0 - bbb) * bc * deposit
+                        current[t, bcc + di + dj] += ba * bbb * (1.0 - bc) * deposit
+                        current[t, bcc + di + dj + 1] += ba * bbb * bc * deposit
                 ns = ns + 1
 
                 for p in range(n_planes):

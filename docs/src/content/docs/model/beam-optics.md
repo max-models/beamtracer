@@ -43,6 +43,15 @@ repeat). The geometry is planar (per unit depth) or cylindrically symmetric `(x,
   field separates them (see [trajectories that change state](#trajectories-that-change-state)).
 - **Space charge**: deposited at the midpoint of every step with an area-weighted linear
   shape, and reduced by `compensation` regions.
+- **The beam's own magnetic field**: `self_magnetic_field=True` deposits the beam's current
+  as well and adds its field, from Ampère's law of magnetostatics (`curl B = mu_0 J`, all
+  that Maxwell's equations leave for a steady beam): `B_theta = mu_0 I(x, r) / (2 pi r)` in
+  cylindrical geometry, `dB_z/dy = mu_0 J_x` integrated across a planar beam, and the vector
+  potential (`-laplace A = mu_0 J`, `B = curl A`) in 3D. For a beam along `x` it scales the
+  space-charge force by about `1 - f - beta^2` (`f` the compensated share). The change of
+  the envelope is `beta^2` times that of the uncompensated space charge, whatever `f` is:
+  for ions below a few MeV per nucleon it is far below the other errors, so it is off by
+  default. In 2D it runs on the NumPy tracer.
 - **Diagnostics**: `diagnostic_planes` give the current, rms emittance and Twiss parameters of
   each species (`model.beam_moments(x, "H+")`).
 

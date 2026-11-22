@@ -73,7 +73,7 @@ def _kernel_case(
         int(mirror), int(mirror), integrator, 0.5, 700, cells, subcells, 4,
         np.array([5e-3, 11e-3]), np.zeros((n, 2, 3, 8)), np.zeros((n, 2), dtype=np.int64),
         slot, np.zeros((slot.max() + 1, 10, 3)), np.zeros(slot.max() + 1, dtype=np.int64),
-        2, np.zeros((2, offsets[3])),
+        2, np.zeros((2, offsets[3])), 1, np.zeros((2, 3 * nx * ny * nz)),
     ]  # fmt: skip
 
 
@@ -85,6 +85,7 @@ def _call(function, args) -> list:
 
 OUTPUTS = (1, 2, 5, 6, 7, 31, 32, 34, 35)
 CHARGE = 37
+CURRENT = 39
 
 
 @pytest.mark.parametrize("refined", [False, True])
@@ -104,6 +105,10 @@ def test_kernel_versions_agree(integrator, magnetic, mirror, refined) -> None:
     np.testing.assert_allclose(
         result[CHARGE].sum(0), expected[CHARGE].sum(0), rtol=1e-10, atol=1e-20
     )
+    np.testing.assert_allclose(
+        result[CURRENT].sum(0), expected[CURRENT].sum(0), rtol=1e-10, atol=1e-20
+    )
+    assert np.abs(expected[CURRENT]).max() > 0.0
 
 
 @pytest.mark.skipif(emulation_compiler() is None, reason="no C++ compiler")
@@ -116,11 +121,15 @@ def test_cuda_version_agrees(integrator, magnetic, mirror, refined) -> None:
     expected = _call(kernel.host_kernel.kernel.python, args)
     result = [a.copy() if isinstance(a, np.ndarray) else a for a in args]
     result[CHARGE] = np.zeros_like(result[CHARGE][:1])  # the GPU deposits into one slab
+    result[CURRENT] = np.zeros_like(result[CURRENT][:1])
     emulate_cuda_kernel(kernel.cuda_kernel, *result, n_threads=args[0].shape[-1])
     for i in OUTPUTS:
         np.testing.assert_allclose(result[i], expected[i], rtol=1e-10, atol=1e-12)
     np.testing.assert_allclose(
         result[CHARGE][0], expected[CHARGE].sum(0), rtol=1e-10, atol=1e-20
+    )
+    np.testing.assert_allclose(
+        result[CURRENT][0], expected[CURRENT].sum(0), rtol=1e-10, atol=1e-20
     )
 
 
