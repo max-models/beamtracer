@@ -196,20 +196,24 @@ class _Field:
         cylindrical = mesh.cylindrical
         self.mesh = mesh
         # a graded beam axis: its nodes are the base nodes of patchwork's axis
+        graded = {}
+        if mesh.graded:
+            nodes = (None, mesh.x_nodes) if cylindrical else (mesh.x_nodes, None)
+            graded["axis_nodes"] = nodes
         if cylindrical:
             hierarchy = AMRHierarchy(
                 base_shape=(ny - 1, nx - 1),
                 bounds=((y0, y1), (x0, x1)),
                 geometry="cylindrical",
                 comm=comm,
-                axis_nodes=(None, mesh.x_nodes),
+                **graded,
             )
         else:
             hierarchy = AMRHierarchy(
                 base_shape=(nx - 1, ny - 1),
                 bounds=((x0, x1), (y0, y1)),
                 comm=comm,
-                axis_nodes=(mesh.x_nodes, None),
+                **graded,
             )
         patches = patches_of(mesh, refinement)
         for patch in patches[1:]:
