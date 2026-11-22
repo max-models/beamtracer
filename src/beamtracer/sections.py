@@ -130,7 +130,9 @@ class GridParams:
                 raise ValueError("x_spacing needs at least one (x, dx) pair")
             self.x_spacing = pairs
             self.x_through = tuple(float(x) for x in np.ravel(self.x_through))
-            self.num_gridpoints = (self.x_nodes.size, self.num_gridpoints[1])
+            nodes = self.x_nodes
+            assert nodes is not None
+            self.num_gridpoints = (nodes.size, self.num_gridpoints[1])
 
     @property
     def graded(self) -> bool:

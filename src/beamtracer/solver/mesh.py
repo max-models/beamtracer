@@ -312,7 +312,7 @@ class IonOpticsMesh:
         """
         if self.x_nodes is None:
             return np.asarray(x, dtype=float)
-        return self.logical_x0 + self.h * self.index_x(x)
+        return self._x0 + self.h * self.index_x(x)
 
     def spacing_at(self, x: Any) -> Any:
         """The smaller edge of the cells at positions ``x``: ``h``, or less along a graded x."""
@@ -323,16 +323,21 @@ class IonOpticsMesh:
         return np.minimum(self.dx[i], self.h)
 
     @property
+    def _x0(self) -> float:
+        """`logical_x0`, set by ``__post_init__``."""
+        return float(self.origin[0] if self.logical_x0 is None else self.logical_x0)
+
+    @property
     def logical_origin(self) -> tuple[float, float]:
         """The uniform coordinates of node ``(0, 0)``: the origin on a uniform mesh."""
-        return (self.logical_x0, self.origin[1])
+        return (self._x0, self.origin[1])
 
     @property
     def logical_upper(self) -> tuple[float, float]:
         """The uniform coordinates of the last node: `upper` on a uniform mesh."""
         if self.x_nodes is None:
             return self.upper
-        return (self.logical_x0 + self.h * (self.shape[0] - 1), self.upper[1])
+        return (self._x0 + self.h * (self.shape[0] - 1), self.upper[1])
 
     @property
     def y(self) -> np.ndarray:
