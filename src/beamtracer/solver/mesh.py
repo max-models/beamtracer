@@ -304,6 +304,11 @@ class IonOpticsMesh:
         i = np.clip(np.floor(index).astype(np.int64), 0, nodes.size - 2)
         return nodes[i] + (index - i) * (nodes[i + 1] - nodes[i])
 
+    @property
+    def _x0(self) -> float:
+        """`logical_x0`, set by ``__post_init__``."""
+        return float(self.origin[0] if self.logical_x0 is None else self.logical_x0)
+
     def logical_x(self, x: Any) -> np.ndarray:
         """The uniform coordinate ``logical_x0 + h * index_x(x)`` of positions ``x``.
 
@@ -321,11 +326,6 @@ class IonOpticsMesh:
         x = np.asarray(x, dtype=float)
         i = np.clip(np.floor(self.index_x(x)).astype(np.int64), 0, self.shape[0] - 2)
         return np.minimum(self.dx[i], self.h)
-
-    @property
-    def _x0(self) -> float:
-        """`logical_x0`, set by ``__post_init__``."""
-        return float(self.origin[0] if self.logical_x0 is None else self.logical_x0)
 
     @property
     def logical_origin(self) -> tuple[float, float]:
