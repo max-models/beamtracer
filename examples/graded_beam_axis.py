@@ -10,18 +10,24 @@ the drift it hardly changes. A uniform mesh pays for the gap's spacing over the 
 length. `GridParams(x_spacing=...)` grades the beam axis instead: 0.25 mm through the gap,
 growing smoothly to 2 mm along the drift, while the spacing across the beam stays 0.25 mm.
 `x_through` puts nodes on the faces and tips of the electrodes, so their surfaces fall on
-the mesh rather than cutting cells at different places on different meshes.
+the mesh rather than cutting cells at different places on different meshes. Grading and
+refinement boxes combine: a coarser graded mesh (0.5 mm through the gap and across the
+beam, 4 mm along the drift) with level-1 boxes over the gap and along the beam has
+0.25 mm cells where the beam is, across it as well, and coarse cells elsewhere.
 
 Every mesh solves the same self-consistent beam (the Vlasov iteration with space charge),
 and the rms angle and width of the beam at a plane 115 mm downstream are compared with a
 uniform mesh of 0.125 mm. The graded mesh, 15,471 nodes, gives the beam of the uniform
 0.25 mm mesh, 38,961 nodes: the angle within 0.38 mrad of the reference's 13.68 mrad
 against 0.42, the width within 3 %. The uniform 0.5 mm mesh, 9,881 nodes, misses the angle
-by 1.21 mrad, three times as much. The first plot is the cell size
-along the beam axis, the second the potential and the trajectories with the graded mesh's
-lines, the third the beam at the plane against the number of nodes.
+by 1.21 mrad, three times as much. The graded mesh with the two boxes, 11,404 nodes, is as
+close to the reference as the 0.25 mm meshes or closer (+0.08 mrad, the width within 1 %).
+A box over the gap alone does little: the drift needs fine cells across the beam, not
+along it. The first plot is the cell size along the beam axis, the second the potential
+and the trajectories with the graded mesh's lines, the third the beam at the plane against
+the number of nodes.
 
-The meshes run one after the other, about 20 s in all.
+The meshes run one after the other, about 25 s in all.
 """
 
 import time
@@ -30,6 +36,7 @@ import numpy as np
 import plasma_plots as pp
 
 from beamtracer import BeamOptics, GridParams
+from beamtracer.config import RefinementParams
 from beamtracer.examples.beam_optics_extraction_2d import create_config, object_outlines
 
 #: The length of the domain along the beam [m] and its height [m].
@@ -41,6 +48,15 @@ ELECTRODE_FACES = (0.014, 0.016, 0.018, 0.030, 0.033, 0.036)
 #: The node spacing wanted along the beam axis, ``(x, dx)`` [m]: 0.5 mm at the
 #: emitter, 0.25 mm through the gap, 2 mm along the drift.
 SPACING = [(0.0, 0.5e-3), (0.012, 0.25e-3), (0.037, 0.25e-3), (0.060, 2.0e-3)]
+#: The coarser graded mesh under the boxes: 1 mm at the emitter, 0.5 mm through the gap,
+#: 4 mm along the drift.
+COARSE_SPACING = [(0.0, 1.0e-3), (0.012, 0.5e-3), (0.037, 0.5e-3), (0.060, 4.0e-3)]
+#: Level-1 boxes ``(x, y)`` [m]: over the gap, the whole height, and along the beam
+#: (y from 8.4 to 11.6 mm at most) to the end of the drift.
+BOXES = [
+    RefinementParams(level=1, lower=(0.012, 0.0), upper=(0.038, HEIGHT)),
+    RefinementParams(level=1, lower=(0.039, 0.007), upper=(LENGTH, 0.013)),
+]
 
 # the theme's data colours and ink; the electrodes in grey
 ORANGE, AQUA, BLUE, INK, ELECTRODE = "C1", "C2", "C0", "k", "0.7"
@@ -54,19 +70,21 @@ def uniform(spacing: float) -> GridParams:
     )
 
 
-def graded() -> GridParams:
-    """The graded grid: ``SPACING`` along the beam, 0.25 mm across it."""
+def graded(spacing=SPACING, across: float = 0.25e-3) -> GridParams:
+    """A graded grid: ``spacing`` along the beam, ``across`` [m] across it."""
     return GridParams(
-        num_gridpoints=(2, round(HEIGHT / 0.25e-3) + 1),
+        num_gridpoints=(2, round(HEIGHT / across) + 1),
         upper_bound=(LENGTH, HEIGHT),
-        x_spacing=SPACING,
+        x_spacing=spacing,
         x_through=ELECTRODE_FACES,
     )
 
 
-def solve(grid: GridParams) -> dict:
-    """The self-consistent beam on ``grid``: its model and the beam at the plane."""
-    config = create_config(grid=grid, diagnostic_planes=[PLANE], num_particles=400)
+def solve(grid: GridParams, boxes=()) -> dict:
+    """The self-consistent beam on ``grid`` with the refinement ``boxes`` at the plane."""
+    config = create_config(
+        grid=grid, refinement=list(boxes), diagnostic_planes=[PLANE], num_particles=400
+    )
     start = time.perf_counter()
     model = BeamOptics(config).run()
     seconds = time.perf_counter() - start
@@ -75,7 +93,7 @@ def solve(grid: GridParams) -> dict:
     angle = plane.velocity[1][forward] / plane.velocity[0][forward]
     return {
         "model": model,
-        "nodes": int(np.prod(grid.num_gridpoints)),
+        "nodes": int(model.state.layout.size),
         "seconds": seconds,
         "angle": 1e3 * float(np.std(angle)),  # mrad
         "width": 1e3 * float(np.std(plane.point[1][forward])),  # mm
@@ -92,6 +110,7 @@ def main() -> None:
         "graded": graded(),
     }
     results = {name: solve(grid) for name, grid in meshes.items()}
+    results["graded + boxes"] = solve(graded(COARSE_SPACING, 0.5e-3), BOXES)
     reference = results["uniform 0.125 mm"]
     print("mesh               nodes   time   rms angle   error   rms width")
     for name, result in results.items():
@@ -155,6 +174,8 @@ def main() -> None:
                     label="uniform 1, 0.5, 0.25, 0.125 mm")  # fmt: skip
             ax.plot(results["graded"]["nodes"], results["graded"][key], "s",
                     color=ORANGE, markersize=8, label="graded")  # fmt: skip
+            ax.plot(results["graded + boxes"]["nodes"], results["graded + boxes"][key],
+                    "D", color="C3", markersize=8, label="graded + boxes")  # fmt: skip
             ax.axhline(reference[key], color=INK, ls="--", lw=1, label="0.125 mm")
             ax.set_xscale("log")
             ax.set_xlabel("nodes")
