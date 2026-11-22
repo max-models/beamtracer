@@ -29,6 +29,7 @@ from beamtracer.solver.poisson import (
 )
 from beamtracer.solver.refinement import Layout, PatchedElectricField, Refinement
 from beamtracer.solver.refinement3d import Layout3D, PatchedElectricField3D
+from beamtracer.solver.self_field import VectorPotential3D, field_2d
 from beamtracer.solver.tracer import BeamParticles, BeamTracer, TraceResult
 from beamtracer.solver.tracer3d import BeamTracer3D
 
@@ -116,6 +117,11 @@ class VlasovState:
     #: The potential and the charge density on the composite nodes.
     composite_potential: np.ndarray | None = None
     composite_charge_density: np.ndarray | None = None
+    #: With ``self_magnetic``: the beam's current density on the base mesh's nodes (the
+    #: axial component in 2D, ``(3, ...)`` in 3D) and its own magnetic field (the
+    #: out-of-plane component in 2D, ``(3, ...)`` in 3D), from the last trace.
+    current_density: np.ndarray | None = None
+    self_magnetic: np.ndarray | None = None
 
 
 @method(
@@ -216,6 +222,7 @@ def thin_particles(particles: BeamParticles, stride: int) -> BeamParticles:
         "relaxation": r"\rho_b^{n+1} = (1 - \omega)\, \rho_b^{n} + \omega\, \rho_\mathrm{new}(\phi^{n}), \qquad \rho_b^1 = \rho_\mathrm{new}(\phi^0)",
         "convergence": r"\max |\phi^{n} - \phi^{n-1}| < \text{tolerance}",
         "coarse": r"\text{while } \max |\phi^{n} - \phi^{n-1}| \ge \text{coarse\_tolerance}: \text{ every } k\text{-th trajectory},\ I \to I\, N_s / N_{s,\mathrm{kept}}",
+        "self_magnetic": r"\nabla \times \mathbf B_\mathrm{self}^{n+1} = \mu_0 \mathbf J(\phi^n, \mathbf B_\mathrm{self}^{n}), \qquad \mathbf B_\mathrm{self}^0 = 0",
     },
     assumptions=(
         r"$\rho_\mathrm{new}$ the compensated deposit of the beam traced in $\phi^n$, re-seeded identically every iteration; $\omega$ = `relaxation` in $(0, 1]$ acts on the charge density, not on the potential",
@@ -223,6 +230,7 @@ def thin_particles(particles: BeamParticles, stride: int) -> BeamParticles:
         r"at most `iterations`; an unconverged iteration returns its last state without a warning (`stats['converged']` is 0); the returned trace is that of the newest potential",
         r"with MPI every rank solves the whole field and the deposits are summed",
         r"`mixing='anderson'` replaces the relaxation by `AndersonMixer` (from $n = 1$); the coarse phase traces every $k = \lceil 1 / \text{coarse\_particles} \rceil$-th trajectory with the current of each beam kept, and its iterations do not count as converged; the history of the mixer is dropped when it ends",
+        r"with `self_magnetic` the beam's own field of the last trace's current (`beamtracer.solver.self_field`), not mixed and not compensated: a compensating plasma cancels the charge, not the current",
     ),
     components=(
         "beamtracer.solver.vlasov.AndersonMixer",
@@ -230,6 +238,9 @@ def thin_particles(particles: BeamParticles, stride: int) -> BeamParticles:
         "beamtracer.solver.fields.StaggeredElectricField",
         "beamtracer.solver.tracer.BeamTracer.trace",
         "beamtracer.solver.vlasov.apply_compensation",
+        "beamtracer.solver.self_field.axisymmetric_field",
+        "beamtracer.solver.self_field.planar_field",
+        "beamtracer.solver.self_field.VectorPotential3D",
     ),
 )
 @scope_profiler.profile("beamtracer.vlasov_iterate", tags=PROFILE_TAGS)
@@ -251,6 +262,7 @@ def vlasov_iterate(
     comm: Any = None,
     refinement: Sequence[Refinement] = (),
     adaptive: AdaptiveRefinement | None = None,
+    self_magnetic: bool = False,
     callback: Callable[[int, VlasovState], None] | None = None,
 ) -> VlasovState:
     """Run ``iterations`` Vlasov iterations.
@@ -270,7 +282,10 @@ def vlasov_iterate(
     field changes fastest near the beam (`adapted_boxes`, starting from ``refinement``):
     the field solver is built for the new boxes, the potential moved onto their composite
     mesh (`sample`) as the next solve's first guess, and the mixing of the charge starts
-    again from the next deposit.
+    again from the next deposit. With ``self_magnetic`` the tracer deposits the beam's
+    current too, and every trace after the first runs in the beam's own magnetic field
+    of the trace before (`beamtracer.solver.self_field`), added to the imposed one; in 2D
+    this needs the NumPy tracer.
 
     ``make_particles`` returns the beam and its ``sum J / v`` (the beams' charge density
     magnitude at their start, the density of the Boltzmann plasma species); it is called
@@ -287,6 +302,14 @@ def vlasov_iterate(
     if coarse and not coarse_tolerance > 0.0:
         raise ValueError("coarse_particles < 1 needs a positive coarse_tolerance")
     boxes = list(refinement)
+    tracer.deposit_current = self_magnetic
+    tracer.self_magnetic = None
+    vector_potential = (
+        VectorPotential3D(mesh, field_backend if field_backend != "petsc" else "lu")
+        if self_magnetic and isinstance(mesh, IonOpticsMesh3D)
+        else None
+    )
+    own_field: np.ndarray | None = None
     poisson = IonOpticsPoisson(mesh, backend=field_backend, comm=comm, refinement=boxes)
     layout = poisson.layout
     restart = False
@@ -352,6 +375,17 @@ def vlasov_iterate(
         if coarse:
             particles = thin_particles(particles, stride)
         trace = tracer.trace(particles)
+        if self_magnetic:
+            assert trace.current_density is not None
+            if isinstance(tracer, BeamTracer3D):
+                assert vector_potential is not None
+                own_field = vector_potential(trace.current_density)
+                tracer.self_magnetic = own_field
+            else:
+                assert isinstance(mesh, IonOpticsMesh)
+                own = field_2d(mesh, trace.current_density)
+                own_field = own.values
+                tracer.self_magnetic = own
         charge = trace.charge_density
         deposited = compensate(layout.x, charge, compensation)
         if iteration == 0 or restart:
@@ -369,6 +403,9 @@ def vlasov_iterate(
                 "steps": trace.steps,
                 "trajectories": len(particles),
                 "boxes": len(boxes),
+                "max_self_magnetic": (
+                    0.0 if own_field is None else float(np.max(np.abs(own_field)))
+                ),
             }
         )
         state = VlasovState(
@@ -381,6 +418,8 @@ def vlasov_iterate(
             layout,
             potential,
             rho,
+            trace.current_density,
+            own_field,
         )
         if callback is not None:
             callback(iteration, state)

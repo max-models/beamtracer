@@ -600,6 +600,8 @@ class BeamOpticsConfig:
     ``y`` lower face, which needs a zero normal derivative there: a trajectory crossing
     it continues at negative ``y`` in the mirrored field (as IBSimu's mirrored
     boundaries), instead of leaving.
+    ``self_magnetic_field`` adds the beam's own magnetic field, from its current by
+    Ampère's law (`beamtracer.solver.self_field`; in 2D with the NumPy tracer).
     ``diagnostic_planes`` [m] record the trajectories crossing ``x = const``;
     ``save_trajectories`` keeps every n-th trajectory for plotting (0: none).
     ``tolerance`` and ``diagnostic_planes`` take Quantities or strings too, like the
@@ -637,6 +639,7 @@ class BeamOpticsConfig:
     adaptive_refinement: AdaptiveRefinementParams | None = None
     symmetry_plane: bool = False
     symmetry_planes: list[str] = field(default_factory=list)
+    self_magnetic_field: bool = False
     diagnostic_planes: list[float] = unit_field("m", default_factory=list)
     save_trajectories: int = 0
 

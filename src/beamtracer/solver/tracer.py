@@ -303,6 +303,9 @@ class TraceResult:
     fractions: np.ndarray | None = None
     #: With charge changes: what the beam did to its targets (this rank's share).
     tallies: ChargeTallies | None = None
+    #: With ``deposit_current``: the current density [A/m^2] on the base mesh's nodes,
+    #: the axial component ``(nx, ny)`` in 2D, ``(3, nx, ny, nz)`` in 3D.
+    current_density: np.ndarray | None = None
 
 
 def _boris_problem() -> ConvergenceProblem:
@@ -406,6 +409,14 @@ class BeamTracer:
                 f"integrator must be one of {INTEGRATORS}, got {integrator!r}"
             )
         self.integrator = integrator
+        #: The beam's own magnetic field, a function like ``magnetic`` added to it (set by
+        #: the Vlasov iteration, `beamtracer.solver.self_field`).
+        self.self_magnetic: (
+            Callable[[np.ndarray, np.ndarray], tuple[np.ndarray, ...]] | None
+        ) = None
+        #: Whether a trace also deposits the axial current density
+        #: (`TraceResult.current_density`, NumPy tracer only).
+        self.deposit_current = False
         self.max_steps = int(max_steps)
         self.planes = tuple(float(p) for p in planes)
         self.save_trajectories = int(save_trajectories)
@@ -457,9 +468,26 @@ class BeamTracer:
             force += np.cross(v, magnetic, axis=0)
         return qm * force
 
+    def _magnetic(
+        self,
+    ) -> Callable[[np.ndarray, np.ndarray], tuple[np.ndarray, ...]] | None:
+        """The imposed magnetic field plus the beam's own, or None for neither."""
+        imposed, own = self.magnetic, self.self_magnetic
+        if own is None or imposed is None:
+            return own if imposed is None else imposed
+
+        def total(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, ...]:
+            a, b = imposed(x, y), own(x, y)
+            if len(a) < len(b):
+                a = (*a, np.zeros_like(a[0]))
+            return tuple(p + q for p, q in zip(a, b, strict=True))
+
+        return total
+
     def fields(self, x: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
         """Return the Cartesian ``E`` and ``B`` ``(3, N)`` at positions ``x`` (``B`` or None)."""
         electric = self.electric
+        magnetic = self._magnetic()
         if electric is None:
             raise RuntimeError("the tracer has no electric field yet")
         if not self.mesh.cylindrical:
@@ -475,9 +503,9 @@ class BeamTracer:
                 e += np.stack(self.imposed_electric(x[0], y), axis=0)
             if s is not None:
                 e[1] *= s
-            if self.magnetic is None:
+            if magnetic is None:
                 return e, None
-            b = np.stack(self.magnetic(x[0], y), axis=0)
+            b = np.stack(magnetic(x[0], y), axis=0)
             if s is not None:
                 b[0] *= s
                 b[2] *= s
@@ -490,9 +518,9 @@ class BeamTracer:
         e = _cartesian((ex, er), cy, cz)
         if self.imposed_electric is not None:
             e += _cartesian(self.imposed_electric(x[0], r), cy, cz)
-        if self.magnetic is None:
+        if magnetic is None:
             return e, None
-        return e, _cartesian(self.magnetic(x[0], r), cy, cz)
+        return e, _cartesian(magnetic(x[0], r), cy, cz)
 
     def _rk4(self, x, v, a, dt, qm):
         """One classical Runge--Kutta step of ``dx/dt = v, dv/dt = a(x, v)``."""
@@ -539,7 +567,7 @@ class BeamTracer:
         kicks are ``tau a``, as in the compiled tracer.
         """
         tau = 0.5 * dt
-        if self.magnetic is None:
+        if self._magnetic() is None:
             if a is None:
                 a = self.acceleration(x, v, qm)
             half = v + tau * a
@@ -579,11 +607,8 @@ class BeamTracer:
         field = self.electric
         return field.layout if isinstance(field, PatchedElectricField) else None
 
-    def _finalize(self, charge: np.ndarray) -> np.ndarray:
-        """Divide the node charges by the node volumes (the composite ones if refined)."""
-        layout = self._layout()
-        if layout is not None:
-            return charge / layout.volumes
+    def _finalize_base(self, charge: np.ndarray) -> np.ndarray:
+        """Divide node values of the base mesh by its node volumes (halved on the faces)."""
         mesh = self.mesh
         h = mesh.h
         density = charge.copy()
@@ -601,6 +626,13 @@ class BeamTracer:
         density[0, :] *= 2.0
         density[-1, :] *= 2.0
         return density
+
+    def _finalize(self, charge: np.ndarray) -> np.ndarray:
+        """Divide the node charges by the node volumes (the composite ones if refined)."""
+        layout = self._layout()
+        if layout is not None:
+            return charge / layout.volumes
+        return self._finalize_base(charge)
 
     def _cross(
         self,
@@ -716,6 +748,24 @@ class BeamTracer:
                 target,
             )
 
+    def _deposit_base(
+        self, target: np.ndarray, points: np.ndarray, q: np.ndarray
+    ) -> None:
+        """Add ``q`` at ``points`` to the node values ``target`` of the base mesh."""
+        if not len(q):
+            return
+        px, py = self._project(points)
+        mesh = self.mesh
+        deposit_trajectories_2d(
+            np.ascontiguousarray(px),
+            np.ascontiguousarray(py),
+            np.ascontiguousarray(q, dtype=float),
+            *map(float, mesh.origin),
+            mesh.h,
+            int(mesh.cylindrical),
+            target,
+        )
+
     def _trace_numpy(self, particles: BeamParticles, save_every: int) -> TraceResult:
         """Trace with NumPy, all trajectories a step at a time; the charges per node."""
         mesh = self.mesh
@@ -723,6 +773,7 @@ class BeamTracer:
         x1, y1 = mesh.upper
         n = len(particles)
         charge = self._new_charge()
+        axial_current = np.zeros(mesh.shape) if self.deposit_current else None
         status = np.full(n, MAX_STEPS, dtype=np.int8)
         electrode = np.full(n, -1, dtype=np.int32)
         planes = [PlaneHits(p) for p in self.planes]
@@ -821,6 +872,11 @@ class BeamTracer:
             else:
                 deposited = signed_current[index] * dt
             self._deposit(charge, mid, deposited)
+            if axial_current is not None:
+                # the axial current element: the step's charge times its mean axial velocity
+                self._deposit_base(
+                    axial_current, mid, deposited * (x_new[0] - x[0]) / dt
+                )
 
             for hits in planes:
                 self._cross(
@@ -907,6 +963,7 @@ class BeamTracer:
             steps=step,
             fractions=final_fractions,
             tallies=tallies,
+            current_density=axial_current,
         )
 
     def _use_compiled(self) -> bool:
@@ -925,8 +982,10 @@ class BeamTracer:
             self.electric, (StaggeredElectricField, PatchedElectricField)
         ):
             reasons.append("the electric field is not a StaggeredElectricField")
-        if self.magnetic is not None:
+        if self._magnetic() is not None:
             reasons.append("it has no magnetic field")
+        if self.deposit_current:
+            reasons.append("it deposits no current")
         if self.imposed_electric is not None:
             reasons.append("it has no imposed electric field")
         if self.charge_changing is not None:
@@ -1180,6 +1239,11 @@ class BeamTracer:
         if self.reduce is not None:
             charge = self.reduce(charge)
         result.charge_density = self._finalize(charge)
+        if result.current_density is not None:
+            current = result.current_density
+            if self.reduce is not None:
+                current = self.reduce(current)
+            result.current_density = self._finalize_base(current)
         return result
 
     # -- the compiled tracer ----------------------------------------------------------------

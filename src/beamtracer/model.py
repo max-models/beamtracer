@@ -550,6 +550,7 @@ class BeamOptics:
                 )
             ),
             comm=self.comm if self._parallel else None,
+            self_magnetic=config.self_magnetic_field,
             callback=callback,
         )
         if self._parallel:
