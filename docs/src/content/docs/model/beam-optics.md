@@ -121,8 +121,10 @@ grid = GridParams(
 )
 ```
 
-The example script "Graded beam axis" compares it with uniform meshes on an extraction followed
-by a drift: the beam of a uniform 0.25 mm mesh with 40 % of its nodes. 2D only, and not with
+The example [Graded mesh](/beamtracer/examples/graded-mesh/) extracts a beam through an
+aperture and lets it drift: the divergence of a uniform mesh with its finest cells, with half
+the nodes. The example script "Graded beam axis" compares it with uniform meshes on a planar
+extraction followed by a drift: the beam of a uniform 0.25 mm mesh with 40 % of its nodes. 2D only, and not with
 adaptive refinement.
 
 ## Electrodes of several shapes

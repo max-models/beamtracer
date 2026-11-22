@@ -18,7 +18,8 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (Pyccel and CUDA) takes the axis's nodes and a flag, and a step the shorter of the patch's
   spacing and the local edge. Uniform meshes run as before. 2D only, not with adaptive
   refinement. Example script "Graded beam axis": an extraction and a 120 mm drift with the beam
-  of a uniform 0.25 mm mesh on 40 % of its nodes.
+  of a uniform 0.25 mm mesh on 40 % of its nodes. Example notebook "Graded mesh": a cylindrical
+  extraction and drift with the divergence of a uniform 0.05 mm mesh on half its nodes.
 - The beam's own magnetic field (`self_magnetic_field=True`): the tracer deposits the
   beam's current as well, and its field, from Ampère's law of magnetostatics, acts on the
   next trace (`beamtracer.solver.self_field`): Ampère's integral in cylindrical and planar
