@@ -345,6 +345,7 @@ class BeamOptics:
                 self._magnetic_nodes(),
                 step_fraction=config.step_fraction,
                 integrator=config.integrator,
+                relativistic=config.relativistic,
                 max_steps=config.max_steps,
                 planes=config.diagnostic_planes,
                 save_trajectories=config.save_trajectories,
@@ -371,6 +372,7 @@ class BeamOptics:
             imposed_electric=imposed_electric,
             step_fraction=config.step_fraction,
             integrator=config.integrator,
+            relativistic=config.relativistic,
             max_steps=config.max_steps,
             planes=config.diagnostic_planes,
             save_trajectories=config.save_trajectories,
@@ -401,6 +403,7 @@ class BeamOptics:
                     beam.size,
                     beam.shape,
                     species=number,
+                    relativistic=self.config.relativistic,
                 )
                 j_over_v += jv
             elif isinstance(beam, BeamSpecies):
@@ -416,6 +419,7 @@ class BeamOptics:
                     beam.end,
                     cylindrical=cylindrical,
                     species=number,
+                    relativistic=self.config.relativistic,
                 )
                 j_over_v += jv
             else:

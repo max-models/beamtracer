@@ -24,7 +24,7 @@ classifiers = [
 dependencies = [
   # the units of the settings (plasmacoll.units) and of boundary expressions
   "astropy",
-  "cunumpy>=0.7.0",
+  "cunumpy>=0.8.0",
   # MPI only under an MPI launcher; a serial stand-in for mpi4py otherwise
   "maybempi>=0.1",
   # the method cards of the numerical methods

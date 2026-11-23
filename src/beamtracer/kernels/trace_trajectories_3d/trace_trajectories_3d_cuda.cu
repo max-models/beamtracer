@@ -2,9 +2,13 @@
 // next to this file is the Pyccel version (CPU), with the same arguments.  Launch with
 // n_threads=number of active trajectories: one thread per trajectory, depositing atomically
 // into charge(0, :) (and with has_j the current elements into current(0, :)) (num_threads is the number of host threads and is ignored here).
+// With inv_c2 = 1 / c^2 > 0 the motion is relativistic: v holds the proper velocity
+// u = gamma v, the force is q/m (E + u x B / gamma) and the positions move with u / gamma;
+// the Boris half steps are mpiparticles_relativistic_boris (mpiparticles/kernels/boris.cuh).
 
 #include "cunumpy/array_view.cuh"
 #include "cunumpy/atomic.cuh"
+#include "mpiparticles/kernels/boris.cuh"
 
 __device__ static long long clamp_index(long long i, long long high) {
     return i < 0 ? 0 : (i > high ? high : i);
@@ -87,28 +91,30 @@ __device__ static void fields_3d(
     }
 }
 
-// Boris's kick--rotate--kick over a half step: tau = qm dt / 4.
+// Boris's kick--rotate--kick over a half step (tau = qm dt / 4), relativistic with
+// inv_c2 > 0: mpiparticles' block on the proper velocity.
 __device__ static void boris_half(const double* u_in, const double* e, const double* b,
-                                  double tau, double* u_out) {
-    double u0 = u_in[0] + tau * e[0], u1 = u_in[1] + tau * e[1], u2 = u_in[2] + tau * e[2];
-    const double t0 = tau * b[0], t1 = tau * b[1], t2 = tau * b[2];
-    const double tt = 2.0 / (1.0 + t0 * t0 + t1 * t1 + t2 * t2);
-    const double r0 = u0 + u1 * t2 - u2 * t1;
-    const double r1 = u1 + u2 * t0 - u0 * t2;
-    const double r2 = u2 + u0 * t1 - u1 * t0;
-    u0 += tt * (r1 * t2 - r2 * t1);
-    u1 += tt * (r2 * t0 - r0 * t2);
-    u2 += tt * (r0 * t1 - r1 * t0);
-    u_out[0] = u0 + tau * e[0];
-    u_out[1] = u1 + tau * e[1];
-    u_out[2] = u2 + tau * e[2];
+                                  double tau, double inv_c2, double* u_out) {
+    double u0 = u_in[0], u1 = u_in[1], u2 = u_in[2];
+    mpiparticles_relativistic_boris(u0, u1, u2, tau * e[0], tau * e[1], tau * e[2],
+                                    tau * b[0], tau * b[1], tau * b[2], inv_c2);
+    u_out[0] = u0;
+    u_out[1] = u1;
+    u_out[2] = u2;
 }
 
+// The inverse Lorentz factor of the proper velocity u (1 for inv_c2 = 0).
+__device__ static double inverse_gamma(const double* u, double inv_c2) {
+    return 1.0 / mpiparticles_lorentz_factor(u[0], u[1], u[2], inv_c2);
+}
+
+// The acceleration du/dt = qm (E + u x B / gamma) of the proper velocity u.
 __device__ static void lorentz(double qm, const double* e, const double* b, const double* u,
-                               double* g) {
-    g[0] = qm * (e[0] + u[1] * b[2] - u[2] * b[1]);
-    g[1] = qm * (e[1] + u[2] * b[0] - u[0] * b[2]);
-    g[2] = qm * (e[2] + u[0] * b[1] - u[1] * b[0]);
+                               double inv_c2, double* g) {
+    const double gi = inverse_gamma(u, inv_c2);
+    g[0] = qm * (e[0] + gi * u[1] * b[2] - gi * u[2] * b[1]);
+    g[1] = qm * (e[1] + gi * u[2] * b[0] - gi * u[0] * b[2]);
+    g[2] = qm * (e[2] + gi * u[0] * b[1] - gi * u[1] * b[0]);
 }
 
 extern "C" __global__
@@ -152,7 +158,8 @@ void trace_trajectories_3d(
     long long num_threads,
     Array2D<double> charge,
     long long has_j,
-    Array2D<double> current
+    Array2D<double> current,
+    double inv_c2
 ) {
     const long long m = blockDim.x * (long long)blockIdx.x + threadIdx.x;
     if (m >= active.shape[0]) return;
@@ -178,8 +185,9 @@ void trace_trajectories_3d(
                       origin_z, h, mirror_y, mirror_z, e, b);
         }
         double a[3];
-        lorentz(qmk, e, b, vs, a);
-        const double speed = sqrt(vs[0] * vs[0] + vs[1] * vs[1] + vs[2] * vs[2]);
+        lorentz(qmk, e, b, vs, inv_c2, a);
+        const double gv = inverse_gamma(vs, inv_c2);
+        const double speed = gv * sqrt(vs[0] * vs[0] + vs[1] * vs[1] + vs[2] * vs[2]);
         const double accel = sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
         // the spacing of the finest patch at the step's start
         double fy0 = xs[1], fz0 = xs[2];
@@ -199,33 +207,35 @@ void trace_trajectories_3d(
         if (integrator != 0) {
             const double tau = 0.5 * hdt * qmk;
             double half[3];
-            boris_half(vs, e, b, tau, half);
-            for (int d = 0; d < 3; ++d) y[d] = xs[d] + dt * half[d];
+            boris_half(vs, e, b, tau, inv_c2, half);
+            const double gh = inverse_gamma(half, inv_c2);
+            for (int d = 0; d < 3; ++d) y[d] = xs[d] + dt * gh * half[d];
             fields_3d(y[0], y[1], y[2], fxs, fys, fzs, patch_int, patch_real, n_patches, bn, has_b, origin_x, origin_y, origin_z,
                       h, mirror_y, mirror_z, e, b);
-            boris_half(half, e, b, tau, w);
+            boris_half(half, e, b, tau, inv_c2, w);
             have = true;
         } else {
             double q[3], ku[3], g[3], sx[3], sv[3], ee[3], bb[3];
             for (int d = 0; d < 3; ++d) {
-                sx[d] = vs[d];
+                sx[d] = gv * vs[d];
                 sv[d] = a[d];
-                q[d] = xs[d] + hdt * vs[d];
+                q[d] = xs[d] + hdt * gv * vs[d];
                 ku[d] = vs[d] + hdt * a[d];
             }
             for (int stage = 1; stage < 4; ++stage) {
                 fields_3d(q[0], q[1], q[2], fxs, fys, fzs, patch_int, patch_real, n_patches, bn, has_b, origin_x, origin_y,
                           origin_z, h, mirror_y, mirror_z, ee, bb);
-                lorentz(qmk, ee, bb, ku, g);
+                lorentz(qmk, ee, bb, ku, inv_c2, g);
+                const double gk = inverse_gamma(ku, inv_c2);
                 const double weight = stage < 3 ? 2.0 : 1.0;
                 const double step = stage == 1 ? hdt : dt;
                 for (int d = 0; d < 3; ++d) {
-                    sx[d] += weight * ku[d];
+                    sx[d] += weight * gk * ku[d];
                     sv[d] += weight * g[d];
                 }
                 if (stage < 3) {
                     for (int d = 0; d < 3; ++d) {
-                        q[d] = xs[d] + step * ku[d];
+                        q[d] = xs[d] + step * gk * ku[d];
                         ku[d] = vs[d] + step * g[d];
                     }
                 }
@@ -238,7 +248,8 @@ void trace_trajectories_3d(
 
         // space charge: dq dt at the Hermite midpoint, trilinear
         double mid[3];
-        for (int d = 0; d < 3; ++d) mid[d] = 0.5 * (xs[d] + y[d]) + dt * (vs[d] - w[d]) / 8.0;
+        const double gw = inverse_gamma(w, inv_c2);
+        for (int d = 0; d < 3; ++d) mid[d] = 0.5 * (xs[d] + y[d]) + dt * (gv * vs[d] - gw * w[d]) / 8.0;
         if (mirror_y != 0 && mid[1] < origin_y) mid[1] = 2.0 * origin_y - mid[1];
         if (mirror_z != 0 && mid[2] < origin_z) mid[2] = 2.0 * origin_z - mid[2];
         const long long pp = patch_of(mid[0], mid[1], mid[2], patch_real, n_patches);
@@ -322,9 +333,9 @@ void trace_trajectories_3d(
                     hits(k, p, cc, 0) = xp;
                     hits(k, p, cc, 1) = xs[1] + s * (y[1] - xs[1]);
                     hits(k, p, cc, 2) = xs[2] + s * (y[2] - xs[2]);
-                    hits(k, p, cc, 3) = vs[0] + s * (w[0] - vs[0]);
-                    hits(k, p, cc, 4) = vs[1] + s * (w[1] - vs[1]);
-                    hits(k, p, cc, 5) = vs[2] + s * (w[2] - vs[2]);
+                    hits(k, p, cc, 3) = gv * vs[0] + s * (gw * w[0] - gv * vs[0]);
+                    hits(k, p, cc, 4) = gv * vs[1] + s * (gw * w[1] - gv * vs[1]);
+                    hits(k, p, cc, 5) = gv * vs[2] + s * (gw * w[2] - gv * vs[2]);
                     hits(k, p, cc, 6) = after >= 0.0 ? 1.0 : -1.0;
                     hits(k, p, cc, 7) = 1.0 * ns;
                 }

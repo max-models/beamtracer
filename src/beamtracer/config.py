@@ -580,7 +580,9 @@ class BeamOpticsConfig:
     the step estimate ``min(h / |v|, sqrt(2 h / |a|))`` per Runge--Kutta step, for at most
     ``max_steps`` steps. ``integrator`` is ``"rk4"`` (the classical Runge--Kutta
     method, four field evaluations a step) or ``"boris"`` (Boris's kick--drift--kick,
-    second order with one evaluation a step). ``mixing="anderson"`` replaces the
+    second order with one evaluation a step). ``relativistic`` traces by the relativistic
+    equations of motion (the proper velocity, mpiparticles' relativistic Boris step) and seeds
+    the beams with the relativistic speed of their energy. ``mixing="anderson"`` replaces the
     relaxation by Anderson's acceleration over ``anderson_depth`` previous iterations;
     ``coarse_particles < 1`` traces that share of the trajectories until the potential
     changes by less than ``coarse_tolerance`` [V], then all of them (see
@@ -630,6 +632,7 @@ class BeamOpticsConfig:
     step_fraction: float = 0.5
     max_steps: int = 100_000
     integrator: str = "rk4"
+    relativistic: bool = False
     mixing: str = "linear"
     anderson_depth: int = 5
     coarse_particles: float = 1.0

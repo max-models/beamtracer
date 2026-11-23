@@ -13,6 +13,8 @@ at every call, which costs more than the interpolation itself.
 
 from math import floor, sqrt
 
+from mpiparticles.kernels.boris_pyccel import lorentz_factor, relativistic_boris_update
+
 
 def trace_trajectories_3d(
     active: "int[:]",
@@ -55,6 +57,7 @@ def trace_trajectories_3d(
     charge: "float[:,:]",
     has_j: int,
     current: "float[:,:]",
+    inv_c2: float,
 ) -> None:
     """Trace the ``active`` trajectories until they end, or reach a surface.
 
@@ -96,6 +99,12 @@ def trace_trajectories_3d(
     components, the component normal to a symmetry plane mirrored with the point) on the
     base mesh's nodes, trilinear at the same midpoint, into ``current[t]`` (component
     ``c`` at ``c * nx * ny * nz`` plus the flattened node).
+
+    ``inv_c2`` is ``1 / c^2`` for relativistic motion, 0 for classical: ``v`` holds the
+    proper velocity ``u = gamma v`` (``v`` itself for 0, ``gamma = 1``), the force is
+    ``q/m (E + u x B / gamma)``, the positions move with ``u / gamma``, the Boris half steps
+    are mpiparticles' ``relativistic_boris_update`` and the plane crossings record the
+    velocity ``u / gamma``.
     """
     n_patches = patch_int.shape[0]
     nx = patch_int[n_patches - 1, 0]
@@ -106,7 +115,7 @@ def trace_trajectories_3d(
     capacity = hits.shape[2]
     path_capacity = paths.shape[1]
     # fmt: off
-    #$ omp parallel for schedule(static, 1) num_threads(num_threads) private(t, m, k, slot, nstage, have, ce0, ce1, ce2, cb0, cb1, cb2, x0, x1, x2, v0, v1, v2, qmk, ns, st, stage, q0, q1, q2, p0, p1, p2, s1, s2, sx, sy, sz, s, i, j, kz, a, b, c, w000, w001, w010, w011, w100, w101, w110, w111, n0, e0, e1, e2, b0, b1, b2, g0, g1, g2, a0, a1, a2, kx0, kx1, kx2, sx0, sx1, sx2, sv0, sv1, sv2, speed, accel, dt, d2, hdt, dt6, y0, y1, y2, w0, w1, w2, m0, m1, m2, deposit, p, xp, before, after, cc, px, py, pz, cell, si, sj, sk, e, tau, t0, t1, t2, tt, f, u0, u1, u2, r0, r1, r2, pp, qq, jd0, jd1, jd2, bi, bj, bk, ba, bbb, bc, bcc, nb, jc, pnx, pny, pnz, ofx, ofy, ofz, ofn, pox, poy, poz, phh, hloc, ci, di, dj)
+    #$ omp parallel for schedule(static, 1) num_threads(num_threads) private(t, m, k, slot, nstage, have, ce0, ce1, ce2, cb0, cb1, cb2, x0, x1, x2, v0, v1, v2, qmk, ns, st, stage, q0, q1, q2, p0, p1, p2, s1, s2, sx, sy, sz, s, i, j, kz, a, b, c, w000, w001, w010, w011, w100, w101, w110, w111, n0, e0, e1, e2, b0, b1, b2, g0, g1, g2, a0, a1, a2, kx0, kx1, kx2, sx0, sx1, sx2, sv0, sv1, sv2, speed, accel, dt, d2, hdt, dt6, y0, y1, y2, w0, w1, w2, m0, m1, m2, deposit, p, xp, before, after, cc, px, py, pz, cell, si, sj, sk, e, tau, f, gv, gw, gk, pp, qq, jd0, jd1, jd2, bi, bj, bk, ba, bbb, bc, bcc, nb, jc, pnx, pny, pnz, ofx, ofy, ofz, ofn, pox, poy, poz, phh, hloc, ci, di, dj)
     # fmt: on
     for t in range(num_threads):
         m = t
@@ -152,6 +161,7 @@ def trace_trajectories_3d(
                     ):  # fmt: skip
                         hloc = patch_real[qq, 3]
                         break
+                gv = 1.0 / lorentz_factor(v0, v1, v2, inv_c2)
                 q0 = x0
                 q1 = x1
                 q2 = x2
@@ -325,15 +335,16 @@ def trace_trajectories_3d(
                                     b1 = s2 * f
                                 else:
                                     b2 = s1 * f
-                    # the acceleration with the stage's velocity kx
-                    g0 = qmk * (e0 + kx1 * b2 - kx2 * b1)
-                    g1 = qmk * (e1 + kx2 * b0 - kx0 * b2)
-                    g2 = qmk * (e2 + kx0 * b1 - kx1 * b0)
+                    # the acceleration with the stage's proper velocity kx
+                    gk = 1.0 / lorentz_factor(kx0, kx1, kx2, inv_c2)
+                    g0 = qmk * (e0 + gk * kx1 * b2 - gk * kx2 * b1)
+                    g1 = qmk * (e1 + gk * kx2 * b0 - gk * kx0 * b2)
+                    g2 = qmk * (e2 + gk * kx0 * b1 - gk * kx1 * b0)
                     if stage == 0:
                         a0 = g0
                         a1 = g1
                         a2 = g2
-                        speed = sqrt(v0 * v0 + v1 * v1 + v2 * v2)
+                        speed = gv * sqrt(v0 * v0 + v1 * v1 + v2 * v2)
                         accel = sqrt(a0 * a0 + a1 * a1 + a2 * a2)
                         dt = -1.0
                         if speed > 0.0:
@@ -350,56 +361,37 @@ def trace_trajectories_3d(
                         if integrator != 0:
                             # Boris: a half step's kick--rotate--kick, then the drift
                             tau = 0.5 * hdt * qmk
-                            u0 = v0 + tau * e0
-                            u1 = v1 + tau * e1
-                            u2 = v2 + tau * e2
-                            t0 = tau * b0
-                            t1 = tau * b1
-                            t2 = tau * b2
-                            tt = 2.0 / (1.0 + t0 * t0 + t1 * t1 + t2 * t2)
-                            r0 = u0 + u1 * t2 - u2 * t1
-                            r1 = u1 + u2 * t0 - u0 * t2
-                            r2 = u2 + u0 * t1 - u1 * t0
-                            u0 = u0 + tt * (r1 * t2 - r2 * t1)
-                            u1 = u1 + tt * (r2 * t0 - r0 * t2)
-                            u2 = u2 + tt * (r0 * t1 - r1 * t0)
-                            kx0 = u0 + tau * e0
-                            kx1 = u1 + tau * e1
-                            kx2 = u2 + tau * e2
-                            q0 = x0 + dt * kx0
-                            q1 = x1 + dt * kx1
-                            q2 = x2 + dt * kx2
+                            kx0, kx1, kx2 = relativistic_boris_update(
+                                v0, v1, v2,
+                                tau * e0, tau * e1, tau * e2,
+                                tau * b0, tau * b1, tau * b2,
+                                inv_c2,
+                            )  # fmt: skip
+                            gk = 1.0 / lorentz_factor(kx0, kx1, kx2, inv_c2)
+                            q0 = x0 + dt * gk * kx0
+                            q1 = x1 + dt * gk * kx1
+                            q2 = x2 + dt * gk * kx2
                             continue
-                        sx0 = v0
-                        sx1 = v1
-                        sx2 = v2
+                        sx0 = gv * v0
+                        sx1 = gv * v1
+                        sx2 = gv * v2
                         sv0 = a0
                         sv1 = a1
                         sv2 = a2
-                        q0 = x0 + hdt * v0
-                        q1 = x1 + hdt * v1
-                        q2 = x2 + hdt * v2
+                        q0 = x0 + hdt * gv * v0
+                        q1 = x1 + hdt * gv * v1
+                        q2 = x2 + hdt * gv * v2
                         kx0 = v0 + hdt * a0
                         kx1 = v1 + hdt * a1
                         kx2 = v2 + hdt * a2
                     elif integrator != 0:
                         # Boris: the second half step's kick--rotate--kick at the end
-                        u0 = kx0 + tau * e0
-                        u1 = kx1 + tau * e1
-                        u2 = kx2 + tau * e2
-                        t0 = tau * b0
-                        t1 = tau * b1
-                        t2 = tau * b2
-                        tt = 2.0 / (1.0 + t0 * t0 + t1 * t1 + t2 * t2)
-                        r0 = u0 + u1 * t2 - u2 * t1
-                        r1 = u1 + u2 * t0 - u0 * t2
-                        r2 = u2 + u0 * t1 - u1 * t0
-                        u0 = u0 + tt * (r1 * t2 - r2 * t1)
-                        u1 = u1 + tt * (r2 * t0 - r0 * t2)
-                        u2 = u2 + tt * (r0 * t1 - r1 * t0)
-                        w0 = u0 + tau * e0
-                        w1 = u1 + tau * e1
-                        w2 = u2 + tau * e2
+                        w0, w1, w2 = relativistic_boris_update(
+                            kx0, kx1, kx2,
+                            tau * e0, tau * e1, tau * e2,
+                            tau * b0, tau * b1, tau * b2,
+                            inv_c2,
+                        )  # fmt: skip
                         ce0 = e0
                         ce1 = e1
                         ce2 = e2
@@ -408,35 +400,35 @@ def trace_trajectories_3d(
                         cb2 = b2
                         have = 1
                     elif stage == 1:
-                        sx0 = sx0 + 2.0 * kx0
-                        sx1 = sx1 + 2.0 * kx1
-                        sx2 = sx2 + 2.0 * kx2
+                        sx0 = sx0 + 2.0 * gk * kx0
+                        sx1 = sx1 + 2.0 * gk * kx1
+                        sx2 = sx2 + 2.0 * gk * kx2
                         sv0 = sv0 + 2.0 * g0
                         sv1 = sv1 + 2.0 * g1
                         sv2 = sv2 + 2.0 * g2
-                        q0 = x0 + hdt * kx0
-                        q1 = x1 + hdt * kx1
-                        q2 = x2 + hdt * kx2
+                        q0 = x0 + hdt * gk * kx0
+                        q1 = x1 + hdt * gk * kx1
+                        q2 = x2 + hdt * gk * kx2
                         kx0 = v0 + hdt * g0
                         kx1 = v1 + hdt * g1
                         kx2 = v2 + hdt * g2
                     elif stage == 2:
-                        sx0 = sx0 + 2.0 * kx0
-                        sx1 = sx1 + 2.0 * kx1
-                        sx2 = sx2 + 2.0 * kx2
+                        sx0 = sx0 + 2.0 * gk * kx0
+                        sx1 = sx1 + 2.0 * gk * kx1
+                        sx2 = sx2 + 2.0 * gk * kx2
                         sv0 = sv0 + 2.0 * g0
                         sv1 = sv1 + 2.0 * g1
                         sv2 = sv2 + 2.0 * g2
-                        q0 = x0 + dt * kx0
-                        q1 = x1 + dt * kx1
-                        q2 = x2 + dt * kx2
+                        q0 = x0 + dt * gk * kx0
+                        q1 = x1 + dt * gk * kx1
+                        q2 = x2 + dt * gk * kx2
                         kx0 = v0 + dt * g0
                         kx1 = v1 + dt * g1
                         kx2 = v2 + dt * g2
                     else:
-                        sx0 = sx0 + kx0
-                        sx1 = sx1 + kx1
-                        sx2 = sx2 + kx2
+                        sx0 = sx0 + gk * kx0
+                        sx1 = sx1 + gk * kx1
+                        sx2 = sx2 + gk * kx2
                         sv0 = sv0 + g0
                         sv1 = sv1 + g1
                         sv2 = sv2 + g2
@@ -453,9 +445,10 @@ def trace_trajectories_3d(
                     y2 = q2
 
                 # space charge: dq dt at the Hermite midpoint, trilinear
-                m0 = 0.5 * (x0 + y0) + dt * (v0 - w0) / 8.0
-                m1 = 0.5 * (x1 + y1) + dt * (v1 - w1) / 8.0
-                m2 = 0.5 * (x2 + y2) + dt * (v2 - w2) / 8.0
+                gw = 1.0 / lorentz_factor(w0, w1, w2, inv_c2)
+                m0 = 0.5 * (x0 + y0) + dt * (gv * v0 - gw * w0) / 8.0
+                m1 = 0.5 * (x1 + y1) + dt * (gv * v1 - gw * w1) / 8.0
+                m2 = 0.5 * (x2 + y2) + dt * (gv * v2 - gw * w2) / 8.0
                 if mirror_y != 0 and m1 < origin_y:
                     m1 = 2.0 * origin_y - m1
                 if mirror_z != 0 and m2 < origin_z:
@@ -583,9 +576,9 @@ def trace_trajectories_3d(
                             hits[k, p, cc, 0] = xp
                             hits[k, p, cc, 1] = x1 + s * (y1 - x1)
                             hits[k, p, cc, 2] = x2 + s * (y2 - x2)
-                            hits[k, p, cc, 3] = v0 + s * (w0 - v0)
-                            hits[k, p, cc, 4] = v1 + s * (w1 - v1)
-                            hits[k, p, cc, 5] = v2 + s * (w2 - v2)
+                            hits[k, p, cc, 3] = gv * v0 + s * (gw * w0 - gv * v0)
+                            hits[k, p, cc, 4] = gv * v1 + s * (gw * w1 - gv * v1)
+                            hits[k, p, cc, 5] = gv * v2 + s * (gw * w2 - gv * v2)
                             hits[k, p, cc, 6] = 1.0 if after >= 0.0 else -1.0
                             hits[k, p, cc, 7] = 1.0 * ns
                         counts[k, p] = cc + 1

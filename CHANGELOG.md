@@ -7,6 +7,24 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Relativistic tracing: `BeamTracer(relativistic=True)`, `BeamTracer3D(relativistic=True)`
+  and `relativistic: true` in a `BeamOpticsConfig` move the particles by the relativistic
+  equations of motion. The tracers advance the proper velocity `u = gamma v` (made from the
+  particles' velocities at the start): the electric field changes it at `q E / m`, the
+  magnetic force is `q u x B / gamma`, the positions, the Hermite midpoint of the deposit,
+  the step estimate and the charge-changing path use `u / gamma`, and the plane crossings
+  record `u / gamma`. Runge--Kutta integrates `du/dt` and `dx/dt = u / gamma`; Boris's step
+  is mpiparticles' relativistic one (`boris_velocity(..., relativistic=True)`, and in the 3D
+  kernel the block `relativistic_boris_update` / `mpiparticles_relativistic_boris`). The
+  kernels `trace_trajectories_2d` and `trace_trajectories_3d` (Pyccel and CUDA) take
+  `inv_c2` (`1 / c^2`, 0 for classical, which leaves their arithmetic unchanged) and use
+  mpiparticles' `lorentz_factor` blocks; the 3D kernel's Boris half steps are mpiparticles'
+  block in both modes. `beam_with_energy` and `beam_on_surface` take `relativistic`: the
+  energy gives the proper speed `c sqrt(gamma^2 - 1)`, the spreads are drawn in `u`, and
+  `J / v` uses `u / gamma`. Tests against hyperbolic motion (the speed and the deposited
+  flight time) and the relativistic gyroradius in both tracers, compiled against NumPy, all
+  kernel versions in both modes, and slow protons against the classical tracer. Example
+  script "Relativistic electrons": 1 MV over 2 cm and a 1 MeV electron in 0.1 T.
 - A graded beam axis: `GridParams(x_spacing=[(x, dx), ...])` gives the node spacing wanted
   along `x` (linear between the pairs), and `x_through` positions that must be nodes (the
   electrodes' faces and tips); the nodes come from `patchwork.graded_nodes`.
@@ -29,6 +47,8 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `K (1 - f - beta^2)` of a drifting beam in all three geometries.
 
 ### Changed
+
+- beamtracer's kernels need cunumpy 0.8 (kernels that import mpiparticles' Pyccel blocks).
 
 - The negative-ion beamlet example (`negative_ion_extraction_optics`) emits its beams an
   `emission_margin` (0.1 mm) inside the plasma grid's aperture instead of one cell inside
@@ -322,6 +342,9 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `plane_moments`: the normalized emittance takes `beta gamma`, the mean of `gamma v_x / c`
+  over the crossings, instead of `<v_x> / c`, which left out `gamma`; the mean energy is
+  `(gamma - 1) m c^2` (½ m v² for slow particles).
 - A Newton–Krylov step whose GMRES stops just short of its tolerance (SciPy checks the
   preconditioned residual) is taken when its true relative residual is below 0.1, instead of
   failing the solve: the 3D extraction benchmark at 420 000 nodes stopped there.

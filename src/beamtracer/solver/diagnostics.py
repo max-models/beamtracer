@@ -16,7 +16,8 @@ class BeamMoments:
     """Current-weighted second moments of a beam in one transverse plane.
 
     ``emittance`` is the rms emittance ``sqrt(<x^2><x'^2> - <x x'>^2)`` [m rad],
-    ``normalized_emittance`` that times ``beta gamma`` (from the mean axial velocity), and
+    ``normalized_emittance`` that times ``beta gamma`` (the mean axial proper velocity over
+    ``c``), ``mean_energy`` the mean kinetic energy ``(gamma - 1) m c^2`` [eV], and
     ``alpha``, ``beta`` [m], ``gamma`` [1/m] the Twiss parameters of the rms ellipse.
     """
 
@@ -42,12 +43,13 @@ class BeamMoments:
         "mean": r"\langle \cdot \rangle = \frac{\sum_k |I_k|\, (\cdot)}{\sum_k |I_k|} \quad \text{over the forward crossings of the plane}",
         "rings": r"\langle x^2 \rangle = \tfrac12 \langle r^2 \rangle, \quad \langle x'^2 \rangle = \tfrac12 \langle r'^2 + a'^2 \rangle, \quad \langle x x' \rangle = \tfrac12 \langle r r' \rangle, \qquad r' = \frac{v_r}{v_x}, \ a' = \frac{v_\theta}{v_x}",
         "planar": r"\langle y^2 \rangle, \ \langle y'^2 \rangle, \ \langle y y' \rangle \ \text{about their means}, \qquad y' = \frac{v_y}{v_x}",
-        "emittance": r"\varepsilon = \sqrt{\langle x^2 \rangle \langle x'^2 \rangle - \langle x x' \rangle^2}, \qquad \varepsilon_n = \varepsilon \frac{\langle v_x \rangle}{c}",
+        "emittance": r"\varepsilon = \sqrt{\langle x^2 \rangle \langle x'^2 \rangle - \langle x x' \rangle^2}, \qquad \varepsilon_n = \varepsilon\, \langle \beta_x \gamma \rangle = \varepsilon \frac{\langle \gamma v_x \rangle}{c}, \qquad \gamma = \frac{1}{\sqrt{1 - v^2/c^2}}",
+        "energy": r"E = (\gamma - 1) m c^2 = \frac{\gamma^2 m v^2}{\gamma + 1} \ \to \ \tfrac12 m v^2 \ (v \ll c)",
         "twiss": r"\alpha = -\frac{\langle x x' \rangle}{\varepsilon}, \qquad \beta = \frac{\langle x^2 \rangle}{\varepsilon}, \qquad \gamma = \frac{\langle x'^2 \rangle}{\varepsilon}",
     },
     assumptions=(
         r"cylindrical: each trajectory a ring, projected on one transverse plane and averaged over the azimuth (no mean subtracted), which removes the cross term $r a'$",
-        r"non-relativistic: $\varepsilon_n$ uses $\beta = \langle v_x \rangle / c$ only",
+        r"$v$ the velocities at the crossings (of either tracer mode, slower than light); $\varepsilon_n$ and $E$ relativistic, so they hold at any energy",
         r"no crossings or zero current give NaN moments; $\varepsilon = 0$ gives NaN Twiss parameters; a negative $\varepsilon^2$ (round-off) is clipped to 0",
     ),
 )
@@ -109,8 +111,12 @@ def plane_moments(
         pp = np.sum(w * (yp - myp) ** 2) / total
         xp = np.sum(w * (y - my) * (yp - myp)) / total
     emittance = float(np.sqrt(max(xx * pp - xp * xp, 0.0)))
-    beta_gamma = float(np.sum(w * vx) / total) / constants.c
-    energy = 0.5 * m * np.sum(vel * vel, axis=0) / constants.e
+    speed2 = np.sum(vel * vel, axis=0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        # the Lorentz factor of every crossing (NaN for a speed of c or more)
+        lorentz = 1.0 / np.sqrt(1.0 - speed2 / constants.c**2)
+    beta_gamma = float(np.sum(w * lorentz * vx) / total) / constants.c
+    energy = m * lorentz**2 * speed2 / (lorentz + 1.0) / constants.e
     alpha = -xp / emittance if emittance > 0 else float("nan")
     beta = xx / emittance if emittance > 0 else float("nan")
     gamma = pp / emittance if emittance > 0 else float("nan")

@@ -26,10 +26,22 @@ def _protons(position: np.ndarray, velocity: np.ndarray, current: float = 1e-3):
     )
 
 
+#: ``1 / c^2`` of the relativistic kernel cases: a scaled ``c`` of 500 km/s, so that the
+#: trajectories (at 300 km/s) have ``gamma`` of about 1.2.
+INV_C2 = 1.0 / 5e5**2
+
+
 def _kernel_case(
-    integrator: int, magnetic: bool, mirror: bool, refined: bool = False
+    integrator: int,
+    magnetic: bool,
+    mirror: bool,
+    refined: bool = False,
+    relativistic: bool = False,
 ) -> list:
-    """Random fields on a small mesh (and, ``refined``, a box of half the spacing)."""
+    """Random fields on a small mesh (and, ``refined``, a box of half the spacing).
+
+    With ``relativistic`` the kernel moves the states as proper velocities (``INV_C2``).
+    """
     rng = np.random.default_rng(3)
     n, (nx, ny, nz), h = 30, (16, 9, 8), 1e-3
     # (shape, origin, spacing, box) of every patch, finest first, the mesh last
@@ -74,6 +86,7 @@ def _kernel_case(
         np.array([5e-3, 11e-3]), np.zeros((n, 2, 3, 8)), np.zeros((n, 2), dtype=np.int64),
         slot, np.zeros((slot.max() + 1, 10, 3)), np.zeros(slot.max() + 1, dtype=np.int64),
         2, np.zeros((2, offsets[3])), 1, np.zeros((2, 3 * nx * ny * nz)),
+        INV_C2 if relativistic else 0.0,
     ]  # fmt: skip
 
 
@@ -88,12 +101,15 @@ CHARGE = 37
 CURRENT = 39
 
 
+@pytest.mark.parametrize("relativistic", [False, True])
 @pytest.mark.parametrize("refined", [False, True])
 @pytest.mark.parametrize("mirror", [False, True])
 @pytest.mark.parametrize("magnetic", [False, True])
 @pytest.mark.parametrize("integrator", [0, 1])
-def test_kernel_versions_agree(integrator, magnetic, mirror, refined) -> None:
-    args = _kernel_case(integrator, magnetic, mirror, refined)
+def test_kernel_versions_agree(
+    integrator, magnetic, mirror, refined, relativistic
+) -> None:
+    args = _kernel_case(integrator, magnetic, mirror, refined, relativistic)
     expected = _call(kernel.host_kernel.kernel.python, args)
     result = _call(kernel, args)
     assert set(np.unique(expected[6])) >= {-2, 0}  # stopped at surfaces and transmitted
@@ -112,12 +128,15 @@ def test_kernel_versions_agree(integrator, magnetic, mirror, refined) -> None:
 
 
 @pytest.mark.skipif(emulation_compiler() is None, reason="no C++ compiler")
+@pytest.mark.parametrize("relativistic", [False, True])
 @pytest.mark.parametrize("refined", [False, True])
 @pytest.mark.parametrize("mirror", [False, True])
 @pytest.mark.parametrize("magnetic", [False, True])
 @pytest.mark.parametrize("integrator", [0, 1])
-def test_cuda_version_agrees(integrator, magnetic, mirror, refined) -> None:
-    args = _kernel_case(integrator, magnetic, mirror, refined)
+def test_cuda_version_agrees(
+    integrator, magnetic, mirror, refined, relativistic
+) -> None:
+    args = _kernel_case(integrator, magnetic, mirror, refined, relativistic)
     expected = _call(kernel.host_kernel.kernel.python, args)
     result = [a.copy() if isinstance(a, np.ndarray) else a for a in args]
     result[CHARGE] = np.zeros_like(result[CHARGE][:1])  # the GPU deposits into one slab

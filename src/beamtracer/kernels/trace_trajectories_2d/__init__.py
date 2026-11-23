@@ -9,6 +9,11 @@ version when the arrays are CuPy arrays and otherwise the Pyccel version; withou
 `beamtracer.solver.BeamTracer` uses its NumPy path instead of this kernel.
 """
 
+import cunumpy as xp
+
 from beamtracer.kernels import KERNEL_PACKAGE
 
-kernel = KERNEL_PACKAGE.from_folder(__name__)
+# the CUDA version includes mpiparticles' boris.cuh (the Lorentz factor)
+kernel = KERNEL_PACKAGE.from_folder(
+    __name__, include_dirs=xp.kernels.source_roots("beamtracer", "mpiparticles")
+)
