@@ -2621,7 +2621,7 @@ dependencies = [
 [[package]]
 name = "mpiparticles"
 version = "0.1.0"
-source = { git = "https://github.com/max-models/mpiparticles?branch=devel#5e9ef3303315d7e876ddf8e37fa841c485b9c84e" }
+source = { git = "https://github.com/max-models/mpiparticles?branch=devel#414b697ab5957e2ec0a549b49c832bbd8d53b43c" }
 dependencies = [
     { name = "cunumpy" },
     { name = "maybempi" },
