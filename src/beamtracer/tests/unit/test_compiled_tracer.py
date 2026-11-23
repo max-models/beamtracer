@@ -245,13 +245,23 @@ def test_compiled_needs_the_solved_field_alone() -> None:
     assert tracer.trace(particles).status[0] == 0
 
 
+#: ``1 / c^2`` of the relativistic kernel cases: a scaled ``c`` of 500 km/s, so that the
+#: trajectories (at 300 km/s) have ``gamma`` of about 1.2.
+INV_C2 = 1.0 / 5e5**2
+
+
 def _kernel_case(
-    cylindrical: int, integrator: int = 0, refined: bool = False, graded: bool = False
+    cylindrical: int,
+    integrator: int = 0,
+    refined: bool = False,
+    graded: bool = False,
+    relativistic: bool = False,
 ) -> list:
     """Random fields on the mesh (and, ``refined``, a box of half the spacing).
 
     With ``graded`` the mesh's x axis has nodes crowded at its start (cells from a third
-    of ``h`` up), and the patches are given in its uniform coordinate.
+    of ``h`` up), and the patches are given in its uniform coordinate. With
+    ``relativistic`` the kernel moves the states as proper velocities (``INV_C2``).
     """
     rng = np.random.default_rng(7)
     n, nx, ny, h = 40, 30, 12, 1e-3
@@ -298,7 +308,7 @@ def _kernel_case(
         np.array([5e-3, 15e-3]), np.zeros((n, 2, 3, 8)), np.zeros((n, 2), dtype=np.int64),
         slot, np.zeros((slot.max() + 1, 30, 2)), np.zeros(slot.max() + 1, dtype=np.int64),
         2, np.zeros((2, node_offset)),
-        int(graded), x_nodes,
+        int(graded), x_nodes, INV_C2 if relativistic else 0.0,
     ]  # fmt: skip
 
 
@@ -313,12 +323,15 @@ GRADED = (False, True)
 CHARGE = 31
 
 
+@pytest.mark.parametrize("relativistic", [False, True])
 @pytest.mark.parametrize("graded", GRADED)
 @pytest.mark.parametrize("refined", [False, True])
 @pytest.mark.parametrize("integrator", [0, 1])
 @pytest.mark.parametrize("cylindrical", [0, 1, 2])
-def test_kernel_versions_agree(cylindrical, integrator, refined, graded) -> None:
-    args = _kernel_case(cylindrical, integrator, refined, graded)
+def test_kernel_versions_agree(
+    cylindrical, integrator, refined, graded, relativistic
+) -> None:
+    args = _kernel_case(cylindrical, integrator, refined, graded, relativistic)
     expected = _call(kernel.host_kernel.kernel.python, args)
     result = _call(kernel, args)
     assert set(np.unique(expected[6])) >= {-2, 0}  # stopped at surfaces and transmitted
@@ -335,12 +348,15 @@ def test_kernel_versions_agree(cylindrical, integrator, refined, graded) -> None
 
 
 @pytest.mark.skipif(emulation_compiler() is None, reason="no C++ compiler")
+@pytest.mark.parametrize("relativistic", [False, True])
 @pytest.mark.parametrize("graded", GRADED)
 @pytest.mark.parametrize("refined", [False, True])
 @pytest.mark.parametrize("integrator", [0, 1])
 @pytest.mark.parametrize("cylindrical", [0, 1, 2])
-def test_cuda_version_agrees(cylindrical, integrator, refined, graded) -> None:
-    args = _kernel_case(cylindrical, integrator, refined, graded)
+def test_cuda_version_agrees(
+    cylindrical, integrator, refined, graded, relativistic
+) -> None:
+    args = _kernel_case(cylindrical, integrator, refined, graded, relativistic)
     expected = _call(kernel.host_kernel.kernel.python, args)
     result = [a.copy() if isinstance(a, np.ndarray) else a for a in args]
     result[CHARGE] = np.zeros_like(result[CHARGE][:1])  # the GPU deposits into one slab

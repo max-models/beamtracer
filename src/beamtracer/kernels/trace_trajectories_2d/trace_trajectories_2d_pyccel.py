@@ -13,6 +13,8 @@ costs more than the interpolation itself.
 
 from math import floor, hypot, sqrt
 
+from mpiparticles.kernels.boris_pyccel import lorentz_factor
+
 
 def node_cell(x: float, nodes: "float[:]") -> int:
     """The edge ``[nodes[c], nodes[c + 1]]`` of sorted ``nodes`` that holds ``x`` (the ends' beyond)."""
@@ -72,6 +74,7 @@ def trace_trajectories_2d(
     charge: "float[:,:]",
     graded: int,
     x_nodes: "float[:]",
+    inv_c2: float,
 ) -> None:
     """Trace the ``active`` trajectories until they end, or reach a surface.
 
@@ -102,6 +105,11 @@ def trace_trajectories_2d(
     ``origin_x`` and ``upper_x``); a step takes the shorter of the patch's spacing and the
     local edge along ``x``. The trajectories, planes and paths stay in ``x``.
 
+    ``inv_c2`` is ``1 / c^2`` for relativistic motion, 0 for classical: ``v`` holds the
+    proper velocity ``u = gamma v`` (``v`` itself for 0, ``gamma = 1``), the kicks change it
+    by ``q/m E dt``, the positions move with ``u / gamma`` and the plane crossings record the
+    velocity ``u / gamma``.
+
     The field and the charge live on patches, finest first and the whole mesh last:
     ``patch_int[p]`` holds a patch's node counts ``nx, ny``, the offsets of its ``fx``
     ``(nx + 1, ny)`` in ``fxs`` and ``fy`` ``(nx, ny + 1)`` in ``fys``, its node count and
@@ -118,7 +126,7 @@ def trace_trajectories_2d(
     capacity = hits.shape[2]
     path_capacity = paths.shape[1]
     # fmt: off
-    #$ omp parallel for schedule(static, 1) num_threads(num_threads) private(lx, lq, cg, pp, qq, pnx, pny, ofx, ofy, ofn, pox, poy, phh, hloc, rr, t, m, k, slot, nstage, have, ca0, ca1, ca2, x0, x1, x2, v0, v1, v2, qmk, ns, st, stage, q0, q1, q2, qy, r, cy, cz, sx, sy, s, w, u, i, j, low, high, ex, ey, g0, g1, g2, a0, a1, a2, kx0, kx1, kx2, sx0, sx1, sx2, sv0, sv1, sv2, speed, accel, dt, d2, hdt, dt6, y0, y1, y2, w0, w1, w2, m0, m1, m2, deposit, p, xp, before, after, c, px, py, cell, si, sj, e)
+    #$ omp parallel for schedule(static, 1) num_threads(num_threads) private(lx, lq, cg, pp, qq, pnx, pny, ofx, ofy, ofn, pox, poy, phh, hloc, rr, t, m, k, slot, nstage, have, ca0, ca1, ca2, x0, x1, x2, v0, v1, v2, qmk, ns, st, stage, q0, q1, q2, qy, r, cy, cz, sx, sy, s, w, u, i, j, low, high, ex, ey, g0, g1, g2, a0, a1, a2, kx0, kx1, kx2, sx0, sx1, sx2, sv0, sv1, sv2, speed, accel, gv, gw, gk, dt, d2, hdt, dt6, y0, y1, y2, w0, w1, w2, m0, m1, m2, deposit, p, xp, before, after, c, px, py, cell, si, sj, e)
     # fmt: on
     for t in range(num_threads):
         m = t
@@ -169,6 +177,7 @@ def trace_trajectories_2d(
                         hloc = hloc * d2
                 # classical Runge--Kutta as BeamTracer._rk4: stage s samples the field at
                 # q, its velocity is kx; sx and sv sum the stages with weights 1, 2, 2, 1
+                gv = 1.0 / lorentz_factor(v0, v1, v2, inv_c2)
                 q0 = x0
                 q1 = x1
                 q2 = x2
@@ -176,6 +185,8 @@ def trace_trajectories_2d(
                 kx1 = v1
                 kx2 = v2
                 for stage in range(nstage):
+                    # the inverse Lorentz factor of the stage's proper velocity kx
+                    gk = 1.0 / lorentz_factor(kx0, kx1, kx2, inv_c2)
                     # the acceleration at q (planar E(x, y), cylindrical E(x, r)), or for
                     # Boris at the start that of the last step's end
                     if stage == 0 and have != 0:
@@ -268,7 +279,7 @@ def trace_trajectories_2d(
                         a0 = g0
                         a1 = g1
                         a2 = g2
-                        speed = sqrt(v0 * v0 + v1 * v1 + v2 * v2)
+                        speed = gv * sqrt(v0 * v0 + v1 * v1 + v2 * v2)
                         accel = sqrt(a0 * a0 + a1 * a1 + a2 * a2)
                         dt = -1.0
                         if speed > 0.0:
@@ -287,19 +298,20 @@ def trace_trajectories_2d(
                             kx0 = v0 + hdt * a0
                             kx1 = v1 + hdt * a1
                             kx2 = v2 + hdt * a2
-                            q0 = x0 + dt * kx0
-                            q1 = x1 + dt * kx1
-                            q2 = x2 + dt * kx2
+                            gk = 1.0 / lorentz_factor(kx0, kx1, kx2, inv_c2)
+                            q0 = x0 + dt * gk * kx0
+                            q1 = x1 + dt * gk * kx1
+                            q2 = x2 + dt * gk * kx2
                             continue
-                        sx0 = v0
-                        sx1 = v1
-                        sx2 = v2
+                        sx0 = gv * v0
+                        sx1 = gv * v1
+                        sx2 = gv * v2
                         sv0 = a0
                         sv1 = a1
                         sv2 = a2
-                        q0 = x0 + hdt * v0
-                        q1 = x1 + hdt * v1
-                        q2 = x2 + hdt * v2
+                        q0 = x0 + hdt * gv * v0
+                        q1 = x1 + hdt * gv * v1
+                        q2 = x2 + hdt * gv * v2
                         kx0 = v0 + hdt * a0
                         kx1 = v1 + hdt * a1
                         kx2 = v2 + hdt * a2
@@ -313,35 +325,35 @@ def trace_trajectories_2d(
                         ca2 = g2
                         have = 1
                     elif stage == 1:
-                        sx0 = sx0 + 2.0 * kx0
-                        sx1 = sx1 + 2.0 * kx1
-                        sx2 = sx2 + 2.0 * kx2
+                        sx0 = sx0 + 2.0 * gk * kx0
+                        sx1 = sx1 + 2.0 * gk * kx1
+                        sx2 = sx2 + 2.0 * gk * kx2
                         sv0 = sv0 + 2.0 * g0
                         sv1 = sv1 + 2.0 * g1
                         sv2 = sv2 + 2.0 * g2
-                        q0 = x0 + hdt * kx0
-                        q1 = x1 + hdt * kx1
-                        q2 = x2 + hdt * kx2
+                        q0 = x0 + hdt * gk * kx0
+                        q1 = x1 + hdt * gk * kx1
+                        q2 = x2 + hdt * gk * kx2
                         kx0 = v0 + hdt * g0
                         kx1 = v1 + hdt * g1
                         kx2 = v2 + hdt * g2
                     elif stage == 2:
-                        sx0 = sx0 + 2.0 * kx0
-                        sx1 = sx1 + 2.0 * kx1
-                        sx2 = sx2 + 2.0 * kx2
+                        sx0 = sx0 + 2.0 * gk * kx0
+                        sx1 = sx1 + 2.0 * gk * kx1
+                        sx2 = sx2 + 2.0 * gk * kx2
                         sv0 = sv0 + 2.0 * g0
                         sv1 = sv1 + 2.0 * g1
                         sv2 = sv2 + 2.0 * g2
-                        q0 = x0 + dt * kx0
-                        q1 = x1 + dt * kx1
-                        q2 = x2 + dt * kx2
+                        q0 = x0 + dt * gk * kx0
+                        q1 = x1 + dt * gk * kx1
+                        q2 = x2 + dt * gk * kx2
                         kx0 = v0 + dt * g0
                         kx1 = v1 + dt * g1
                         kx2 = v2 + dt * g2
                     else:
-                        sx0 = sx0 + kx0
-                        sx1 = sx1 + kx1
-                        sx2 = sx2 + kx2
+                        sx0 = sx0 + gk * kx0
+                        sx1 = sx1 + gk * kx1
+                        sx2 = sx2 + gk * kx2
                         sv0 = sv0 + g0
                         sv1 = sv1 + g1
                         sv2 = sv2 + g2
@@ -358,9 +370,10 @@ def trace_trajectories_2d(
                     y2 = q2
 
                 # space charge: dq dt at the Hermite midpoint, area-weighted
-                m0 = 0.5 * (x0 + y0) + dt * (v0 - w0) / 8.0
-                m1 = 0.5 * (x1 + y1) + dt * (v1 - w1) / 8.0
-                m2 = 0.5 * (x2 + y2) + dt * (v2 - w2) / 8.0
+                gw = 1.0 / lorentz_factor(w0, w1, w2, inv_c2)
+                m0 = 0.5 * (x0 + y0) + dt * (gv * v0 - gw * w0) / 8.0
+                m1 = 0.5 * (x1 + y1) + dt * (gv * v1 - gw * w1) / 8.0
+                m2 = 0.5 * (x2 + y2) + dt * (gv * v2 - gw * w2) / 8.0
                 if cylindrical == 1:
                     m1 = hypot(m1, m2)
                 elif cylindrical == 2:
@@ -421,9 +434,9 @@ def trace_trajectories_2d(
                             hits[k, p, c, 0] = xp
                             hits[k, p, c, 1] = x1 + s * (y1 - x1)
                             hits[k, p, c, 2] = x2 + s * (y2 - x2)
-                            hits[k, p, c, 3] = v0 + s * (w0 - v0)
-                            hits[k, p, c, 4] = v1 + s * (w1 - v1)
-                            hits[k, p, c, 5] = v2 + s * (w2 - v2)
+                            hits[k, p, c, 3] = gv * v0 + s * (gw * w0 - gv * v0)
+                            hits[k, p, c, 4] = gv * v1 + s * (gw * w1 - gv * v1)
+                            hits[k, p, c, 5] = gv * v2 + s * (gw * w2 - gv * v2)
                             hits[k, p, c, 6] = 1.0 if after >= 0.0 else -1.0
                             hits[k, p, c, 7] = 1.0 * ns
                         counts[k, p] = c + 1

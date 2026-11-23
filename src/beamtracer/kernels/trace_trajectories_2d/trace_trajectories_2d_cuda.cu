@@ -2,9 +2,12 @@
 // next to this file is the Pyccel version (CPU), with the same arguments.  Launch with
 // n_threads=number of active trajectories: one thread per trajectory, depositing atomically
 // into charge(0, :, :) (num_threads is the number of host threads and is ignored here).
+// With inv_c2 = 1 / c^2 > 0 the motion is relativistic: v holds the proper velocity
+// u = gamma v and the positions move with u / gamma (mpiparticles_lorentz_factor).
 
 #include "cunumpy/array_view.cuh"
 #include "cunumpy/atomic.cuh"
+#include "mpiparticles/kernels/boris.cuh"
 
 // The finest patch containing (px, py): patches finest first, the whole mesh last.
 __device__ static long long patch_of(
@@ -194,7 +197,8 @@ void trace_trajectories_2d(
     long long num_threads,
     Array2D<double> charge,
     long long graded,
-    Array1D<double> x_nodes
+    Array1D<double> x_nodes,
+    double inv_c2
 ) {
     const long long m = blockDim.x * (long long)blockIdx.x + threadIdx.x;
     if (m >= active.shape[0]) return;
@@ -228,7 +232,8 @@ void trace_trajectories_2d(
         if (!have) {
             acceleration_2d(x0, x1, x2, qmk, fxs, fys, patch_int, patch_real, n_patches, cylindrical, origin_y, graded, x_nodes, origin_x, h, &a0, &a1, &a2);
         }
-        const double speed = sqrt(v0 * v0 + v1 * v1 + v2 * v2);
+        const double gv = 1.0 / mpiparticles_lorentz_factor(v0, v1, v2, inv_c2);
+        const double speed = gv * sqrt(v0 * v0 + v1 * v1 + v2 * v2);
         const double accel = sqrt(a0 * a0 + a1 * a1 + a2 * a2);
         double dt = -1.0;
         if (speed > 0.0) dt = hloc / speed;
@@ -245,9 +250,10 @@ void trace_trajectories_2d(
             const double kx0 = v0 + hdt * a0;
             const double kx1 = v1 + hdt * a1;
             const double kx2 = v2 + hdt * a2;
-            y0 = x0 + dt * kx0;
-            y1 = x1 + dt * kx1;
-            y2 = x2 + dt * kx2;
+            const double gk = 1.0 / mpiparticles_lorentz_factor(kx0, kx1, kx2, inv_c2);
+            y0 = x0 + dt * gk * kx0;
+            y1 = x1 + dt * gk * kx1;
+            y2 = x2 + dt * gk * kx2;
             double g0, g1, g2;
             acceleration_2d(y0, y1, y2, qmk, fxs, fys, patch_int, patch_real, n_patches, cylindrical, origin_y, graded, x_nodes, origin_x, h, &g0, &g1, &g2);
             w0 = kx0 + hdt * g0;
@@ -260,30 +266,34 @@ void trace_trajectories_2d(
         const double k2x1 = v1 + 0.5 * dt * a1;
         const double k2x2 = v2 + 0.5 * dt * a2;
         double k2v0, k2v1, k2v2;
-        acceleration_2d(x0 + 0.5 * dt * v0, x1 + 0.5 * dt * v1, x2 + 0.5 * dt * v2, qmk, fxs, fys, patch_int, patch_real, n_patches,
+        const double g2 = 1.0 / mpiparticles_lorentz_factor(k2x0, k2x1, k2x2, inv_c2);
+        acceleration_2d(x0 + 0.5 * dt * gv * v0, x1 + 0.5 * dt * gv * v1, x2 + 0.5 * dt * gv * v2, qmk, fxs, fys, patch_int, patch_real, n_patches,
                         cylindrical, origin_y, graded, x_nodes, origin_x, h, &k2v0, &k2v1, &k2v2);
         const double k3x0 = v0 + 0.5 * dt * k2v0;
         const double k3x1 = v1 + 0.5 * dt * k2v1;
         const double k3x2 = v2 + 0.5 * dt * k2v2;
         double k3v0, k3v1, k3v2;
-        acceleration_2d(x0 + 0.5 * dt * k2x0, x1 + 0.5 * dt * k2x1, x2 + 0.5 * dt * k2x2, qmk, fxs, fys, patch_int, patch_real, n_patches,
+        const double g3 = 1.0 / mpiparticles_lorentz_factor(k3x0, k3x1, k3x2, inv_c2);
+        acceleration_2d(x0 + 0.5 * dt * g2 * k2x0, x1 + 0.5 * dt * g2 * k2x1, x2 + 0.5 * dt * g2 * k2x2, qmk, fxs, fys, patch_int, patch_real, n_patches,
                         cylindrical, origin_y, graded, x_nodes, origin_x, h, &k3v0, &k3v1, &k3v2);
         const double k4x0 = v0 + dt * k3v0;
         const double k4x1 = v1 + dt * k3v1;
         const double k4x2 = v2 + dt * k3v2;
         double k4v0, k4v1, k4v2;
-        acceleration_2d(x0 + dt * k3x0, x1 + dt * k3x1, x2 + dt * k3x2, qmk, fxs, fys, patch_int, patch_real, n_patches,
+        const double g4 = 1.0 / mpiparticles_lorentz_factor(k4x0, k4x1, k4x2, inv_c2);
+        acceleration_2d(x0 + dt * g3 * k3x0, x1 + dt * g3 * k3x1, x2 + dt * g3 * k3x2, qmk, fxs, fys, patch_int, patch_real, n_patches,
                         cylindrical, origin_y, graded, x_nodes, origin_x, h, &k4v0, &k4v1, &k4v2);
-        y0 = x0 + dt / 6.0 * (v0 + 2.0 * k2x0 + 2.0 * k3x0 + k4x0);
-        y1 = x1 + dt / 6.0 * (v1 + 2.0 * k2x1 + 2.0 * k3x1 + k4x1);
-        y2 = x2 + dt / 6.0 * (v2 + 2.0 * k2x2 + 2.0 * k3x2 + k4x2);
+        y0 = x0 + dt / 6.0 * (gv * v0 + 2.0 * g2 * k2x0 + 2.0 * g3 * k3x0 + g4 * k4x0);
+        y1 = x1 + dt / 6.0 * (gv * v1 + 2.0 * g2 * k2x1 + 2.0 * g3 * k3x1 + g4 * k4x1);
+        y2 = x2 + dt / 6.0 * (gv * v2 + 2.0 * g2 * k2x2 + 2.0 * g3 * k3x2 + g4 * k4x2);
         w0 = v0 + dt / 6.0 * (a0 + 2.0 * k2v0 + 2.0 * k3v0 + k4v0);
         w1 = v1 + dt / 6.0 * (a1 + 2.0 * k2v1 + 2.0 * k3v1 + k4v1);
         w2 = v2 + dt / 6.0 * (a2 + 2.0 * k2v2 + 2.0 * k3v2 + k4v2);
         }
-        const double m0 = 0.5 * (x0 + y0) + dt * (v0 - w0) / 8.0;
-        const double m1 = 0.5 * (x1 + y1) + dt * (v1 - w1) / 8.0;
-        const double m2 = 0.5 * (x2 + y2) + dt * (v2 - w2) / 8.0;
+        const double gw = 1.0 / mpiparticles_lorentz_factor(w0, w1, w2, inv_c2);
+        const double m0 = 0.5 * (x0 + y0) + dt * (gv * v0 - gw * w0) / 8.0;
+        const double m1 = 0.5 * (x1 + y1) + dt * (gv * v1 - gw * w1) / 8.0;
+        const double m2 = 0.5 * (x2 + y2) + dt * (gv * v2 - gw * w2) / 8.0;
         const double my = mesh_y(m1, m2, cylindrical, origin_y);
         deposit_point_2d(uniform_x(m0, graded, x_nodes, origin_x, h), my, dqk * dt, patch_int, patch_real, n_patches, cylindrical, charge);
         ns = ns + 1;
@@ -298,9 +308,9 @@ void trace_trajectories_2d(
                     hits(k, p, c, 0) = xp;
                     hits(k, p, c, 1) = x1 + s * (y1 - x1);
                     hits(k, p, c, 2) = x2 + s * (y2 - x2);
-                    hits(k, p, c, 3) = v0 + s * (w0 - v0);
-                    hits(k, p, c, 4) = v1 + s * (w1 - v1);
-                    hits(k, p, c, 5) = v2 + s * (w2 - v2);
+                    hits(k, p, c, 3) = gv * v0 + s * (gw * w0 - gv * v0);
+                    hits(k, p, c, 4) = gv * v1 + s * (gw * w1 - gv * v1);
+                    hits(k, p, c, 5) = gv * v2 + s * (gw * w2 - gv * v2);
                     hits(k, p, c, 6) = after >= 0.0 ? 1.0 : -1.0;
                     hits(k, p, c, 7) = 1.0 * ns;
                 }

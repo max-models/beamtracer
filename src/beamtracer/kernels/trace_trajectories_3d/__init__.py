@@ -9,6 +9,11 @@ hitting an electrode. ``kernel(...)`` runs the CUDA version when the arrays are 
 and otherwise the Pyccel version (or, without Pyccel, its source as Python).
 """
 
+import cunumpy as xp
+
 from beamtracer.kernels import KERNEL_PACKAGE
 
-kernel = KERNEL_PACKAGE.from_folder(__name__)
+# the CUDA version includes mpiparticles' boris.cuh (the relativistic Boris block)
+kernel = KERNEL_PACKAGE.from_folder(
+    __name__, include_dirs=xp.kernels.source_roots("beamtracer", "mpiparticles")
+)

@@ -1127,8 +1127,8 @@ toml = [
 
 [[package]]
 name = "cunumpy"
-version = "0.7.2"
-source = { git = "https://github.com/max-models/cunumpy?branch=devel#bf29d235349c31a6371c1950eecce19849a2299a" }
+version = "0.8.0"
+source = { git = "https://github.com/max-models/cunumpy?branch=devel#a25c7b31072823d31e0815f65efa0daa1212a403" }
 dependencies = [
     { name = "array-api-compat" },
     { name = "maybempi" },
@@ -2621,7 +2621,7 @@ dependencies = [
 [[package]]
 name = "mpiparticles"
 version = "0.1.0"
-source = { git = "https://github.com/max-models/mpiparticles?branch=devel#95e0619c662a3f8d2f4f8dd9c656857d31058a56" }
+source = { git = "https://github.com/max-models/mpiparticles?branch=devel#414b697ab5957e2ec0a549b49c832bbd8d53b43c" }
 dependencies = [
     { name = "cunumpy" },
     { name = "maybempi" },
@@ -2629,7 +2629,7 @@ dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "pyccel" },
+    { name = "pyccel", marker = "sys_platform != 'emscripten'" },
     { name = "scope-profiler" },
 ]
 

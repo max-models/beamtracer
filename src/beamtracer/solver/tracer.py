@@ -21,7 +21,7 @@ from typing import Any
 import numpy as np
 import scope_profiler
 from methodcard import ConvergenceProblem, Rule, method
-from mpiparticles import boris_velocity
+from mpiparticles import boris_velocity, lorentz_factor, proper_velocity
 from scipy import constants
 
 from beamtracer._profiling import PROFILE_TAGS
@@ -141,6 +141,34 @@ def _gaussian_samples(num: int, sampling: str | np.random.Generator) -> np.ndarr
     return norm.ppf(sobol.random(num))
 
 
+def _beam_speeds(
+    energy: float,
+    parallel_temperature: float,
+    transverse_temperature: float,
+    m: float,
+    relativistic: bool,
+) -> tuple[float, float, float]:
+    """The speed of a beam of ``energy`` [eV] and its spreads, of particles of mass ``m`` [kg].
+
+    Classical: ``sqrt(2 E e / m)`` and ``sqrt(T e / m)``. Relativistic: the proper speed
+    ``u = sqrt(gamma^2 - 1) c`` with ``gamma = 1 + E e / (m c^2)``, the spreads those of
+    ``u`` (the thermal momenta over the mass, ``sqrt(T e / m)`` for ``T << m c^2``).
+    """
+    if not relativistic:
+        return (
+            float(np.sqrt(2.0 * energy * constants.e / m)),
+            float(np.sqrt(parallel_temperature * constants.e / m)),
+            float(np.sqrt(transverse_temperature * constants.e / m)),
+        )
+    c = constants.c
+    gamma = 1.0 + energy * constants.e / (m * c * c)
+    return (
+        float(c * np.sqrt(gamma * gamma - 1.0)),
+        float(np.sqrt(parallel_temperature * constants.e / m)),
+        float(np.sqrt(transverse_temperature * constants.e / m)),
+    )
+
+
 def _beam_rules() -> dict:
     """The SymPy rules of `beam_with_energy` (for the tests)."""
     import sympy
@@ -180,6 +208,7 @@ def _beam_rules() -> dict:
         "positions": r"\mathbf x_k = \mathbf a + \frac{k + 1/2}{N} (\mathbf b - \mathbf a), \qquad k = 0, \dots, N - 1",
         "velocities": r"\mathbf v = v_0 \hat{\mathbf n} + \sigma_\perp g_1 \hat{\mathbf t} + \sigma_\parallel g_2 \hat{\mathbf n} \ (+ \sigma_\perp g_3 \hat{\mathbf z} \text{ cylindrical}), \qquad \hat{\mathbf n} = (t_y, -t_x)",
         "speed": r"v_0 = \sqrt{\frac{2 E e}{m}}, \qquad \sigma_{\parallel,\perp} = \sqrt{\frac{T_{\parallel,\perp}\, e}{m}}, \qquad \rho_0 = \frac{J}{v_0}",
+        "relativistic": r"\gamma_0 = 1 + \frac{E e}{m c^2}, \quad u_0 = c \sqrt{\gamma_0^2 - 1}, \qquad \mathbf u = u_0 \hat{\mathbf n} + \dots \text{ (spreads as above, in } \mathbf u), \qquad \mathbf v = \frac{\mathbf u}{\sqrt{1 + u^2/c^2}}, \quad \rho_0 = \frac{J}{v_0}",
         "ring": r"I_k = \frac{2\pi J s\, r_k}{N} \text{ (cylindrical, a ring)}, \qquad I_k = \frac{J s}{N} \text{ [A/m] (planar)}",
     },
     assumptions=(
@@ -203,6 +232,7 @@ def beam_with_energy(
     cylindrical: bool,
     species: int = 0,
     sampling: str | np.random.Generator = "sobol",
+    relativistic: bool = False,
 ) -> tuple[BeamParticles, float]:
     """Seed a beam emitted from a line with a given energy; return it and ``J / v``.
 
@@ -218,12 +248,17 @@ def beam_with_energy(
     inverse Gaussian distribution: the same beam on every call, so the
     Vlasov iteration reaches a fixed point. A `numpy.random.Generator` draws them at
     random instead.
+
+    With ``relativistic`` the energy gives the proper speed ``u = c sqrt(gamma^2 - 1)``,
+    ``gamma = 1 + E e / (m c^2)``, the spreads are drawn in the proper velocity ``u = gamma
+    v``, and the particles get the velocities ``u / gamma`` (for a `BeamTracer` with
+    ``relativistic=True``); ``J / v`` is taken with the speed ``u / gamma``.
     """
     q = charge * constants.e
     m = mass * constants.atomic_mass
-    v = np.sqrt(2.0 * energy * constants.e / m)
-    dvp = np.sqrt(parallel_temperature * constants.e / m)
-    dvt = np.sqrt(transverse_temperature * constants.e / m)
+    v, dvp, dvt = _beam_speeds(
+        energy, parallel_temperature, transverse_temperature, m, relativistic
+    )
     (x1, y1), (x2, y2) = start, end
     s = float(np.hypot(x2 - x1, y2 - y1))
     if s == 0.0:
@@ -241,9 +276,13 @@ def beam_with_energy(
         current = 2.0 * np.pi * current_density * s * py / num_particles
     else:
         current = np.full(num_particles, current_density * s / num_particles)
+    velocity = np.stack([vx, vy, vz], axis=0)
+    if relativistic:  # the proper velocities u to velocities u / gamma
+        velocity = velocity / lorentz_factor(velocity, constants.c)
+        v = v / float(np.sqrt(1.0 + (v / constants.c) ** 2))
     particles = BeamParticles(
         position=np.stack([px, py, np.zeros(num_particles)], axis=0),
-        velocity=np.stack([vx, vy, vz], axis=0),
+        velocity=velocity,
         charge=np.full(num_particles, q),
         mass=np.full(num_particles, m),
         current=current,
@@ -387,6 +426,8 @@ class BeamTracer:
         charge_changing: ChargeChanging | None = None,
         compiled: bool | None = None,
         integrator: str = "rk4",
+        relativistic: bool = False,
+        speed_of_light: float = constants.c,
     ) -> None:
         """Set up the tracer; ``save_trajectories`` keeps every n-th trajectory (0: none).
 
@@ -396,6 +437,11 @@ class BeamTracer:
         compiled tracer (`compiled_available`) or the NumPy one; ``None`` takes the
         compiled one where it applies. ``integrator`` is ``"rk4"`` (`_rk4`, four field
         evaluations a step) or ``"boris"`` (`_boris`, one).
+
+        With ``relativistic`` the particles move by the relativistic equations of motion:
+        the tracer advances their proper velocities ``u = gamma v`` (made from the
+        particles' velocities at the start; the plane crossings record ``u / gamma``),
+        Boris's step is mpiparticles' relativistic one. ``speed_of_light`` [m/s] is ``c``.
         """
         if not 0.0 < step_fraction <= 1.0:
             raise ValueError(f"step_fraction must be in (0, 1], got {step_fraction}")
@@ -409,6 +455,9 @@ class BeamTracer:
                 f"integrator must be one of {INTEGRATORS}, got {integrator!r}"
             )
         self.integrator = integrator
+        #: Whether the motion is relativistic, and the speed of light [m/s].
+        self.relativistic = bool(relativistic)
+        self.speed_of_light = float(speed_of_light)
         #: The beam's own magnetic field, a function like ``magnetic`` added to it (set by
         #: the Vlasov iteration, `beamtracer.solver.self_field`).
         self.self_magnetic: (
@@ -443,29 +492,40 @@ class BeamTracer:
             touch[:-1, :-1] | touch[1:, :-1] | touch[:-1, 1:] | touch[1:, 1:]
         )
 
+    def _velocity(self, v: np.ndarray) -> np.ndarray:
+        """The velocity of the state ``v``: ``u / gamma`` with `relativistic`, else ``v``."""
+        if not self.relativistic:
+            return v
+        return v / lorentz_factor(v, self.speed_of_light)
+
     # -- fields -----------------------------------------------------------------------------
 
     @method(
         equations={
             "motion": r"\frac{d\mathbf x}{dt} = \mathbf v, \qquad \frac{d\mathbf v}{dt} = \frac{q}{m}\left(\mathbf E + \mathbf v \times \mathbf B\right)",
+            "relativistic": r"\frac{d\mathbf x}{dt} = \frac{\mathbf u}{\gamma}, \qquad \frac{d\mathbf u}{dt} = \frac{q}{m}\left(\mathbf E + \frac{\mathbf u}{\gamma} \times \mathbf B\right), \qquad \gamma = \sqrt{1 + \frac{u^2}{c^2}}",
             "planar": r"\mathbf E = (E_x, E_y, 0)(x, y) + \mathbf E_\mathrm{imp}(x, y), \qquad \mathbf B = \mathbf B(x, y)",
             "cylindrical": r"r = \sqrt{y^2 + z^2}, \qquad \mathbf E = E_x \hat{\mathbf x} + E_r \hat{\mathbf r} + \mathbf E_\mathrm{imp}, \qquad \mathbf B = B_x \hat{\mathbf x} + B_r \hat{\mathbf r} + B_\theta \hat{\boldsymbol\theta}, \qquad \hat{\boldsymbol\theta} = \hat{\mathbf x} \times \hat{\mathbf r}",
             "symmetry_plane": r"s = \operatorname{sign}(y - y_0), \quad \tilde y = y_0 + |y - y_0|: \qquad \mathbf E = (E_x, s E_y, 0)(x, \tilde y), \qquad \mathbf B = (s B_x, B_y, s B_z)(x, \tilde y)",
             "mean_charge": r"q = \bar q = e \sum_s z_s F_s \quad \text{(charge changes in fractions mode)}",
         },
         assumptions=(
-            r"non-relativistic; 3D Cartesian motion in fields of $(x, y)$ or $(x, r)$, so a trajectory crossing the axis continues at negative $y$",
+            r"classical, or relativistic with `relativistic` (the state is then the proper velocity $\mathbf u = \gamma \mathbf v$, $m$ the rest mass); 3D Cartesian motion in fields of $(x, y)$ or $(x, r)$, so a trajectory crossing the axis continues at negative $y$",
             r"symmetry plane (planar): the geometry is mirrored at $y = y_0$; a trajectory crossing it continues in the mirrored field and deposits at $\tilde y$",
             r"cylindrical: a trajectory stands for a ring of charge; on the axis $\hat{\mathbf r} = 0$, so $E_r$ and $B_r$ do not act there",
             r"the imposed $\mathbf E_\mathrm{imp}$ and $\mathbf B$ (solenoids, a field map) are static and given in the plane: ``(x, y)`` or ``(x, r)``, the cylindrical ones axial, radial (and azimuthal)",
         ),
     )
     def acceleration(self, x: np.ndarray, v: np.ndarray, qm: np.ndarray) -> np.ndarray:
-        """Return the acceleration ``(3, N)`` at positions ``x`` and velocities ``v``."""
+        """Return the acceleration ``(3, N)`` at positions ``x`` and velocities ``v``.
+
+        With `relativistic` ``v`` is the proper velocity ``u`` and the acceleration
+        ``du/dt``.
+        """
         electric, magnetic = self.fields(x)
         force = electric
         if magnetic is not None:
-            force += np.cross(v, magnetic, axis=0)
+            force += np.cross(self._velocity(v), magnetic, axis=0)
         return qm * force
 
     def _magnetic(
@@ -523,27 +583,36 @@ class BeamTracer:
         return e, _cartesian(magnetic(x[0], r), cy, cz)
 
     def _rk4(self, x, v, a, dt, qm):
-        """One classical Runge--Kutta step of ``dx/dt = v, dv/dt = a(x, v)``."""
+        """One classical Runge--Kutta step of ``dx/dt = v, dv/dt = a(x, v)``.
+
+        With `relativistic` ``v`` is the proper velocity ``u``: ``dx/dt = u / gamma``.
+        """
         d = dt
-        k1x, k1v = v, a
-        k2x = v + 0.5 * d * k1v
-        k2v = self.acceleration(x + 0.5 * d * k1x, k2x, qm)
-        k3x = v + 0.5 * d * k2v
-        k3v = self.acceleration(x + 0.5 * d * k2x, k3x, qm)
-        k4x = v + d * k3v
-        k4v = self.acceleration(x + d * k3x, k4x, qm)
+        k1x, k1v = self._velocity(v), a
+        u2 = v + 0.5 * d * k1v
+        k2x = self._velocity(u2)
+        k2v = self.acceleration(x + 0.5 * d * k1x, u2, qm)
+        u3 = v + 0.5 * d * k2v
+        k3x = self._velocity(u3)
+        k3v = self.acceleration(x + 0.5 * d * k2x, u3, qm)
+        u4 = v + d * k3v
+        k4x = self._velocity(u4)
+        k4v = self.acceleration(x + d * k3x, u4, qm)
         x_new = x + d / 6.0 * (k1x + 2.0 * k2x + 2.0 * k3x + k4x)
         v_new = v + d / 6.0 * (k1v + 2.0 * k2v + 2.0 * k3v + k4v)
         return x_new, v_new
 
-    @staticmethod
-    def _kick(v, e, b, tau, qm):
+    def _kick(self, v, e, b, tau, qm):
         """Advance ``v`` by ``tau`` in the fields ``e``, ``b``: Boris's half kick, rotation, half kick.
 
-        The compiled `mpiparticles.boris_velocity`; ``v`` is not changed.
+        The compiled `mpiparticles.boris_velocity` (relativistic with `relativistic`, on the
+        proper velocity); ``v`` is not changed.
         """
         velocity = np.array(v, dtype=float, order="C")
-        boris_velocity(velocity, e, b, tau, qm)
+        boris_velocity(
+            velocity, e, b, tau, qm,
+            relativistic=self.relativistic, speed_of_light=self.speed_of_light,
+        )  # fmt: skip
         return velocity
 
     @method(
@@ -556,6 +625,7 @@ class BeamTracer:
             r"kick--drift--kick with the velocity at whole steps, so the step may change from one step to the next; the field at the end of a step is that of the start of the next, one evaluation a step",
             r"without $\mathbf B$ it is the velocity Verlet method; the rotation keeps $|\mathbf v|$ in a pure $\mathbf B$",
             r"the same step $\Delta t$ as `rk4`; second order against its fourth, while the interpolated field is itself second order in $h$",
+            r"relativistic: $\mathcal B_\tau$ acts on $\mathbf u = \gamma \mathbf v$ with $\mathbf t = \tfrac{\tau}{2}\tfrac{q}{m}\mathbf B / \gamma^-$ (mpiparticles' relativistic Boris), and the drift is $\Delta t\, \mathbf u^{n+1/2} / \gamma^{n+1/2}$",
         ),
         components=("beamtracer.solver.tracer.BeamTracer.acceleration",),
         problem=_boris_problem,
@@ -571,11 +641,11 @@ class BeamTracer:
             if a is None:
                 a = self.acceleration(x, v, qm)
             half = v + tau * a
-            x_new = x + dt * half
+            x_new = x + dt * self._velocity(half)
             return x_new, half + tau * self.acceleration(x_new, half, qm)
         e, b = self.fields(x)
         half = self._kick(v, e, b, tau, qm)
-        x_new = x + dt * half
+        x_new = x + dt * self._velocity(half)
         e, b = self.fields(x_new)
         return x_new, self._kick(half, e, b, tau, qm)
 
@@ -768,6 +838,16 @@ class BeamTracer:
             target,
         )
 
+    def _state(self, velocity: np.ndarray) -> np.ndarray:
+        """The traced state of particles with ``velocity``: the proper velocity with `relativistic`.
+
+        A C-contiguous float copy.
+        """
+        state = np.array(velocity, dtype=float, order="C")
+        if self.relativistic:
+            state = np.ascontiguousarray(proper_velocity(state, self.speed_of_light))
+        return state
+
     def _trace_numpy(self, particles: BeamParticles, save_every: int) -> TraceResult:
         """Trace with NumPy, all trajectories a step at a time; the charges per node."""
         mesh = self.mesh
@@ -782,7 +862,7 @@ class BeamTracer:
 
         index = np.arange(n)
         x = particles.position.astype(float).copy()
-        v = particles.velocity.astype(float).copy()
+        v = self._state(particles.velocity)
         qm = particles.charge / particles.mass
         current = particles.current.astype(float)
         # the space charge carries the particles' sign: currents are magnitudes
@@ -835,7 +915,8 @@ class BeamTracer:
             if fractions is not None:
                 qm[index] = (state_charges @ fractions) / mass[index]
             a = self.acceleration(x, v, qm[index])
-            speed = np.linalg.norm(v, axis=0)
+            velocity = self._velocity(v)
+            speed = np.linalg.norm(velocity, axis=0)
             accel = np.linalg.norm(a, axis=0)
             spacing = self._spacing(x)
             with np.errstate(divide="ignore"):
@@ -843,9 +924,10 @@ class BeamTracer:
             dt = self.step_fraction * np.where(np.isfinite(dt), dt, spacing)
             advance = self._rk4 if self.integrator == "rk4" else self._boris
             x_new, v_new = advance(x, v, a, dt, qm[index])
+            velocity_new = self._velocity(v_new)
 
             # Space charge: I dt at the (Hermite) midpoint of the step.
-            mid = 0.5 * (x + x_new) + dt * (v - v_new) / 8.0
+            mid = 0.5 * (x + x_new) + dt * (velocity - velocity_new) / 8.0
             fractions_new = None
             events = None
             if fractions is not None:
@@ -854,7 +936,10 @@ class BeamTracer:
                 path = (
                     0.5
                     * dt
-                    * (np.linalg.norm(v, axis=0) + np.linalg.norm(v_new, axis=0))
+                    * (
+                        np.linalg.norm(velocity, axis=0)
+                        + np.linalg.norm(velocity_new, axis=0)
+                    )
                     * self._inside(x, x_new)
                 )
                 lines = changing.line_densities(mid[0], path)
@@ -882,7 +967,7 @@ class BeamTracer:
 
             for hits in planes:
                 self._cross(
-                    hits, x, v, x_new, v_new, current[index], species[index],
+                    hits, x, velocity, x_new, velocity_new, current[index], species[index],
                     fractions, fractions_new, None if events is None else events.at,
                 )  # fmt: skip
 
@@ -967,6 +1052,10 @@ class BeamTracer:
             tallies=tallies,
             current_density=axial_current,
         )
+
+    def _inv_c2(self) -> float:
+        """``1 / c^2`` of the compiled tracers with `relativistic`, else 0 (``gamma = 1``)."""
+        return 1.0 / self.speed_of_light**2 if self.relativistic else 0.0
 
     def _use_compiled(self) -> bool:
         """Whether this trace runs the compiled tracer.
@@ -1106,7 +1195,7 @@ class BeamTracer:
         nx, ny = mesh.shape
         n = len(particles)
         x = np.array(particles.position, dtype=float, order="C")
-        v = np.array(particles.velocity, dtype=float, order="C")
+        v = self._state(particles.velocity)
         qm = np.ascontiguousarray(particles.charge / particles.mass, dtype=float)
         current = particles.current.astype(float)
         dq = np.ascontiguousarray(np.sign(particles.charge) * np.abs(current))
@@ -1154,7 +1243,7 @@ class BeamTracer:
                     self.step_fraction, self.max_steps,
                     cells, subcells, SUBCELLS, planes, hits, counts,
                     path_slot, paths, path_count, threads, charge,
-                    int(mesh.graded), x_nodes,
+                    int(mesh.graded), x_nodes, self._inv_c2(),
                 )  # fmt: skip
                 paused = active[status[active] == _PAUSED]
                 if not paused.size:
@@ -1223,6 +1312,7 @@ class BeamTracer:
             "weights": r"w_x = \frac{x - x_i}{h}, \qquad w_r = \frac{r^2 - r_j^2}{r_{j+1}^2 - r_j^2} \ \text{(cylindrical)}, \quad w_y = \frac{y - y_j}{h} \ \text{(planar)}",
             "volumes": r"\rho_{ij} = \frac{Q_{ij}}{V_j}, \qquad V_j = h^2 \ \text{(planar)}, \quad V_j = \pi h (r_{j+1/2}^2 - r_{j-1/2}^2) = 2\pi r_j h^2, \quad V_0 = \pi h^3",
             "path": r"\Delta s = \tfrac12 \Delta t\, (|\mathbf v| + |\mathbf v'|) \times \text{the share of the step inside the mesh}",
+            "relativistic": r"\mathbf v = \mathbf u / \gamma \ \text{in the step, the midpoint, the path and the plane crossings (with `relativistic`)}",
         },
         assumptions=(
             r"a steady trajectory of current $I$ is a line charge $I / v$, so a step holds $I \Delta t$; currents are magnitudes, the sign is the charge's",

@@ -15,6 +15,7 @@ from typing import Any
 import numpy as np
 import scope_profiler
 from methodcard import method
+from mpiparticles import lorentz_factor, proper_velocity
 from scipy import constants
 
 from beamtracer._profiling import PROFILE_TAGS
@@ -30,6 +31,7 @@ from beamtracer.solver.tracer import (
     BeamParticles,
     PlaneHits,
     TraceResult,
+    _beam_speeds,
     _gaussian_samples,
     _num_threads,
     share_of,
@@ -44,6 +46,7 @@ SUBCELLS_3D = 4
         "rectangle": r"(y, z) = \mathbf c + \left(\left(i + \tfrac12\right) \frac{a}{n_y} - \frac a2,\ \left(j + \tfrac12\right) \frac{b}{n_z} - \frac b2\right), \qquad n_y \approx \sqrt{N a / b},\ n_z \approx N / n_y",
         "disc": r"r_k = R \sqrt{\frac{k + 1/2}{N}}, \qquad \theta_k = k\, \pi (3 - \sqrt 5)",
         "velocity": r"\mathbf v = (v_0 + \sigma_\parallel g_2,\ \sigma_\perp g_1,\ \sigma_\perp g_3), \qquad v_0 = \sqrt{\frac{2 E e}{m}}, \quad \sigma = \sqrt{\frac{T e}{m}}",
+        "relativistic": r"\mathbf u = (u_0 + \sigma_\parallel g_2,\ \sigma_\perp g_1,\ \sigma_\perp g_3), \quad u_0 = c\sqrt{\gamma_0^2 - 1}, \quad \gamma_0 = 1 + \frac{E e}{m c^2}, \qquad \mathbf v = \frac{\mathbf u}{\sqrt{1 + u^2 / c^2}}",
         "current": r"I_k = \frac{J A}{N}",
     },
     assumptions=(
@@ -64,6 +67,7 @@ def beam_on_surface(
     shape: str = "rectangle",
     *,
     species: int = 0,
+    relativistic: bool = False,
 ) -> tuple[BeamParticles, float]:
     """Seed a beam emitted from a surface perpendicular to ``x``; return it and ``J / v``.
 
@@ -72,13 +76,15 @@ def beam_on_surface(
     ``"disc"`` of radius ``size[0]``, the trajectories on a sunflower pattern of equal
     areas, centred at ``centre`` ``(x, y, z)`` [m]. They move along ``+x`` at ``energy``
     [eV] with Gaussian spreads [eV]; ``current_density`` [A/m^2], ``charge`` [e], ``mass``
-    [u]. Every trajectory carries ``J A / N``.
+    [u]. Every trajectory carries ``J A / N``. With ``relativistic`` the speed and spreads
+    are those of the proper velocity (as `beamtracer.solver.beam_with_energy`), and the
+    particles get the velocities ``u / gamma``.
     """
     q = charge * constants.e
     m = mass * constants.atomic_mass
-    v = np.sqrt(2.0 * energy * constants.e / m)
-    dvp = np.sqrt(parallel_temperature * constants.e / m)
-    dvt = np.sqrt(transverse_temperature * constants.e / m)
+    v, dvp, dvt = _beam_speeds(
+        energy, parallel_temperature, transverse_temperature, m, relativistic
+    )
     cx, cy, cz = (float(c) for c in centre)
     if shape == "rectangle":
         a, b = (float(s) for s in size)
@@ -99,9 +105,13 @@ def beam_on_surface(
         raise ValueError(f"shape must be 'rectangle' or 'disc', got {shape!r}")
     n = py.size
     g = _gaussian_samples(n, "sobol")
+    velocity = np.stack([v + dvp * g[:, 1], dvt * g[:, 0], dvt * g[:, 2]])
+    if relativistic:  # the proper velocities u to velocities u / gamma
+        velocity = velocity / lorentz_factor(velocity, constants.c)
+        v = v / float(np.sqrt(1.0 + (v / constants.c) ** 2))
     particles = BeamParticles(
         position=np.stack([np.full(n, cx), py, pz]),
-        velocity=np.stack([v + dvp * g[:, 1], dvt * g[:, 0], dvt * g[:, 2]]),
+        velocity=velocity,
         charge=np.full(n, q),
         mass=np.full(n, m),
         current=np.full(n, current_density * area / n),
@@ -113,6 +123,7 @@ def beam_on_surface(
 @method(
     equations={
         "motion": r"\frac{d\mathbf x}{dt} = \mathbf v, \qquad \frac{d\mathbf v}{dt} = \frac{q}{m}\left(\mathbf E + \mathbf v \times \mathbf B\right)",
+        "relativistic": r"\frac{d\mathbf x}{dt} = \frac{\mathbf u}{\gamma}, \qquad \frac{d\mathbf u}{dt} = \frac{q}{m}\left(\mathbf E + \frac{\mathbf u}{\gamma} \times \mathbf B\right), \qquad \gamma = \sqrt{1 + \frac{u^2}{c^2}}",
         "step": r"\Delta t = f \min\left(\frac{h}{|\mathbf v|}, \sqrt{\frac{2h}{|\mathbf a|}}\right)",
         "boris": r"\mathbf v^{\pm} = \mathbf v \pm \tfrac{q}{m} \mathbf E \tfrac{\tau}{2}, \quad \mathbf t = \tfrac{q}{m} \mathbf B \tfrac{\tau}{2}, \quad \mathbf v' = \mathbf v^- + \mathbf v^- \times \mathbf t, \quad \mathbf v^+ = \mathbf v^- + \frac{2\, \mathbf v' \times \mathbf t}{1 + t^2}, \qquad \tau = \Delta t / 2",
         "midpoint": r"\mathbf x_{1/2} = \tfrac12 (\mathbf x + \mathbf x') + \frac{\Delta t}{8} (\mathbf v - \mathbf v'), \qquad \Delta Q = \operatorname{sign}(q)\, I\, \Delta t",
@@ -120,8 +131,8 @@ def beam_on_surface(
         "mirror": r"\tilde y = y_0 + |y - y_0|: \quad E_y \to s E_y, \ (B_x, B_z) \to s (B_x, B_z), \qquad s = \operatorname{sign}(y - y_0) \text{ (and alike for } z)",
     },
     assumptions=(
-        r"non-relativistic; $\mathbf E$ the staggered field interpolated trilinearly, $\mathbf B$ given on the nodes, interpolated trilinearly",
-        r"Boris: two half steps of $\tau = \Delta t/2$, each a kick, a rotation and a kick, around the drift $\mathbf x' = \mathbf x + \Delta t\, \mathbf v_{1/2}$ (one field evaluation a step)",
+        r"classical, or relativistic with `relativistic` (the state is the proper velocity $\mathbf u = \gamma \mathbf v$; in the step estimate, the midpoint and the plane crossings $\mathbf v = \mathbf u / \gamma$); $\mathbf E$ the staggered field interpolated trilinearly, $\mathbf B$ given on the nodes, interpolated trilinearly",
+        r"Boris: two half steps of $\tau = \Delta t/2$, each a kick, a rotation and a kick (mpiparticles' Boris block, relativistic with $\mathbf t / \gamma^-$), around the drift $\mathbf x' = \mathbf x + \Delta t\, \mathbf u_{1/2} / \gamma_{1/2}$ (one field evaluation a step)",
         r"a trajectory ends transmitted ($x \ge x_\mathrm{max}$), backward, on the wall, on an electrode (looked up in sub-cells of $h/4$ sampled at their corners and centre, the electrode's own test where a surface cuts one) or after `max_steps`",
         r"a symmetry plane mirrors the field and the deposit; trajectories crossing it continue",
     ),
@@ -134,7 +145,10 @@ class BeamTracer3D:
     composite nodes, divided by their control volumes),
     ``magnetic`` an optional ``(3, nx, ny, nz)`` array of ``B`` [T] on the mesh's nodes.
     ``planes`` are the diagnostic planes ``x = const`` [m]; ``save_trajectories`` keeps every
-    n-th trajectory (0: none); ``integrator`` is ``"rk4"`` or ``"boris"``.
+    n-th trajectory (0: none); ``integrator`` is ``"rk4"`` or ``"boris"``. With
+    ``relativistic`` the tracer advances the proper velocities ``u = gamma v`` (made from the
+    particles' velocities; the plane crossings record ``u / gamma``) by the relativistic
+    equations of motion, ``speed_of_light`` [m/s] being ``c``.
     """
 
     def __init__(
@@ -148,6 +162,8 @@ class BeamTracer3D:
         planes: Sequence[float] = (),
         save_trajectories: int = 0,
         integrator: str = "rk4",
+        relativistic: bool = False,
+        speed_of_light: float = constants.c,
     ) -> None:
         """Set up the tracer."""
         if not 0.0 < step_fraction <= 1.0:
@@ -169,6 +185,9 @@ class BeamTracer3D:
         self.planes = tuple(float(p) for p in planes)
         self.save_trajectories = int(save_trajectories)
         self.integrator = integrator
+        #: Whether the motion is relativistic, and the speed of light [m/s].
+        self.relativistic = bool(relativistic)
+        self.speed_of_light = float(speed_of_light)
         #: The beam's own magnetic field ``(3, nx, ny, nz)`` [T] on the nodes, added to
         #: ``magnetic`` (set by the Vlasov iteration, `beamtracer.solver.self_field`).
         self.self_magnetic: np.ndarray | None = None
@@ -329,6 +348,10 @@ class BeamTracer3D:
         n = len(particles)
         x = np.array(particles.position, dtype=float, order="C")
         v = np.array(particles.velocity, dtype=float, order="C")
+        inv_c2 = 0.0
+        if self.relativistic:  # the kernel advances the proper velocities
+            v = np.ascontiguousarray(proper_velocity(v, self.speed_of_light))
+            inv_c2 = 1.0 / self.speed_of_light**2
         qm = np.ascontiguousarray(particles.charge / particles.mass, dtype=float)
         current = particles.current.astype(float)
         dq = np.ascontiguousarray(np.sign(particles.charge) * np.abs(current))
@@ -387,7 +410,7 @@ class BeamTracer3D:
                     self.step_fraction, self.max_steps,
                     cells, subcells, SUBCELLS_3D, planes, hits, counts,
                     path_slot, paths, path_count, threads, charge,
-                    has_j, current_nodes,
+                    has_j, current_nodes, inv_c2,
                 )  # fmt: skip
                 paused = active[status[active] == _PAUSED]
                 if not paused.size:
