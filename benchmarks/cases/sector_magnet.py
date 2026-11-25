@@ -33,8 +33,9 @@ def ibsimu_magnetic(nodes: tuple[int, int], h: float) -> Any:
 
 def beamtracer_fields(nodes: tuple[int, int], h: float) -> dict[str, Any]:
     """Return the same field as a beamtracer field map at the nodes (a netCDF file)."""
+    from takeout import FieldMap
+
     from beamtracer import FieldMapParams
-    from beamtracer.field_map import FieldMap
 
     path = Path(tempfile.mkdtemp()) / "sector.nc"
     x, y = np.arange(nodes[0]) * h, np.arange(nodes[1]) * h

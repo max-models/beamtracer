@@ -1,190 +1,23 @@
-"""Field maps: the shared netCDF layout, interpolation, and imposed fields in traces."""
+"""Imposed fields from takeout field maps: in traces, in BeamOptics and its config."""
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
-import xarray as xr
 from scipy import constants
+from takeout import FieldMap
 
 from beamtracer import (
     BeamOptics,
     BeamOpticsConfig,
-    FieldMap,
     FieldMapParams,
     GridParams,
     ParticleBeam,
 )
 from beamtracer.beamline import FieldRegion, Markers
 from beamtracer.config import AxialField
-from beamtracer.field_map import (
-    FIELD_MAP_FORMAT,
-    FieldMapError,
-    parse_frame_axes,
-    validate_field_map,
-)
 
 PROTON = 1.007276 * constants.atomic_mass
-
-
-def picnic_style_map() -> xr.Dataset:
-    """A map built with xarray alone, as picnic's ``FieldMap.from_arrays`` writes one."""
-    x = np.linspace(0.0, 0.1, 11)
-    y = np.linspace(-0.02, 0.02, 5)
-    bz = 0.01 + 0.1 * x[:, None] + 0.5 * y[None, :]
-    return xr.Dataset(
-        {
-            "b_field_z": (("x", "y"), bz, {"units": "T"}),
-            "e_field_x": (("x", "y"), np.full((11, 5), 100.0), {"units": "V/m"}),
-        },
-        coords={
-            "x": ("x", x, {"units": "m"}),
-            "y": ("y", y, {"units": "m"}),
-        },
-        attrs={
-            "Conventions": "max-models-field-map-1.0",
-            "frame": "cartesian",
-            "source": "picnic.parameters.field_map.FieldMap.from_arrays",
-            "frame_axes": "x=z y=-s z=r",
-        },
-    )
-
-
-# -- the format -------------------------------------------------------------------------------
-
-
-def test_round_trip(tmp_path) -> None:
-    x, y = np.linspace(0.0, 1.0, 5), np.linspace(0.0, 0.5, 3)
-    field_map = FieldMap.from_function(
-        lambda p: np.stack([p[:, 0], p[:, 1], p[:, 0] * p[:, 1]], axis=1),
-        {"x": x, "y": y},
-        kind="electric",
-        frame="cylindrical",
-        frame_axes="x=z y=r",
-        source="test",
-    )
-    path = field_map.write(tmp_path / "map.nc")
-    assert field_map.path == path
-    again = FieldMap.read(path, outside="zero")
-    assert again.path == path and again.outside == "zero"
-    assert again.frame == "cylindrical" and again.dims == ("x", "y")
-    assert again.dataset.attrs["Conventions"] == FIELD_MAP_FORMAT
-    assert again.dataset.attrs["frame_axes"] == "x=z y=r"
-    assert again.components("electric") == ("e_field_x", "e_field_y", "e_field_z")
-    assert again.components("magnetic") == ()
-    for name in again.components("electric"):
-        np.testing.assert_array_equal(
-            again.dataset[name].values, field_map.dataset[name].values
-        )
-        assert again.dataset[name].attrs["units"] == "V/m"
-    assert again.dataset["x"].attrs["units"] == "m"
-
-
-def test_a_map_written_by_picnic_is_read(tmp_path) -> None:
-    path = tmp_path / "picnic.nc"
-    picnic_style_map().to_netcdf(path)
-    field_map = FieldMap.read(path)
-    # B_z is linear in x and y, so the multilinear interpolation is exact
-    points = np.array([[0.033, 0.007], [0.091, -0.013]])
-    b = field_map.magnetic_field(points)
-    expected = 0.01 + 0.1 * points[:, 0] + 0.5 * points[:, 1]
-    np.testing.assert_allclose(b[:, 2], expected, rtol=1e-12)
-    np.testing.assert_array_equal(b[:, :2], 0.0)
-    np.testing.assert_allclose(field_map.electric_field(points), [[100, 0], [100, 0]])
-    # and what beamtracer writes passes picnic's checks: the same attributes and names
-    written = xr.open_dataset(field_map.write(tmp_path / "again.nc")).load()
-    assert validate_field_map(written) == []
-    assert written.attrs == picnic_style_map().attrs
-    for name in ("x", "y", "b_field_z", "e_field_x"):
-        assert written[name].attrs["units"] == picnic_style_map()[name].attrs["units"]
-        assert written[name].dims == picnic_style_map()[name].dims
-
-
-def test_validation_lists_every_problem() -> None:
-    good = picnic_style_map()
-    assert validate_field_map(good) == []
-    bad = good.assign_attrs(Conventions="max-models-output-1.0", frame="polar")
-    bad = bad.assign_attrs(frame_axes="x=z y=z")
-    bad["b_field_z"].attrs["units"] = "G"
-    bad["x"].attrs["units"] = "mm"
-    bad["e_field_x"] = bad["e_field_x"].transpose("y", "x")
-    bad["potential"] = (("x", "y"), np.zeros((11, 5)), {"units": "V"})
-    problems = validate_field_map(bad)
-    for text in (
-        "Conventions",
-        "frame is 'polar'",
-        "z is mapped twice",
-        "units 'G'",
-        "coordinate 'x' has units 'mm'",
-        "e_field_x: dims",
-        "potential: not a field-map variable",
-    ):
-        assert any(text in p for p in problems), text
-    with pytest.raises(FieldMapError, match="not a field map"):
-        FieldMap(bad)
-
-    decreasing = good.assign_coords(x=("x", good.x.values[::-1], {"units": "m"}))
-    assert any("not increasing" in p for p in validate_field_map(decreasing))
-    no_coordinate = good.drop_vars("y")
-    assert any("no coordinate" in p for p in validate_field_map(no_coordinate))
-    timed = good.expand_dims(t=[0.0])
-    assert any("(x, y, z) only" in p for p in validate_field_map(timed))
-    empty = xr.Dataset(
-        coords={"x": ("x", [0.0, 1.0], {"units": "m"})}, attrs=good.attrs
-    )
-    assert any("no b_field" in p for p in validate_field_map(empty))
-
-
-def test_frame_axes() -> None:
-    assert parse_frame_axes("x=z y=-s z=r") == {
-        "x": (1, "z"),
-        "y": (-1, "theta"),
-        "z": (1, "r"),
-    }
-    for text, match in (
-        ("x=q", "cannot read"),
-        ("x=z x=r", "x is mapped twice"),
-        ("x=z y=s z=r", "left-handed"),
-    ):
-        with pytest.raises(FieldMapError, match=match):
-            parse_frame_axes(text)
-
-
-def test_interpolation_outside_and_missing_dims() -> None:
-    x = np.linspace(0.0, 1.0, 11)
-    field_map = FieldMap.from_arrays({"x": x}, {"b_field_y": 2.0 * x})
-    # a 1D map is uniform along y and z
-    points = np.array([[0.25, 7.0, -3.0], [0.55, 0.0, 0.0]])
-    np.testing.assert_allclose(field_map.magnetic_field(points)[:, 1], [0.5, 1.1])
-    outside = np.array([[-1.0, 0.0], [2.0, 0.0]])
-    np.testing.assert_allclose(field_map.magnetic_field(outside)[:, 1], [0.0, 2.0])
-    zero = FieldMap(field_map.dataset, outside="zero")
-    np.testing.assert_array_equal(zero.magnetic_field(outside), 0.0)
-    with pytest.raises(ValueError, match="outside the field map"):
-        FieldMap(field_map.dataset, outside="error").magnetic_field(outside)
-    with pytest.raises(ValueError, match="outside must be"):
-        FieldMap(field_map.dataset, outside="wrap")
-    with pytest.raises(ValueError, match="no e_field"):
-        field_map.electric_field(points)
-    with pytest.raises(ValueError, match="no e_field"):
-        field_map.points_function("electric")
-
-    plane = FieldMap.from_arrays(
-        {"x": x, "y": x, "z": x}, {"e_field_x": np.ones((11, 11, 11))}
-    )
-    with pytest.raises(ValueError, match="at least 3 coordinates"):
-        plane.electric_field(np.zeros((1, 2)))
-    with pytest.raises(ValueError, match="2D plane"):
-        plane.plane_function("electric")
-
-    mesh = np.meshgrid(x[:3], x[:2], indexing="ij")
-    values = field_map.evaluate(tuple(mesh))
-    assert values.shape == (3, 2, 3)
-    np.testing.assert_allclose(values[:, 0, 1], 2.0 * x[:3])
-    assert field_map.evaluate((x[:4],)).shape == (4, 3)
-
-
-# -- imposed fields in traces -----------------------------------------------------------------
 
 
 def test_field_region_traces_an_analytic_field_from_its_map() -> None:

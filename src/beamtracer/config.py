@@ -25,8 +25,8 @@ from plasmacoll.units import (
     unit_metadata,
     with_unit,
 )
+from takeout.field_map import OUTSIDE, FieldMap
 
-from beamtracer.field_map import OUTSIDE, FieldMap
 from beamtracer.sections import (
     OBJECT_TYPES_3D,
     ConfigDict,
@@ -384,7 +384,7 @@ class AxialField:
 
 @dataclass(frozen=True)
 class FieldMapParams:
-    """An imposed E and/or B from a field map file (`beamtracer.field_map`).
+    """An imposed E and/or B from a field map file (`takeout.field_map`).
 
     ``file`` is a netCDF field map in the shared layout (as picnic writes them), its
     ``frame`` that of the grid (``"cartesian"`` planar, ``"cylindrical"`` for

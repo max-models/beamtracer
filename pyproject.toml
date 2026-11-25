@@ -44,6 +44,8 @@ dependencies = [
   "simgeometry>=0.1.1",
   # boundary values given as expressions of x, y
   "sympy",
+  # the imposed fields: field maps (FieldMap) in the shared netCDF layout
+  "takeout>=0.1.0",
   # NodeField.evaluate
   "xarray",
 ]
@@ -138,4 +140,5 @@ plasma-plots = { git = "https://github.com/max-models/plasma-plots", branch = "d
 plasmacoll = { git = "https://github.com/max-models/plasmacoll", branch = "devel" }
 scope-profiler = { git = "https://github.com/max-models/scope-profiler", branch = "devel" }
 simgeometry = { git = "https://github.com/max-models/simgeometry", branch = "devel" }
+takeout = { git = "https://github.com/max-models/takeout", branch = "devel" }
 wellbalanced = { git = "https://github.com/max-models/wellbalanced", branch = "devel" }
