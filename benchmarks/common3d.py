@@ -430,6 +430,7 @@ def run_beamtracer(
     from pathlib import Path
 
     from scipy.constants import atomic_mass, e
+    from takeout import FieldMap
 
     from beamtracer import (
         BeamOptics,
@@ -441,7 +442,6 @@ def run_beamtracer(
         GridParams,
         ParticleBeam,
     )
-    from beamtracer.field_map import FieldMap
 
     def bc(value: float | None) -> Any:
         if value is None:

@@ -48,6 +48,12 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Field maps come from the takeout package (`takeout.FieldMap`, `takeout.field_map`), which
+  holds the one copy of the layout, its validator and the interpolation that beamtracer and
+  picnic share. `beamtracer.field_map` and `beamtracer.FieldMap` are removed (import
+  `FieldMap` from takeout), and `FieldMapError` is `takeout.FormatError`. `FieldMapParams`
+  and the `field_map` setting of `BeamOpticsConfig` are unchanged.
+
 - beamtracer's kernels need cunumpy 0.8 (kernels that import mpiparticles' Pyccel blocks).
 
 - The negative-ion beamlet example (`negative_ion_extraction_optics`) emits its beams an

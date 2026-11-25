@@ -402,7 +402,7 @@ class BeamTracer:
     geometry). ``magnetic`` returns ``(B_x, B_r)`` or ``(B_x, B_r, B_theta)`` at
     ``(x, r)`` in cylindrical geometry, ``(B_x, B_y, B_z)`` at ``(x, y)`` in planar
     geometry. ``imposed_electric`` is an external field added to ``electric``, three
-    components the same way (e.g. from a `beamtracer.field_map.FieldMap`). The step of
+    components the same way (e.g. from a `takeout.FieldMap`). The step of
     each particle is ``step_fraction`` times the estimate
     ``min(h / |v|, sqrt(2 h / |a|))``, integrated with the classical Runge--Kutta method.
     """

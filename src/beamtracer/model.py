@@ -27,6 +27,7 @@ from maybempi import MPI
 from methodcard import method
 from mpifield import Field
 from scipy import constants
+from takeout import FieldMap
 
 from beamtracer._profiling import PROFILE_TAGS
 from beamtracer.config import (
@@ -35,7 +36,6 @@ from beamtracer.config import (
     BeamSpecies3D,
     NegativeExtractionPlasma,
 )
-from beamtracer.field_map import FieldMap
 from beamtracer.sections import ObjectParams
 from beamtracer.solver import (
     STATUS_NAMES,
@@ -108,7 +108,7 @@ def _electrode_3d(name: str, params: ObjectParams) -> Electrode3D:
     assumptions=(
         r"steady: the beam is the fixed point of field solve, trace and deposit (`time` is always 0)",
         r"planar $(x, y)$ per unit depth or cylindrically symmetric $(x, r)$; the solenoids and a measured axial profile only in cylindrical geometry",
-        r"an imposed static $\mathbf E$ and/or $\mathbf B$ from a field map (`beamtracer.field_map`) in the frame of the grid, added to the solved field and the solenoids",
+        r"an imposed static $\mathbf E$ and/or $\mathbf B$ from a field map (`takeout.field_map`) in the frame of the grid, added to the solved field and the solenoids",
         r"a Boltzmann plasma species: electrons ($s = -1$) for positive-ion extraction, positive ions ($s = +1$) for negative-ion extraction; the extracted species are traced beams",
         r"configuration in e, u and eV, converted to C, kg and J; with MPI the trajectories are shared between the ranks and every rank solves the field",
     ),
@@ -118,7 +118,7 @@ def _electrode_3d(name: str, params: ObjectParams) -> Electrode3D:
         "beamtracer.solver.tracer.beam_with_energy",
         "beamtracer.solver.fields.AxisymmetricMagneticField",
         "beamtracer.solver.fields.solenoid_on_axis",
-        "beamtracer.field_map.FieldMap",
+        "takeout.field_map.FieldMap",
         "beamtracer.solver.diagnostics.plane_moments",
     ),
 )

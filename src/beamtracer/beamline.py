@@ -52,8 +52,8 @@ from mpiparticles import boris_velocity
 from plasmacoll.units import convert_units, to_array, to_unit, unit_field, unit_metadata
 from scipy import constants
 from simgeometry.crossings import crossings
+from takeout import FieldMap
 
-from beamtracer.field_map import FieldMap
 from beamtracer.solver.charge_changing import AxialProfile, Density
 from beamtracer.solver.tracer import PlaneHits
 
@@ -895,7 +895,7 @@ class FieldRegion:
         exit: The plane ``x = exit`` (m) where the region ends.
         mass: The mass of the beam particles (kg).
         electric: ``E(points)``, ``(3, N)`` in V/m at ``(3, N)`` points, or a
-            `beamtracer.field_map.FieldMap` with ``e_field_*``; none if absent.
+            `takeout.FieldMap` with ``e_field_*``; none if absent.
         magnetic: ``B(points)`` in T, the same way (a map with ``b_field_*``);
             `box_field` and `profile_field` make simple ones.
         charges: The charge of each state, in e.
