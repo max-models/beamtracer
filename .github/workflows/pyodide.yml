@@ -3,7 +3,7 @@ name: Pyodide
 # The check that beamtracer runs in the browser, as the live demo of the docs does: the wheels
 # installed in Pyodide under Node, every module imported (without mpi4py and CuPy) and the demo
 # (docs/src/components/beamtracer_demo.py) run with its defaults; with the shared workflow of
-# max-models/starlight-theme. The optional dependencies (wellbalanced, opencr, plotting) are
+# max-models/starlight-theme. The optional dependencies (carafe, opencr, plotting) are
 # imported only inside the functions that need them. The kernels fall back to their Python
 # versions there; their Pyccel sources (`*_pyccel`, which import mpiparticles' Pyccel blocks and
 # so `pyccel`, not available in the browser) are not imported.

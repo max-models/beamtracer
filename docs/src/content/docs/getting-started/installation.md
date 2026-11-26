@@ -21,7 +21,7 @@ pip install -e .
 
 | Extra         | Installs                                                          |
 | ------------- | ----------------------------------------------------------------- |
-| `neutralizer` | `wellbalanced`, for `beamtracer.neutralizer`                      |
+| `neutralizer` | `plasma-carafe`, for `beamtracer.neutralizer`               |
 | `examples`    | matplotlib, plotly and plasma-plots, for the examples' figures    |
 | `test`        | `pytest`, coverage, `pyccel` and the `neutralizer` extra          |
 | `docs`        | the notebook runner, plasma-plots and griffe for the API reference |

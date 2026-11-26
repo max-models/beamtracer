@@ -18,7 +18,7 @@ cylindrical `(x, r)` geometry. `BeamOptics` converges the beam by a
 Vlasov iteration (solve the field, trace the beam, deposit its space
 charge, repeat); `beamtracer.neutralizer` couples the traced beam to a
 global model of the plasma it makes in a neutralizer
-([wellbalanced](https://github.com/max-models/wellbalanced)): ITER’s gas
+([carafe](https://github.com/max-models/carafe)): ITER’s gas
 neutralizer, or the beam-driven plasma neutralizer with magnetic cusps
 studied for DEMO. The tracer is a compiled kernel that follows every
 trajectory from start to end (Pyccel with OpenMP threads, or CUDA), and
@@ -51,7 +51,7 @@ pip install --upgrade pip
 pip install -e .
 ```
 
-The `neutralizer` extra installs wellbalanced, `examples` the plotting
+The `neutralizer` extra installs carafe, `examples` the plotting
 libraries of the examples, and `test`, `docs` and `dev` the test runner,
 the documentation tooling and the linters:
 
