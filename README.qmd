@@ -20,7 +20,7 @@ plasma, transport through electrodes and solenoids, and charge changes of a fast
 or a plasma, in planar or cylindrical `(x, r)` geometry. `BeamOptics` converges the beam by a
 Vlasov iteration (solve the field, trace the beam, deposit its space charge, repeat);
 `beamtracer.neutralizer` couples the traced beam to a global model of the plasma it makes in a
-neutralizer ([wellbalanced](https://github.com/max-models/wellbalanced)): ITER's gas neutralizer,
+neutralizer ([carafe](https://github.com/max-models/carafe)): ITER's gas neutralizer,
 or the beam-driven plasma neutralizer with magnetic cusps studied for DEMO. The tracer is a
 compiled kernel that follows every trajectory from start to end (Pyccel with OpenMP threads, or
 CUDA), and the field gather and the charge deposit are Pyccel, NumPy, CUDA and Metal kernels,
@@ -49,7 +49,7 @@ pip install --upgrade pip
 pip install -e .
 ```
 
-The `neutralizer` extra installs wellbalanced, `examples` the plotting libraries of the
+The `neutralizer` extra installs carafe, `examples` the plotting libraries of the
 examples, and `test`, `docs` and `dev` the test runner, the documentation tooling and the
 linters:
 

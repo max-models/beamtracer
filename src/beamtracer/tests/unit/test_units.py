@@ -429,12 +429,12 @@ def test_gas_profiles_take_quantities() -> None:
 
 
 def test_a_neutralizer_channel_takes_quantities() -> None:
-    wellbalanced = pytest.importorskip("wellbalanced.neutralizer")
+    carafe = pytest.importorskip("carafe.neutralizer")
     from beamtracer.neutralizer import NeutralizerChannel
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
-        neutralizer = wellbalanced.illustrative_deuterium_neutralizer(gas_inflow=6.0e21)
+        neutralizer = carafe.illustrative_deuterium_neutralizer(gas_inflow=6.0e21)
     channel = NeutralizerChannel(
         neutralizer, beam_width="6 cm", divergence=5 * u.mrad, cell="5 mm"
     )

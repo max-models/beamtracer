@@ -227,7 +227,7 @@ charge_changing = ChargeChangingParams(
 ## A neutralizer
 
 `beamtracer.neutralizer.NeutralizerChannel` traces the beam through a channel whose gas and
-plasma come from a global model ([wellbalanced](https://github.com/max-models/wellbalanced),
+plasma come from a global model ([carafe](https://github.com/max-models/carafe),
 the `neutralizer` extra); the plasma takes its beam sources from the traced paths, and the
 two are iterated to a fixed point. It gives what the global model alone cannot: the
 transmission of every charge state, the beam lost on the walls, the divergence of the

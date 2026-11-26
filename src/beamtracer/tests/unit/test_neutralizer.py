@@ -7,7 +7,7 @@ import warnings
 import numpy as np
 import pytest
 
-wellbalanced = pytest.importorskip("wellbalanced.neutralizer")
+carafe = pytest.importorskip("carafe.neutralizer")
 
 from beamtracer.neutralizer import NeutralizerChannel  # noqa: E402
 
@@ -15,9 +15,7 @@ from beamtracer.neutralizer import NeutralizerChannel  # noqa: E402
 def neutralizer(**overrides):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
-        return wellbalanced.illustrative_deuterium_neutralizer(
-            gas_inflow=6.0e21, **overrides
-        )
+        return carafe.illustrative_deuterium_neutralizer(gas_inflow=6.0e21, **overrides)
 
 
 @pytest.fixture(scope="module")

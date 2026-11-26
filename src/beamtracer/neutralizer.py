@@ -1,7 +1,7 @@
 """A neutralizer: beam trajectories through the channel, coupled to the plasma they make.
 
 The plasma the beam makes in a neutralizer channel is a global model of the channel
-(`wellbalanced.neutralizer.Neutralizer`, which also holds the channel, the
+(`carafe.neutralizer.Neutralizer`, which also holds the channel, the
 beam and its cross sections). Without magnetic cusps (``cusp=None``) the channel is a
 gas neutralizer as in ITER's injectors, whose weak plasma hardly matters; with cusps
 it is the beam-driven plasma neutralizer studied for DEMO, whose confined plasma
@@ -19,7 +19,7 @@ the walls early feed the plasma less. The two are iterated to a fixed point
 
 The trace gives what the global model cannot: the transmission of each charge
 state to the exit, the beam lost on the walls, and the divergence of the
-neutrals. It needs ``wellbalanced``::
+neutrals. It needs ``carafe``::
 
     pip install "beamtracer[neutralizer]"
 
@@ -46,21 +46,20 @@ from beamtracer.model import BeamOptics
 from beamtracer.sections import FieldBCs, FieldBoundaryCondition, GridParams
 
 if TYPE_CHECKING:
-    from wellbalanced import GlobalState
-    from wellbalanced.neutralizer import Neutralizer, NeutralizerResult
+    from carafe import GlobalState
+    from carafe.neutralizer import Neutralizer, NeutralizerResult
 
 __all__ = ["NeutralizerChannel", "TracedNeutralizer"]
 
 
-def _wellbalanced():
+def _carafe():
     try:
-        import wellbalanced.neutralizer
+        import carafe.neutralizer
     except ImportError as error:  # pragma: no cover - optional dependency
         raise ImportError(
-            "beamtracer.neutralizer needs wellbalanced: pip install "
-            "'beamtracer[neutralizer]'"
+            "beamtracer.neutralizer needs carafe: pip install 'beamtracer[neutralizer]'"
         ) from error
-    return wellbalanced.neutralizer
+    return carafe.neutralizer
 
 
 @dataclass
@@ -107,12 +106,10 @@ class TracedNeutralizer:
     assumptions=(
         r"the channel's section in $(x, y)$, planar per metre of the height $H$; grounded walls at $y = \pm w/2$; the beam of width $w_b$ enters as negative ions, centred",
         r"rms divergence $\theta = \sigma_\perp / v_0$, hence $T_\perp = 2 E \theta^2$; the space charge reduced by the plasma's `compensation`",
-        r"the gas target at the plasma's gas target density, the plasma target at its electron density; the plasma model (wellbalanced) takes the path fractions in place of fractions averaged along the axis",
+        r"the gas target at the plasma's gas target density, the plasma target at its electron density; the plasma model (carafe) takes the path fractions in place of fractions averaged along the axis",
         r"$\omega$ = `relaxation` (0.7); at most `max_iterations`, the last state returned with `converged=False` and no warning",
     ),
-    references=(
-        "[wellbalanced](https://github.com/max-models/wellbalanced) `neutralizer`",
-    ),
+    references=("[carafe](https://github.com/max-models/carafe) `neutralizer`",),
     components=(
         "beamtracer.model.BeamOptics",
         "beamtracer.solver.charge_changing.ChargeChanging",
@@ -193,7 +190,7 @@ class NeutralizerChannel:
         ):
             raise ValueError("cell must divide the channel's length and width")
         grounded = FieldBoundaryCondition.dirichlet(0.0)
-        from wellbalanced.neutralizer import BeamCrossSections
+        from carafe.neutralizer import BeamCrossSections
 
         data = (
             n.data.at(beam.energy) if isinstance(n.data, BeamCrossSections) else n.data
@@ -267,7 +264,7 @@ class NeutralizerChannel:
 
     def solve(self) -> TracedNeutralizer:
         """Iterate the traced beam and the plasma to a fixed point."""
-        _wellbalanced()
+        _carafe()
         n = self.neutralizer
         axis = n.solve()
         state = axis.plasma
