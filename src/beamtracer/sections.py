@@ -297,10 +297,76 @@ class SymbolicSpaceFunction:
         raise ValueError("a field boundary needs a value or a func")
 
 
+class FaceProfile:
+    """A face value tabulated along one coordinate, linear between the points.
+
+    ``coordinate`` is the axis the value varies along on the face (``"x"``, ``"y"`` or
+    ``"z"``), ``points`` [m] the increasing positions on it and ``values`` the values
+    there in ``unit``; beyond the ends the value of the nearer end. It hands a
+    potential computed elsewhere to a face, such as the potential of a PIC run on the
+    plane where the beam optics starts (``picnic.coupling.BeamOpticsCoupling``).
+    """
+
+    def __init__(
+        self,
+        coordinate: str,
+        points: Any,
+        values: Any,
+        unit: str | None = "V",
+    ) -> None:
+        """Check and store the table."""
+        if coordinate not in ("x", "y", "z"):
+            raise ValueError(f"a profile varies along x, y or z, got {coordinate!r}")
+        points = np.asarray(points, dtype=float).ravel()
+        values = np.asarray(values, dtype=float).ravel()
+        if points.size < 2 or points.shape != values.shape:
+            raise ValueError("a profile needs two or more points, one value each")
+        if np.any(np.diff(points) <= 0.0):
+            raise ValueError("the points of a profile must increase")
+        self.coordinate = coordinate
+        self.points = points
+        self.values = values
+        self.unit = unit
+        self._factor = 1.0 if not unit else float(u.Quantity(1.0, unit).si.value)
+
+    def evaluate(
+        self, x: Any = None, y: Any = None, z: Any = None, t: Any = None
+    ) -> Any:
+        """Return the value [SI] at the points, interpolated along `coordinate`."""
+        position = {"x": x, "y": y, "z": z}[self.coordinate]
+        if position is None:
+            raise ValueError(f"the profile needs the {self.coordinate} coordinate")
+        position = np.asarray(position, dtype=float)
+        return np.interp(position, self.points, self.values) * self._factor
+
+    def to_dict(self) -> ConfigDict:
+        """Return the configuration-file form, ``{"profile": {...}}``."""
+        return {
+            "profile": {
+                "coordinate": self.coordinate,
+                "points": self.points.tolist(),
+                "values": self.values.tolist(),
+                "unit": self.unit,
+            }
+        }
+
+    @classmethod
+    def from_dict(cls, params: Mapping[str, Any], unit: str = "V") -> FaceProfile:
+        """Create the profile from ``{coordinate, points [m], values, unit}``."""
+        return cls(
+            params["coordinate"],
+            params["points"],
+            params["values"],
+            params.get("unit", unit),
+        )
+
+
 class FieldBoundaryCondition:
     """A Dirichlet (potential) or Neumann (normal derivative) condition on a face."""
 
-    def __init__(self, bc_type: FaceType, value: SymbolicSpaceFunction) -> None:
+    def __init__(
+        self, bc_type: FaceType, value: SymbolicSpaceFunction | FaceProfile
+    ) -> None:
         """Store the type and the value."""
         if bc_type not in ("dirichlet", "neumann"):
             raise ValueError(
@@ -337,13 +403,25 @@ class FieldBoundaryCondition:
             "neumann", SymbolicSpaceFunction(normal_derivative, unit, variables)
         )
 
+    @staticmethod
+    def profile(
+        coordinate: str, points: Any, values: Any, unit: str = "V"
+    ) -> FieldBoundaryCondition:
+        """Return a Dirichlet condition tabulated along ``coordinate`` (`FaceProfile`).
+
+        ``points`` [m] increase; ``values`` are in ``unit``, one per point.
+        """
+        return FieldBoundaryCondition(
+            "dirichlet", FaceProfile(coordinate, points, values, unit)
+        )
+
     @property
     def bc_type(self) -> FaceType:
         """Return ``"dirichlet"`` or ``"neumann"``."""
         return self._bc_type
 
     @property
-    def value(self) -> SymbolicSpaceFunction:
+    def value(self) -> SymbolicSpaceFunction | FaceProfile:
         """Return the value of the condition."""
         return self._value
 
@@ -412,7 +490,9 @@ class FieldBCs:
 
         A side is a value (``5 kV``, or a number in V, V/m for Neumann),
         ``{value: ..., type: ...}`` for a side of another type, or
-        ``{func: {expression, unit, variables}}`` for an expression of x and y::
+        ``{func: {expression, unit, variables}}`` for an expression of x and y, or
+        ``{profile: {coordinate, points, values, unit}}`` for a tabulated value
+        (`FaceProfile`)::
 
             x: {type: dirichlet, min: 0 V, max: 5 kV}
         """
@@ -432,9 +512,12 @@ class FieldBCs:
                 if bc_type is None:
                     raise ValueError(f"field boundary '{axis}/{key}' needs a type")
                 unit = "V/m" if bc_type == "neumann" else "V"
-                faces[f"{axis}_{name}"] = FieldBoundaryCondition(
-                    bc_type, SymbolicSpaceFunction.from_dict(side, unit)
+                value = (
+                    FaceProfile.from_dict(side["profile"], unit)
+                    if "profile" in side
+                    else SymbolicSpaceFunction.from_dict(side, unit)
                 )
+                faces[f"{axis}_{name}"] = FieldBoundaryCondition(bc_type, value)
         return cls(**faces)
 
 

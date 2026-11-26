@@ -12,6 +12,11 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Tabulated faces: `FaceProfile` (`FieldBoundaryCondition.profile(coordinate, points,
+  values)`) is a Dirichlet value given at points along one coordinate of the face, linear
+  between them; `{profile: {coordinate, points, values, unit}}` in a configuration file. It
+  starts the beam optics on the potential another code computed on a plane, e.g. picnic's
+  PIC of the extraction region (`picnic.coupling.BeamOpticsCoupling`).
 - Relativistic tracing: `BeamTracer(relativistic=True)`, `BeamTracer3D(relativistic=True)`
   and `relativistic: true` in a `BeamOpticsConfig` move the particles by the relativistic
   equations of motion. The tracers advance the proper velocity `u = gamma v` (made from the

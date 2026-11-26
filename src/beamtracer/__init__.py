@@ -30,6 +30,7 @@ from beamtracer.config import (
 )
 from beamtracer.model import BeamOptics
 from beamtracer.sections import (
+    FaceProfile,
     FieldBCs,
     FieldBoundaryCondition,
     GridParams,
@@ -53,6 +54,7 @@ __all__ = [
     "BeamSpecies",
     "ChargeChangingParams",
     "ExtractionPlasma",
+    "FaceProfile",
     "FieldBCs",
     "FieldBoundaryCondition",
     "FieldMapParams",
