@@ -51,7 +51,7 @@ dependencies = [
 ]
 # field_backend="amg": algebraic multigrid and the Newton-Krylov solve of the plasma
 optional-dependencies.amg = [ "pyamg" ]
-optional-dependencies.neutralizer = [ "opencr", "carafe-plasma[cr]>=0.1.0" ]
+optional-dependencies.neutralizer = [ "opencr", "plasma-carafe[cr]>=0.1.0" ]
 optional-dependencies.examples = [
   "matplotlib",
   "plasma-plots>=0.2.3",
@@ -141,4 +141,4 @@ plasmacoll = { git = "https://github.com/max-models/plasmacoll", branch = "devel
 scope-profiler = { git = "https://github.com/max-models/scope-profiler", branch = "devel" }
 simgeometry = { git = "https://github.com/max-models/simgeometry", branch = "devel" }
 takeout = { git = "https://github.com/max-models/takeout", branch = "devel" }
-carafe-plasma = { git = "https://github.com/max-models/carafe", branch = "devel" }
+plasma-carafe = { git = "https://github.com/max-models/carafe", branch = "devel" }

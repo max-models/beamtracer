@@ -7,7 +7,7 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- wellbalanced is now carafe: the `neutralizer` extra installs `carafe-plasma[cr]`, and
+- wellbalanced is now carafe: the `neutralizer` extra installs `plasma-carafe[cr]`, and
   `beamtracer.neutralizer` imports `carafe`.
 
 ### Added

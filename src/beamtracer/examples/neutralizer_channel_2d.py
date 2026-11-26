@@ -31,7 +31,7 @@ This example is also a study in the [max-models gallery](https://max-models.gith
 Install::
 
     pip install "beamtracer[examples] @ git+https://github.com/max-models/beamtracer"
-    pip install "carafe-plasma[cr] @ git+https://github.com/max-models/carafe@devel"
+    pip install "plasma-carafe[cr] @ git+https://github.com/max-models/carafe@devel"
 """
 
 from __future__ import annotations
