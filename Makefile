@@ -31,7 +31,7 @@ readme-check:  ## fail if README.md is out of date with README.qmd
 	git diff --exit-code README.md
 
 docs-install:  ## Python docs extra and the npm packages
-	$(PYTHON) -m pip install -e ".[docs]"
+	$(PYTHON) -m pip install -e ".[docs,neutralizer]"
 	cd docs && npm ci
 
 docs-notebooks:  ## execute the changed notebooks and convert all of them (FORCE=1 reruns all)

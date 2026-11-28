@@ -1,0 +1,61 @@
+---
+title: Design optimisation
+description: Searches over the electrodes and voltages of a beam-optics model, recorded and resumable, with an einzel lens and an H- beamlet as the problems.
+sidebar:
+  label: Overview
+---
+
+import MethodCard from '@max-models/starlight-theme/components/MethodCard.astro';
+
+`beamtracer.optimization` searches the parameters of a model for the best design: the voltage,
+gaps and apertures of a lens, the extraction of a beamlet. The core knows nothing about the
+model it optimises. A `Design` of named `Parameter`s builds a configuration with a user
+function, and a `Problem` evaluates it with another one, which returns an `Evaluation`:
+objectives, constraints ($\le 0$), a converged flag and diagnostics. A
+[beam optics](/beamtracer/beam-optics/) solve, a PIC check or any other model can be the
+evaluation.
+
+```python
+from beamtracer.optimization import Design, Evaluation, Parameter, Problem, optimize
+
+
+def sphere(values):  # a module-level function, picklable for workers > 1
+    return Evaluation(objectives={"objective": (values["x"] - 1.0) ** 2})
+
+
+design = Design((Parameter("x", -5.0, 5.0),))
+result = optimize(Problem(design, sphere), seed=1, record="sphere.jsonl")
+result.x  # {"x": 1.0...}
+```
+
+## The search
+
+`optimize` minimises with SciPy's differential evolution and `scan` evaluates a grid, both in
+parallel processes, recording every evaluation in a JSON-lines file that a later search
+resumes from. Failed and unconverged evaluations are penalised and never win: the designs are
+ranked by feasibility first.
+
+<MethodCard name="beamtracer.optimization.design.Evaluation.rank" headingLevel={3} />
+
+`recheck` evaluates the few best designs of a search again with another evaluation, a finer
+mesh or a PIC model of the source.
+
+## The problems
+
+- [Einzel lens optimisation](/beamtracer/examples/einzel-lens-optimization/) finds the
+  voltage, gap and aperture of an einzel lens focusing a 30 keV proton beam, against a scan and
+  the thin-lens estimate.
+- [Einzel lens design map](/beamtracer/example-scripts/einzel-lens-design-map/) maps the same
+  lens over two parameters, with a limit on the surface field, and draws the optimiser's path
+  over the map.
+- [Negative-ion beamlet optimisation](/beamtracer/examples/negative-ion-beamlet-optimization/)
+  searches the extraction voltage, the aperture and the gap of an H⁻ beamlet for the smallest
+  divergence, on a coarse mesh checked against a fine one.
+
+The estimates the einzel lens is checked against:
+
+<MethodCard name="beamtracer.optimization.einzel.EinzelLens.thin_lens_focal_length" headingLevel={3} />
+
+## Verification
+
+The tests compare the thin-lens voltage of the einzel lens with a scan of the full model.

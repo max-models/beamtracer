@@ -1,0 +1,121 @@
+---
+title: Charge changes
+description: A fast beam that changes charge state on a gas or a plasma, between the grids of an accelerator and in a neutralizer.
+sidebar:
+  label: Overview
+---
+
+import MethodCard from '@max-models/starlight-theme/components/MethodCard.astro';
+
+A fast beam changes charge state on the gas or plasma it crosses: an H⁻ beam loses its
+electrons on the residual gas between the grids of the accelerator, and a neutralizer turns
+it into the neutral beam a fusion device is heated with. In beamtracer the charge changes are
+part of the [beam optics](/beamtracer/beam-optics/) solve:
+`charge_changing=ChargeChangingParams(cross_sections, densities)` in a `BeamOpticsConfig`.
+
+Two examples show it at work:
+
+- [Stripping in the accelerator](/beamtracer/examples/accelerator-stripping/) adds the gas
+  between the grids to an H⁻ beamlet: the share stripped along the accelerator in the
+  fractions mode, and in the analog mode the energy and divergence of the atoms it leaves.
+- [Neutralizer](/beamtracer/examples/neutralizer/) traces a 1 MeV D⁻ beam through a gas
+  neutralizer channel, coupled to the plasma it makes: the charge states at the exit and what
+  the walls take from a diverging beam.
+
+## Fractions of a trajectory
+
+By default (`mode="fractions"`) every trajectory carries the fractions of its particles in
+each charge state, advanced along its path with plasmacoll's transition matrices, third order
+in the step:
+
+<MethodCard name="beamtracer.solver.charge_changing.ChargeChanging.advance" headingLevel={3} />
+
+The force is that of the mean charge (fine where the field is weak), the space charge that of
+every state with its sign. The tracer tallies the charge changes and target ionizations
+(`model.charge_tallies`), the sources a plasma model takes from the beam, and
+`model.state_moments(x, "0")` gives the moments of one state at a plane.
+
+## Trajectories that change state
+
+In the default `mode="fractions"` a trajectory carries the fractions of its particles in
+each state and feels the force of their mean charge. That is right where the field is weak,
+as in a neutralizer, but not where it separates the states: between the grids of an
+accelerator an H⁻ stripped by the residual gas continues as an atom with the energy it had
+gained there, in the direction it had there, while the ions go on being accelerated.
+
+`ChargeChangingParams(..., mode="analog")` follows that: every trajectory is in one state and
+carries an optical depth drawn from an exponential distribution, which the charge-changing
+rate of its state, $\sum_t n_t \sum_j \sigma_t(s \to j)$, uses up along its path. Where it runs
+out the trajectory changes to state $j$ with probability proportional to $n_t \sigma_t(s \to j)$
+and draws a new depth. Its force is that of its actual charge. The fractions at the planes are
+then 0 or 1, and everything else (`charge_tallies`, `state_moments`) works as in the fractions
+mode, whose result is the mean over the trajectories; `charge_tallies.events` counts the
+sampled events. With `splitting=k` a trajectory splits at each of its first `split_events`
+events into `k` trajectories of a `k`-th of its current, which draw their new states
+independently: more trajectories in the rarer states for the same number launched. The random
+numbers come from `seed` and the MPI rank, drawn afresh on every trace, so the Vlasov
+iteration still converges.
+
+<MethodCard name="beamtracer.solver.charge_changing.ChargeChanging.sample" headingLevel={3} />
+
+The densities of the targets are numbers or profiles along $x$,
+`{"x": [...], "density": [...]}`, linear between the points: for the gas between the grids,
+sampled from a neutral-transport run (picnic's `NeutralParticleTransport`) or from the
+conductances of the apertures with
+`beamtracer.solver.charge_changing.conductance_profile(apertures, upstream, downstream)`
+(free-molecular flow through round apertures with Clausing's transmission probability, the
+gas uniform in the gaps).
+
+```python
+from beamtracer.solver.charge_changing import conductance_profile
+
+gas = conductance_profile(
+    [
+        (0.0, 0.001, 0.007),
+        (0.006, 0.011, 0.004),
+        (0.02, 0.03, 0.007),
+    ],  # x0, x1, radius (m)
+    upstream=1e20,  # m^-3, in the source
+    downstream=1e18,  # in the tank
+)
+charge_changing = ChargeChangingParams(
+    {"H2": {"-": {"0": 7e-21, "+": 3e-22}, "0": {"+": 2e-21}}},  # placeholders
+    {"H2": gas},
+    mode="analog",
+    splitting=4,
+)
+```
+
+## A neutralizer
+
+`beamtracer.neutralizer.NeutralizerChannel` traces the beam through a channel whose gas and
+plasma come from a global model ([carafe](https://github.com/max-models/carafe),
+the `neutralizer` extra); the plasma takes its beam sources from the traced paths, and the
+two are iterated to a fixed point. It gives what the global model alone cannot: the
+transmission of every charge state, the beam lost on the walls, the divergence of the
+neutrals. `NeutralizerChannel(..., mode="analog")` traces it with one state per trajectory.
+
+
+The example [Neutralizer](/beamtracer/examples/neutralizer/) traces a 1 MeV D⁻ beam through
+one channel of a gas neutralizer, as in ITER's injectors; so does
+`python -m beamtracer.examples.neutralizer_channel_2d` (the `examples` extra).
+
+<MethodCard name="beamtracer.neutralizer.NeutralizerChannel" headingLevel={3} />
+
+The beam that leaves the neutralizer goes on into the [beamline](/beamtracer/beamline/).
+
+## Not in the model
+
+- The targets are prescribed, not transported: a uniform density or a profile along $x$.
+- In the fractions mode the force is that of the mean charge; where the field separates the
+  states, use the analog mode.
+- The neutralizer's fixed point has no convergence safeguard: unconverged, it returns its last
+  iterate, flagged but without a warning.
+
+## Verification
+
+The tests compare the charge-state fractions with plasmacoll's on the line density, the
+analog mean with the fractions mode, and a parallel beam in the neutralizer with the global
+model alone. All equations are under "Equations" in the sidebar:
+[charge changes](/beamtracer/numerics/solver-charge-changing/) and the
+[neutralizer](/beamtracer/numerics/neutralizer/).
