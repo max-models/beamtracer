@@ -13,6 +13,15 @@ it into the neutral beam a fusion device is heated with. In beamtracer the charg
 part of the [beam optics](/beamtracer/beam-optics/) solve:
 `charge_changing=ChargeChangingParams(cross_sections, densities)` in a `BeamOpticsConfig`.
 
+Two examples show it at work:
+
+- [Stripping in the accelerator](/beamtracer/examples/accelerator-stripping/) adds the gas
+  between the grids to an H⁻ beamlet: the share stripped along the accelerator in the
+  fractions mode, and in the analog mode the energy and divergence of the atoms it leaves.
+- [Neutralizer](/beamtracer/examples/neutralizer/) traces a 1 MeV D⁻ beam through a gas
+  neutralizer channel, coupled to the plasma it makes: the charge states at the exit and what
+  the walls take from a diverging beam.
+
 ## Fractions of a trajectory
 
 By default (`mode="fractions"`) every trajectory carries the fractions of its particles in
@@ -87,8 +96,9 @@ transmission of every charge state, the beam lost on the walls, the divergence o
 neutrals. `NeutralizerChannel(..., mode="analog")` traces it with one state per trajectory.
 
 
-`python -m beamtracer.examples.neutralizer_channel_2d` (the `examples` extra) traces a 1 MeV
-D⁻ beam through one channel of a gas neutralizer, as in ITER's injectors.
+The example [Neutralizer](/beamtracer/examples/neutralizer/) traces a 1 MeV D⁻ beam through
+one channel of a gas neutralizer, as in ITER's injectors; so does
+`python -m beamtracer.examples.neutralizer_channel_2d` (the `examples` extra).
 
 <MethodCard name="beamtracer.neutralizer.NeutralizerChannel" headingLevel={3} />
 

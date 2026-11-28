@@ -85,6 +85,8 @@ export default defineDocs({
 			label: 'Charge changes',
 			items: [
 				{ label: 'Overview', slug: 'charge-changes' },
+				{ label: 'Stripping in the accelerator', slug: 'examples/accelerator-stripping' },
+				{ label: 'Neutralizer', slug: 'examples/neutralizer' },
 				{
 					label: 'Equations',
 					collapsed: true,

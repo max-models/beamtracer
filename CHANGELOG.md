@@ -11,6 +11,9 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and design optimisation, each with an overview of its model, its examples (notebooks and
   scripts alike) and the method-card pages of its equations; the separate Model, Examples and
   Numerics sections are gone.
+- Two examples of charge changes: "Stripping in the accelerator" (the gas between the grids of
+  an H⁻ beamlet, in the fractions and the analog mode) and "Neutralizer" (a D⁻ beam through a
+  gas neutralizer channel coupled to its plasma).
 - wellbalanced is now carafe: the `neutralizer` extra installs `plasma-carafe[cr]`, and
   `beamtracer.neutralizer` imports `carafe`.
 

@@ -78,7 +78,8 @@ every geometry.
   serves both; `FieldRegion` takes a map as its `electric` or `magnetic` field too.
 - **Charge changes**: `charge_changing=ChargeChangingParams(cross_sections, densities)` lets
   a fast beam change charge state on a gas or a plasma, as in a neutralizer; see
-  [charge changes](/beamtracer/charge-changes/).
+  [charge changes](/beamtracer/charge-changes/) and the example
+  [Stripping in the accelerator](/beamtracer/examples/accelerator-stripping/).
 - **Space charge**: deposited at the midpoint of every step with an area-weighted linear
   shape, and reduced by `compensation` regions.
 - **The beam's own magnetic field**: `self_magnetic_field=True` deposits the beam's current

@@ -26,6 +26,8 @@ jobs:
     with:
       # the live demo (docs/src/components/beamtracer_demo.py): wheels for Pyodide
       pyodide: true
+      # the neutralizer example needs carafe
+      extras: docs neutralizer
       # one OpenMP thread for the notebooks (set for the later steps of the job)
       pre-notebooks: |
         echo "OMP_NUM_THREADS=1" >> "$GITHUB_ENV"
@@ -39,8 +41,9 @@ jobs:
         example-scripts/einzel-lens-design-map/index.html
         api/beamtracer/index.html
         api/beamtracer/model/index.html
-        model/beam-optics/index.html
-        numerics/index.html
+        beam-optics/index.html
+        charge-changes/index.html
+        examples/neutralizer/index.html
         numerics/solver-vlasov/index.html
         example-scripts/einzel-lens-design-map/plot-2.plotly.json
         example-scripts/einzel-lens-design-map/plot-2.png
