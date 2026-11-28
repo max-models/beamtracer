@@ -22,7 +22,7 @@ from notebooks import sanitize_markdown  # noqa: E402
 
 ROOT = DOCS.parent
 SOURCES = ROOT / "examples"
-# the "Scripts" group of the Examples section, next to the notebook pages in examples/
+# the script pages, placed in the sidebar by astro.config.mjs next to the notebook pages of their section
 CONTENT = DOCS / "src" / "content" / "docs" / "example-scripts"
 PUBLIC = DOCS / "public" / "example-scripts"
 # site-root path of PUBLIC; the PlotlyFigure component adds the base path

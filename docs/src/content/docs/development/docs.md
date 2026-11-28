@@ -13,15 +13,18 @@ The site in `docs/` is built with [Astro](https://astro.build/) and
   The figures are drawn with [plasma-plots](https://max-models.github.io/plasma-plots/) and
   its Plotly backend (`plasma_plots.set_backend("plotly")` in the first cell), so the page
   embeds them interactively, in the site's light and dark colours.
-- **Example scripts**, a "Scripts" group of the Examples, built from the Python scripts in
-  `examples/` by `docs/tools/examples.py`. Each page shows the module docstring, the complete
+- **Example scripts**, built from the Python scripts in `examples/` by
+  `docs/tools/examples.py`. Each page shows the module docstring, the complete
   source file, and its figures, converted to web figures (`*.plotly.json`, with a picture for
   each in light and dark mode) and embedded with the theme's `PlotlyFigure`.
-
-Guides, when a project has them, are hand-written pages that explain the model or a concept;
-anything runnable belongs in the Examples.
 - **API reference**, generated from the docstrings by
   [starlight-pydocs](https://ewels.github.io/starlight-pydocs/), one page per module.
+
+The sidebar (`docs/astro.config.mjs`) is organised by the kind of simulation: beam optics,
+charge changes, the beamline and design optimisation. Each section has a hand-written
+overview of the model, which embeds the main method cards (`<MethodCard>`), then its
+examples, notebooks and scripts alike, then its "Equations": the method-card pages of its
+modules. A new example or a module with method cards gets a line in its section there.
 
 The configuration (`defineDocs` in `docs/astro.config.mjs`), the look, the header, the notebook
 tool and the build workflow come from the shared

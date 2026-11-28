@@ -54,7 +54,7 @@ energies and temperatures in eV (or K), masses in u and charges in e. It is conv
 the setting is made, so the bare numbers `upper_bound=(10e-3, 5e-3)`, `-1000.0` and
 `energy=0.01` are the same diode. A quantity of the wrong dimension raises.
 
-See the [beam optics guide](/beamtracer/model/beam-optics/) for the model and the
+See the [beam optics guide](/beamtracer/beam-optics/) for the model and the
 [API reference](/beamtracer/api/beamtracer/) for every module and function.
 
 ## Profiling

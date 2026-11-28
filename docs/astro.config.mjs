@@ -8,8 +8,9 @@ export default defineDocs({
 	title: 'beamtracer',
 	description: 'Steady ion beams in a self-consistent field: extraction, acceleration and charge changes.',
 	pythonPackage: 'beamtracer',
-	// the method cards: a Numerics section with the overview (numerics/index.mdx) and one page per
-	// module, in the order of the model, and a Numerics section on each method's API page
+	// the method cards: one page per module at /numerics/<module>/, placed in the sidebar under
+	// "Equations" in the section of the simulation they belong to; the section overviews embed
+	// the main cards with <MethodCard>
 	methodcard: {
 		pages: true,
 		index: false,
@@ -19,24 +20,29 @@ export default defineDocs({
 			'beamtracer.solver.poisson': "Poisson's equation",
 			'beamtracer.solver.fields': 'Fields',
 			'beamtracer.solver.tracer': 'Trajectories',
-			'beamtracer.solver.charge_changing': 'Charge changes',
 			'beamtracer.solver.vlasov': 'Vlasov iteration',
 			'beamtracer.solver.diagnostics': 'Beam moments',
-			'beamtracer.field_map': 'Field maps',
+			'beamtracer.solver.self_field': "The beam's magnetic field",
+			'beamtracer.solver.mesh3d': '3D mesh',
+			'beamtracer.solver.fields3d': '3D fields',
+			'beamtracer.solver.tracer3d': '3D trajectories',
+			'beamtracer.solver.charge_changing': 'Charge changes',
 			'beamtracer.neutralizer': 'Neutralizer',
 			'beamtracer.beamline': 'Beamline',
-			'beamtracer.optimization.einzel': 'Einzel lens',
-			'beamtracer.optimization.beamlet': 'H- beamlet',
 			'beamtracer.optimization.design': 'Designs',
 			'beamtracer.optimization.search': 'Optimiser',
+			'beamtracer.optimization.einzel': 'Einzel lens',
+			'beamtracer.optimization.beamlet': 'H- beamlet',
 		},
 	},
+	// the docs are organised by the kind of simulation: each section has an overview, the
+	// examples (executed notebooks in examples/, scripts in example-scripts/) and its equations
 	nav: [
 		{ label: 'Getting started', link: '/getting-started/installation/' },
-		{ label: 'Model', link: '/model/beam-optics/' },
-		{ label: 'Examples', link: '/examples/' },
-		{ label: 'Numerics', link: '/numerics/' },
-		{ label: 'Development', link: '/development/docs/' },
+		{ label: 'Beam optics', link: '/beam-optics/' },
+		{ label: 'Charge changes', link: '/charge-changes/' },
+		{ label: 'Beamline', link: '/beamline/' },
+		{ label: 'Optimisation', link: '/optimisation/' },
 		{ label: 'API', link: '/api/beamtracer/' },
 	],
 	sidebar: [
@@ -49,22 +55,95 @@ export default defineDocs({
 			],
 		},
 		{
-			label: 'Model',
-			items: [{ label: 'Beam optics', slug: 'model/beam-optics' }],
+			label: 'Beam optics',
+			items: [
+				{ label: 'Overview', slug: 'beam-optics' },
+				{ label: 'Graded mesh', slug: 'examples/graded-mesh' },
+				{ label: 'Mesh refinement', slug: 'examples/mesh-refinement' },
+				{ label: 'Graded beam axis', slug: 'example-scripts/graded-beam-axis' },
+				{ label: 'Electrostatic quadrupole', slug: 'examples/quadrupole-3d' },
+				{ label: 'Relativistic electrons', slug: 'example-scripts/relativistic-electrons' },
+				{
+					label: 'Equations',
+					collapsed: true,
+					items: [
+						{ label: 'Mesh', link: '/numerics/solver-mesh/' },
+						{ label: "Poisson's equation", link: '/numerics/solver-poisson/' },
+						{ label: 'Fields', link: '/numerics/solver-fields/' },
+						{ label: 'Trajectories', link: '/numerics/solver-tracer/' },
+						{ label: 'Vlasov iteration', link: '/numerics/solver-vlasov/' },
+						{ label: 'Beam moments', link: '/numerics/solver-diagnostics/' },
+						{ label: "The beam's magnetic field", link: '/numerics/solver-self-field/' },
+						{ label: '3D mesh', link: '/numerics/solver-mesh3d/' },
+						{ label: '3D fields', link: '/numerics/solver-fields3d/' },
+						{ label: '3D trajectories', link: '/numerics/solver-tracer3d/' },
+					],
+				},
+			],
 		},
 		{
-			label: 'Examples',
+			label: 'Charge changes',
 			items: [
-				{ autogenerate: { directory: 'examples' } },
-				{ label: 'Scripts', items: [{ autogenerate: { directory: 'example-scripts' } }] },
+				{ label: 'Overview', slug: 'charge-changes' },
+				{
+					label: 'Equations',
+					collapsed: true,
+					items: [
+						{ label: 'Charge changes', link: '/numerics/solver-charge-changing/' },
+						{ label: 'Neutralizer', link: '/numerics/neutralizer/' },
+					],
+				},
+			],
+		},
+		{
+			label: 'Beamline',
+			items: [
+				{ label: 'Overview', slug: 'beamline' },
+				{ label: 'Grid', slug: 'examples/beamline-grid' },
+				{ label: 'Dump', slug: 'examples/beamline-dump' },
+				{ label: 'Duct', slug: 'examples/beamline-duct' },
+				{ label: 'Calorimeter', slug: 'examples/beamline-calorimeter' },
+				{ label: 'Whole beamline', slug: 'examples/beamline' },
+				{
+					label: 'Equations',
+					collapsed: true,
+					items: [{ label: 'Beamline', link: '/numerics/beamline/' }],
+				},
+			],
+		},
+		{
+			label: 'Design optimisation',
+			items: [
+				{ label: 'Overview', slug: 'optimisation' },
+				{ label: 'Einzel lens', slug: 'examples/einzel-lens-optimization' },
+				{ label: 'Einzel lens design map', slug: 'example-scripts/einzel-lens-design-map' },
+				{ label: 'Negative-ion beamlet', slug: 'examples/negative-ion-beamlet-optimization' },
+				{
+					label: 'Equations',
+					collapsed: true,
+					items: [
+						{ label: 'Designs', link: '/numerics/optimization-design/' },
+						{ label: 'Optimiser', link: '/numerics/optimization-search/' },
+						{ label: 'Einzel lens', link: '/numerics/optimization-einzel/' },
+						{ label: 'H- beamlet', link: '/numerics/optimization-beamlet/' },
+					],
+				},
 			],
 		},
 		{
 			label: 'Development',
+			collapsed: true,
 			items: [
 				{ label: 'Building the docs', slug: 'development/docs' },
 				{ label: 'Publishing', slug: 'development/publishing' },
 			],
 		},
 	],
+	astro: {
+		// the pages of the earlier layout (a Model and a Numerics section)
+		redirects: {
+			'/model/beam-optics': '/beam-optics/',
+			'/numerics': '/beam-optics/',
+		},
+	},
 });

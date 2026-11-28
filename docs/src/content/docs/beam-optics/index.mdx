@@ -1,12 +1,57 @@
 ---
 title: Beam optics
-description: The BeamOptics model of steady ion beams in a self-consistent field.
+description: Steady ion beams in their own field, extracted from a plasma and focused by electrodes and solenoids, solved by a Vlasov iteration.
+sidebar:
+  label: Overview
 ---
 
+import MethodCard from '@max-models/starlight-theme/components/MethodCard.astro';
+
 `BeamOptics` solves steady ion beams: extraction of positive or negative ions from a plasma,
-transport through electrodes and solenoids, and the space charge of several species,
-converged by a Vlasov iteration (solve the field, trace the beam, deposit its space charge,
-repeat). The geometry is planar (per unit depth) or cylindrically symmetric `(x, r)`.
+transport through electrodes and solenoids, and the space charge of several species. Nothing
+depends on time: the beam is the fixed point of a field solve, a trace of the trajectories
+and a deposit of their space charge, on a mesh in planar (per unit depth) or cylindrically
+symmetric $(x, r)$ geometry, or in 3D.
+
+The other simulations build on it: the [charge changes](/beamtracer/charge-changes/) of a fast
+beam in a neutralizer, the [beamline](/beamtracer/beamline/) that carries the beam on to a
+port or a calorimeter, and the [design searches](/beamtracer/optimisation/) that tune its
+electrodes.
+
+## How a solve works
+
+<MethodCard name="beamtracer.model.BeamOptics" headingLevel={3} />
+
+Each step has a page with the equations it implements, declared on the code and checked by
+the tests (under "Equations" in the sidebar):
+
+1. **[Mesh](/beamtracer/numerics/solver-mesh/).** Nodes of spacing $h$ (uniform, graded along
+   the beam, or with refined boxes); the electrodes are simgeometry shapes, and the distance
+   from a node to an electrode surface is bracketed in 255ths of a cell.
+2. **[Poisson's equation](/beamtracer/numerics/solver-poisson/)** with the Boltzmann plasma
+   species, by finite differences (Shortley-Weller next to the electrodes, the axis by
+   L'Hôpital) and Newton's method, second order in $h$.
+3. **[Fields](/beamtracer/numerics/solver-fields/):** the electric field on the edges between
+   the nodes, at the electrode surfaces taken over the bracketed distance; the magnetic field
+   of solenoids or a measured profile, expanded off the axis.
+4. **[Trajectories](/beamtracer/numerics/solver-tracer/)** seeded from an emission line with a
+   quasi-random Sobol beam (the same on every iteration), traced by RK4, their charge
+   $I \Delta t$ deposited at the midpoint of every step.
+5. **[The Vlasov iteration](/beamtracer/numerics/solver-vlasov/)** ties them together,
+   relaxing the charge density until the potential stops changing:
+
+<MethodCard name="beamtracer.solver.vlasov.vlasov_iterate" headingLevel={3} />
+
+6. **[Beam moments](/beamtracer/numerics/solver-diagnostics/)** at diagnostic planes: rms
+   emittance, Twiss parameters and the mismatch, with the trajectories of a cylindrical beam
+   as rings.
+
+In 3D the same steps run on the [3D mesh](/beamtracer/numerics/solver-mesh3d/), its
+[fields](/beamtracer/numerics/solver-fields3d/) and [trajectories](/beamtracer/numerics/solver-tracer3d/);
+the [beam's own magnetic field](/beamtracer/numerics/solver-self-field/) is an option in
+every geometry.
+
+## The configuration
 
 - **Mesh and field**: a uniform node mesh with Shortley--Weller cut cells at the electrodes
   (simgeometry objects with Dirichlet potentials, `ObjectParams`), Neumann or Dirichlet faces
@@ -32,15 +77,8 @@ repeat). The geometry is planar (per unit depth) or cylindrically symmetric `(x,
   reads and writes too, so a map from either code, or one sampled from an NGSolve or FEniCSx solution,
   serves both; `FieldRegion` takes a map as its `electric` or `magnetic` field too.
 - **Charge changes**: `charge_changing=ChargeChangingParams(cross_sections, densities)` lets
-  a fast beam change charge state on uniform targets (a gas, a plasma), as in a neutralizer:
-  every trajectory carries the fractions of its particles in each state, advanced along its
-  path with plasmacoll's transition matrices; the force is that of the mean charge (fine
-  where the field is weak), the space charge that of every state with its sign. The tracer
-  tallies the charge changes and target ionizations (`model.charge_tallies`), and
-  `model.state_moments(x, "0")` gives the moments of one state at a plane.
-  With `mode="analog"` every trajectory is in one state instead and changes it at events
-  sampled along its path, with the force of its actual charge, so states part where the
-  field separates them (see [trajectories that change state](#trajectories-that-change-state)).
+  a fast beam change charge state on a gas or a plasma, as in a neutralizer; see
+  [charge changes](/beamtracer/charge-changes/).
 - **Space charge**: deposited at the midpoint of every step with an area-weighted linear
   shape, and reduced by `compensation` regions.
 - **The beam's own magnetic field**: `self_magnetic_field=True` deposits the beam's current
@@ -121,11 +159,13 @@ grid = GridParams(
 )
 ```
 
-The example [Graded mesh](/beamtracer/examples/graded-mesh/) extracts a beam through an
-aperture and lets it drift: the divergence of a uniform mesh with its finest cells, with half
-the nodes. The example script "Graded beam axis" compares it with uniform meshes on a planar
-extraction followed by a drift: the beam of a uniform 0.25 mm mesh with 40 % of its nodes. 2D only, and not with
-adaptive refinement.
+[Graded mesh](/beamtracer/examples/graded-mesh/) extracts a beam through an aperture and lets
+it drift: the divergence of a uniform mesh with its finest cells, with half the nodes.
+[Graded beam axis](/beamtracer/example-scripts/graded-beam-axis/) compares it with uniform
+meshes on a planar extraction followed by a drift: the beam of a uniform 0.25 mm mesh with
+40 % of its nodes. 2D only, and not with adaptive refinement.
+[Mesh refinement](/beamtracer/examples/mesh-refinement/) refines a box over the meniscus and
+the aperture instead.
 
 ## Electrodes of several shapes
 
@@ -235,11 +275,45 @@ neutrals. `NeutralizerChannel(..., mode="analog")` traces it with one state per 
 
 ## Examples
 
-The examples are scripts in `beamtracer.examples` (the `examples` extra), each run with
-`python -m beamtracer.examples.<name>`:
+- [Graded mesh](/beamtracer/examples/graded-mesh/) and
+  [mesh refinement](/beamtracer/examples/mesh-refinement/) extract a beam through an aperture
+  on a mesh that is fine only where the field changes fast.
+- [Graded beam axis](/beamtracer/example-scripts/graded-beam-axis/) compares graded, refined
+  and uniform meshes on a planar extraction and a long drift.
+- [Electrostatic quadrupole](/beamtracer/examples/quadrupole-3d/) traces a proton beam
+  through a quadrupole on a 3D mesh: focusing in one plane, defocusing in the other.
+- [Relativistic electrons](/beamtracer/example-scripts/relativistic-electrons/) accelerates
+  electrons to 1 MeV and lets them gyrate in a magnetic field, traced classically and with
+  `relativistic=True`.
 
-- `beam_optics_extraction_2d`: a small planar proton extraction, the entry point;
-- `negative_ion_extraction_optics`: a round H⁻ beamlet and its electrons, with a scan of the
-  extraction voltage;
-- `neutralizer_channel_2d`: a 1 MeV D⁻ beam through one channel of a gas neutralizer, as in
-  ITER's injectors.
+The package also has scripts in `beamtracer.examples` (the `examples` extra), each run with
+`python -m beamtracer.examples.<name>`: `beam_optics_extraction_2d`, a small planar proton
+extraction, the entry point; and `negative_ion_extraction_optics`, a round H⁻ beamlet and its
+electrons, with a scan of the extraction voltage.
+
+## Units and conventions
+
+SI units in the solver; the configuration takes charges in e, masses in u and energies and
+temperatures in eV, and converts them to C, kg and J. The beam moves along $+x$; in
+cylindrical geometry $y$ is the radius $r$ and a trajectory stands for a ring, in planar
+geometry a current is per metre of depth. Currents are magnitudes: the sign of the space
+charge is that of the particles' charge.
+
+## Not in the model
+
+- No time dependence. Relativity only in the tracer (`relativistic=True`); the normalised
+  emittance uses $\beta$ only.
+- No planar or non-axisymmetric magnetic fields in 2D.
+- The source plasma is not modelled: the beams' current densities are inputs, the Boltzmann
+  species has no inertia, flow or sheath, and the meniscus is where its density falls off.
+- No collisions besides the [charge changes](/beamtracer/charge-changes/) (no scattering,
+  energy loss or secondaries).
+- No convergence safeguards: an unconverged Vlasov iteration or Newton solve returns its last
+  iterate, flagged but without a warning.
+
+## Verification
+
+Besides the checks of the method cards (six closed forms against SymPy rules, seven
+discretisations against their order of convergence), the tests compare the field with the
+coaxial and uniformly charged cylinders, the Child-Langmuir diode with $-V (x/d)^{4/3}$, and
+Busch's theorem through a solenoid.

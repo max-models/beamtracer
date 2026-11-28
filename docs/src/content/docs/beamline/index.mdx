@@ -1,0 +1,55 @@
+---
+title: Beamline
+description: The beam after the accelerator as 3D markers on straight lines, from the grid through the dump and the duct to the port or a calorimeter.
+sidebar:
+  label: Overview
+---
+
+import MethodCard from '@max-models/starlight-theme/components/MethodCard.astro';
+
+The [beam optics](/beamtracer/beam-optics/) solve traces one beamlet in 2D, through the
+accelerator and the [neutralizer](/beamtracer/charge-changes/). `beamtracer.beamline` carries
+the whole beam on from there, in 3D, without a mesh: the beam is a set of `Markers`, points
+with a velocity, a power and a charge state, and beyond the fields the neutrals move on
+straight lines.
+
+<MethodCard name="beamtracer.beamline.Markers" headingLevel={3} />
+
+## From the grid to the port
+
+Each step is an example with its figures:
+
+1. **[Grid](/beamtracer/examples/beamline-grid/).** `beamlet_markers` turns the beamlet's
+   crossings of its exit plane into 3D markers (each ring of a cylindrical beamlet copied at
+   random azimuths), and `ApertureGrid` copies them to every aperture of the grid, aimed as
+   the grid is.
+2. **[Dump](/beamtracer/examples/beamline-dump/).** `FieldRegion` pushes the ions left after
+   the neutralizer through the residual-ion dump onto its plates (Boris's method in static
+   fields), and the ions reionized in the duct onto its walls in the stray field.
+3. **[Duct](/beamtracer/examples/beamline-duct/).** `Duct` intersects each line with the duct
+   walls, simgeometry shapes, and samples where the duct gas reionizes a neutral.
+4. **[Calorimeter](/beamtracer/examples/beamline-calorimeter/).** In a test facility the beam
+   ends on a calorimeter: `Calorimeter` records the power on its tiles, and `fit_footprint`
+   and `divergence_from_widths` infer the beam's width and divergence as the experiments do.
+5. **[The whole beamline](/beamtracer/examples/beamline/)** puts the pieces in a row and adds
+   up where the power went (`beamline_summary`); the neutrals at the port are written out as
+   a dataset, in the tokamak's frame, for the deposition in the plasma
+   ([freeofcharge](https://max-models.github.io/freeofcharge/)).
+
+The free path of a neutral in the duct gas:
+
+<MethodCard name="beamtracer.beamline.Duct" headingLevel={3} />
+
+The equations of every piece are on the [beamline equations](/beamtracer/numerics/beamline/)
+page.
+
+## Not in the model
+
+- No space charge, no fields in the duct, no gas in the field regions and no wall physics.
+- A reionized neutral stops where it is born: the transitions back into the neutral state are
+  not followed.
+
+## Verification
+
+The tests compare the duct transmission and reionization with their closed forms, and the
+Boris push with the Larmor circle.
